@@ -1,0 +1,14 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+    input, select, textarea {
+        @apply shadow-sm;
+    }
+}
+
+/* Live SLA countdown micro-interaction (paired with app.js ticker) */
+[data-countdown] {
+    transition: color 300ms ease;
+}
