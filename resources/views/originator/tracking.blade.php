@@ -17,6 +17,10 @@
                     @if($document->used_ocr_fallback)
                         &middot; <span class="text-processing-700">OCR fallback used</span>
                     @endif
+                    &middot;
+                    <button type="button"
+                        onclick="openDocumentViewer('{{ route('documents.file', $document) }}', '{{ $document->mime_type }}', '{{ addslashes($document->original_filename ?? $document->title) }}')"
+                        class="text-primary-700 hover:underline font-medium">View original file</button>
                 </p>
             </div>
             <x-status-badge :status="$document->global_status" />
@@ -29,26 +33,9 @@
         <div class="px-6 py-4 border-b border-surface-200">
             <h3 class="text-sm font-semibold text-surface-900">Approval Stages</h3>
         </div>
-        <table class="w-full text-sm">
-            <thead class="bg-surface-50 text-surface-500 text-xs uppercase tracking-wide">
-                <tr>
-                    <th class="text-left px-6 py-3 font-medium">Stage</th>
-                    <th class="text-left px-6 py-3 font-medium">Approver</th>
-                    <th class="text-left px-6 py-3 font-medium">Status</th>
-                    <th class="text-left px-6 py-3 font-medium">Comments</th>
-                </tr>
-            </thead>
-            <tbody class="divide-y divide-surface-100">
-                @foreach($document->assignments as $a)
-                    <tr>
-                        <td class="px-6 py-3 font-medium text-surface-800">{{ $a->stage->stage_name }}</td>
-                        <td class="px-6 py-3 text-surface-600">{{ $a->approver->full_name ?? 'Unassigned' }}</td>
-                        <td class="px-6 py-3"><x-status-badge :status="$a->individual_status" /></td>
-                        <td class="px-6 py-3 text-surface-500">{{ $a->comments ?? '—' }}</td>
-                    </tr>
-                @endforeach
-            </tbody>
-        </table>
+        <div class="p-6">
+            <x-workflow-stage-list :document="$document" />
+        </div>
     </div>
 
     <div class="bg-white rounded-xl shadow-card border border-surface-200 overflow-hidden">

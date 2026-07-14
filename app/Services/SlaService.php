@@ -12,10 +12,12 @@ use Illuminate\Support\Facades\DB;
  * SlaService
  * -----------
  * The second half of the Section 5 safety net (the first half — flagging
- * individually expired parallel assignments as escalated_to_admin — is now
- * handled by the dedicated `workflow:check-parallel-slas` command, since
- * each parallel approver's SLA breach must be detected independently of
- * their peers).
+ * an individual expired assignment as escalated_to_admin — is handled by
+ * the `workflow:check-parallel-slas` command). Since each document is now
+ * routed to exactly one approver per stage (single-assignment,
+ * load-balanced routing — see WorkflowService), each escalation
+ * corresponds to exactly one stuck assignment, with no sibling rows to
+ * reconcile.
  *
  *   escalated_to_admin = true (set by workflow:check-parallel-slas)
  *     -> Admin may override: approve/reject on the approver's behalf
@@ -43,8 +45,7 @@ class SlaService
     /**
      * Escalated + Admin grace window also elapsed -> system resolves the
      * stage automatically via WorkflowService::completeStage(), which
-     * closes sibling parallel assignments and advances/finalizes the
-     * document exactly as a human approval would.
+     * advances/finalizes the document exactly as a human approval would.
      */
     private function autoApproveUnresolved(): int
     {
@@ -58,9 +59,6 @@ class SlaService
             ->where('sla_expires_at', '<=', $graceCutoff)
             ->with(['document', 'stage'])
             ->get()
-            // A stage's parallel siblings all share the same sla_expires_at,
-            // so they breach the grace window together — process one per
-            // document per sweep and let completeStage() close the rest.
             ->unique('document_id')
             ->each(function (DocumentAssignment $assignment) use (&$count) {
                 DB::transaction(function () use ($assignment) {
@@ -91,8 +89,7 @@ class SlaService
 
     /**
      * Admin manually overrides a stuck assignment (approve or reject).
-     * Routed through WorkflowService::completeStage() so sibling parallel
-     * assignments for the same stage are closed and the document
+     * Routed through WorkflowService::completeStage() so the document
      * advances/finalizes exactly as it would from a normal approver decision.
      */
     public function adminOverride(DocumentAssignment $assignment, User $admin, string $decision, ?string $comments = null): void

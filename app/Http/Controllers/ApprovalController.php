@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\DocumentAssignment;
 use App\Services\WorkflowService;
 use Illuminate\Http\Request;
+use Illuminate\Pagination\LengthAwarePaginator;
 
 class ApprovalController extends Controller
 {
@@ -14,22 +15,56 @@ class ApprovalController extends Controller
 
     /**
      * Approver dashboard: action-oriented review queue with SLA countdowns.
-     * Assignments are grouped by document so multiple pending stages for
-     * the SAME document (solo-approver shortcut) render as one document
-     * card with each stage nested inside it, rather than several flat,
-     * confusingly-similar cards for the same file.
+     *
+     * Requests are rendered as nested containers, two levels deep:
+     *   - Outer: the SubmissionBatch a document arrived in (Feature:
+     *     grouped approval requests) — documents an Originator uploaded
+     *     together stay visually together, with the shared due date shown
+     *     once at the container level. A document with no batch (legacy
+     *     data, or a lone single-file submission) becomes a container of
+     *     its own.
+     *   - Inner: each document's own pending stage assignment(s) — the
+     *     solo-approver shortcut can leave more than one stage pending for
+     *     the same document at once, so those still nest under that one
+     *     document card rather than duplicating it.
      */
     public function dashboard(Request $request)
     {
-        $assignments = DocumentAssignment::pendingFor($request->user()->user_id)
-            ->with(['document', 'stage'])
+        $pending = DocumentAssignment::pendingFor($request->user()->user_id)
+            ->with(['document.batch', 'document.originator', 'document.assignments.approver', 'stage'])
             ->orderBy('priority_rank')
             ->orderBy('sla_expires_at')
-            ->paginate(10);
+            ->get();
 
-        $grouped = collect($assignments->items())->groupBy('document_id');
+        $containers = $pending
+            ->groupBy(fn (DocumentAssignment $a) => $a->document->batch_id ? 'batch-' . $a->document->batch_id : 'doc-' . $a->document_id)
+            ->map(function ($groupAssignments) {
+                $first = $groupAssignments->first();
+                $batch = $first->document->batch;
 
-        return view('approver.dashboard', compact('assignments', 'grouped'));
+                return (object) [
+                    'is_batch' => (bool) $batch,
+                    'batch' => $batch,
+                    'due_date' => $batch->due_date ?? $first->document->due_date,
+                    'originator' => $first->document->originator,
+                    'documents' => $groupAssignments->groupBy('document_id'),
+                ];
+            })
+            ->sortBy(fn ($c) => $c->due_date)
+            ->values();
+
+        $perPage = 10;
+        $page = (int) $request->input('page', 1);
+
+        $containers = new LengthAwarePaginator(
+            $containers->forPage($page, $perPage)->values(),
+            $containers->count(),
+            $perPage,
+            $page,
+            ['path' => $request->url(), 'query' => $request->query()]
+        );
+
+        return view('approver.dashboard', compact('containers'));
     }
 
     public function decide(Request $request, DocumentAssignment $assignment)

@@ -10,10 +10,11 @@ use Illuminate\Console\Command;
  * Run via: php artisan workflow:check-parallel-slas
  * Scheduled every 5 minutes in bootstrap/app.php.
  *
- * Flags individually expired PENDING parallel approver assignments by
- * setting escalated_to_admin = true. Each assignment row is checked and
- * flagged independently, so one slow approver's missed SLA window never
- * affects their on-time parallel peers — their own rows are untouched.
+ * Command name is historical — each document is now routed to exactly one
+ * approver per stage (single-assignment, load-balanced routing; see
+ * WorkflowService), so there are no longer parallel sibling assignments to
+ * reconcile. This command still flags any individually expired PENDING
+ * assignment by setting escalated_to_admin = true.
  *
  * This is the first half of the Section 5 safety net; the second half
  * (auto-approval after an Admin grace window) is handled by the existing
@@ -22,7 +23,7 @@ use Illuminate\Console\Command;
 class CheckParallelSlas extends Command
 {
     protected $signature = 'workflow:check-parallel-slas';
-    protected $description = 'Flag individual parallel approver assignments whose SLA window has expired.';
+    protected $description = 'Flag individual approver assignments whose SLA window has expired.';
 
     public function handle(): int
     {
@@ -37,11 +38,11 @@ class CheckParallelSlas extends Command
             $assignment->save();
 
             AuditLog::record(null, $assignment->document_id, 'sla_escalation',
-                "Parallel approver assignment #{$assignment->assignment_id} (stage '{$assignment->stage->stage_name}') " .
+                "Approver assignment #{$assignment->assignment_id} (stage '{$assignment->stage->stage_name}') " .
                 'exceeded its SLA window and was flagged for Admin escalation.');
         }
 
-        $this->info("{$expired->count()} parallel assignment(s) flagged as escalated_to_admin.");
+        $this->info("{$expired->count()} assignment(s) flagged as escalated_to_admin.");
 
         return self::SUCCESS;
     }

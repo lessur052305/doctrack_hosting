@@ -204,14 +204,49 @@ class AdminController extends Controller
     // SLA override queue (Section 5)
     // ---------------------------------------------------------------
 
-    public function slaQueue()
+    /**
+     * SLA Override Queue. Breached assignments are nested the same way as
+     * the Approver dashboard: documents an Originator uploaded together in
+     * one SubmissionBatch stay grouped under one container so Admins can
+     * see at a glance which breach belongs to which original request,
+     * rather than a flat list of unrelated-looking rows.
+     */
+    public function slaQueue(Request $request)
     {
-        $assignments = DocumentAssignment::where('escalated_to_admin', true)
+        $breached = DocumentAssignment::where('escalated_to_admin', true)
             ->whereNull('admin_override_at')
             ->where('individual_status', 'pending')
-            ->with(['document', 'stage', 'approver'])
+            ->with(['document.batch', 'document.originator', 'document.assignments.approver', 'stage', 'approver'])
             ->orderBy('sla_expires_at')
-            ->paginate(10);
+            ->get();
+
+        $containers = $breached
+            ->groupBy(fn (DocumentAssignment $a) => $a->document->batch_id ? 'batch-' . $a->document->batch_id : 'doc-' . $a->document_id)
+            ->map(function ($groupAssignments) {
+                $first = $groupAssignments->first();
+                $batch = $first->document->batch;
+
+                return (object) [
+                    'is_batch' => (bool) $batch,
+                    'batch' => $batch,
+                    'due_date' => $batch->due_date ?? $first->document->due_date,
+                    'originator' => $first->document->originator,
+                    'documents' => $groupAssignments->groupBy('document_id'),
+                ];
+            })
+            ->sortBy(fn ($c) => $c->due_date)
+            ->values();
+
+        $perPage = 10;
+        $page = (int) $request->input('page', 1);
+
+        $assignments = new \Illuminate\Pagination\LengthAwarePaginator(
+            $containers->forPage($page, $perPage)->values(),
+            $containers->count(),
+            $perPage,
+            $page,
+            ['path' => $request->url(), 'query' => $request->query()]
+        );
 
         return view('admin.sla_queue', compact('assignments'));
     }

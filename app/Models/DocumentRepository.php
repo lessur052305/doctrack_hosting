@@ -10,7 +10,7 @@ class DocumentRepository extends Model
     protected $primaryKey = 'document_id';
 
     protected $fillable = [
-        'originator_id', 'model_id', 'title', 'file_path', 'original_filename',
+        'originator_id', 'batch_id', 'model_id', 'title', 'file_path', 'original_filename',
         'mime_type', 'ocr_text', 'used_ocr_fallback', 'ml_category', 'ml_confidence',
         'is_validated', 'validation_errors', 'due_date', 'global_status',
     ];
@@ -29,6 +29,16 @@ class DocumentRepository extends Model
     public function originator()
     {
         return $this->belongsTo(User::class, 'originator_id', 'user_id');
+    }
+
+    /**
+     * The submission this document was uploaded alongside (nullable — older
+     * documents predate batching, and are treated as a single-document
+     * container of their own in the grouped dashboards).
+     */
+    public function batch()
+    {
+        return $this->belongsTo(SubmissionBatch::class, 'batch_id', 'batch_id');
     }
 
     public function model()

@@ -5,12 +5,12 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 
 /**
- * One row per approver PER STAGE ("parallel assignment"). When a document
- * enters a stage, every eligible approver for that category gets their own
- * row here, all sharing the same computed sla_expires_at. There is no
- * hierarchy — whichever approver acts first resolves the stage, and the
- * remaining sibling rows for that document+stage are auto-closed to match
- * (see WorkflowService::completeStage()).
+ * Exactly ONE row per document per stage ("single-assignment routing").
+ * When a document enters a stage, it is routed to whichever eligible
+ * approver in that category currently has the fewest pending assignments
+ * (see WorkflowService::selectApproverForStage()) — never to more than one
+ * approver at once, so a document can't be picked up or acted on by two
+ * approvers simultaneously.
  */
 class DocumentAssignment extends Model
 {

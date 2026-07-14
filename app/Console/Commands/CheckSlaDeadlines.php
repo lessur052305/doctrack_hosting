@@ -14,7 +14,7 @@ use Illuminate\Console\Command;
  * This command only handles the SECOND half of the Section 5 safety net:
  * auto-approving a stage if an Admin doesn't act within the grace window
  * after escalation. The escalation itself (flagging an individual expired
- * parallel assignment) is handled by workflow:check-parallel-slas.
+ * assignment) is handled by workflow:check-parallel-slas.
  */
 class CheckSlaDeadlines extends Command
 {

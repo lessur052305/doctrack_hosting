@@ -87,6 +87,9 @@
         </main>
     </div>
 </div>
+@auth
+    <x-document-viewer-modal />
+@endauth
 @stack('scripts')
 </body>
 </html>

@@ -22,32 +22,38 @@ use Illuminate\Support\Facades\DB;
  *   processing -> classified_validated -> approved   (or auto_approved)
  *                                       -> rejected
  *
- * PARALLEL APPROVAL MODEL: when a document enters a stage, every eligible
- * approver for that stage is assigned simultaneously — no hierarchy, any
- * of them may act in any order. Whichever one decides first resolves the
- * stage; the other pending sibling assignments for that document+stage are
- * automatically closed to match (see completeStage()).
+ * SINGLE-ASSIGNMENT, LOAD-BALANCED APPROVAL MODEL: when a document enters
+ * a stage, it is routed to exactly ONE eligible approver for that stage —
+ * whichever eligible approver currently has the fewest pending assignments
+ * (see selectApproverForStage()). This guarantees a document is never
+ * visible in more than one approver's queue at the same time, so two
+ * approvers can never act on — or race to approve — the same document.
  *
- * ELIGIBILITY (stage-specific + load-balanced): an approver is eligible for
- * a stage if (a) their assigned_category matches the document, and
- * (b) either they have no specific stage restrictions at all (eligible for
- * every stage in their category by default) or this stage is explicitly
- * among their assigned stages (User::workflowStages()). Among eligible
- * approvers, those marked busy/away or already at the active-workload
- * threshold are skipped in favor of an available peer — unless skipping
- * would leave nobody eligible at all, in which case the full candidate
- * list is used anyway rather than leaving the document unassigned.
+ * ELIGIBILITY: an approver is eligible for a stage if (a) their
+ * assigned_category matches the document, and (b) either they have no
+ * specific stage restrictions at all (eligible for every stage in their
+ * category by default) or this stage is explicitly among their assigned
+ * stages (User::workflowStages()). Among eligible approvers, the one
+ * currently carrying the least workload (fewest pending assignments) is
+ * selected; approvers marked busy/away are skipped unless doing so would
+ * leave nobody eligible at all, in which case busy status is ignored
+ * rather than leaving the document unassigned.
  *
- * SOLO-APPROVER SHORTCUT: if the exact same single approver is eligible for
- * every stage in the pipeline, all stages are assigned to them immediately
- * at upload time instead of one at a time — since the same person handles
- * every stage regardless of order, there's no reason to hide later stages.
- * Otherwise stages are entered one at a time, just-in-time, as each prior
- * stage resolves.
+ * Example: if Approver A covers stages 1 and 2, and Approver B covers
+ * stages 2 and 3, stage 2 goes to whichever of them has fewer pending
+ * documents at that moment — not to both.
  *
- * Each parallel batch shares one sla_expires_at, computed as 25% of the
- * hours remaining until the document's own absolute due_date (min 2 hours,
- * never extending past the due_date itself).
+ * SOLO-APPROVER SHORTCUT: if the exact same single approver is the ONLY
+ * eligible candidate for every stage in the pipeline (nobody else could
+ * ever take over a later stage), all stages are assigned to them
+ * immediately at upload time instead of one at a time — since the same
+ * person handles every stage regardless of order, there's no reason to
+ * hide later stages. Otherwise stages are entered one at a time,
+ * just-in-time, as each prior stage resolves.
+ *
+ * Each assignment's SLA window is computed as 25% of the hours remaining
+ * until the document's own absolute due_date (min 2 hours, never
+ * extending past the due_date itself).
  */
 class WorkflowService
 {
@@ -56,9 +62,6 @@ class WorkflowService
 
     /** Floor for the approver SLA window, unless the due date doesn't allow it. */
     private const MIN_APPROVER_SLA_HOURS = 2;
-
-    /** Load-balancing threshold (Feature: fallback logic for approvers). */
-    private const MAX_ACTIVE_ASSIGNMENTS_PER_APPROVER = 5;
 
     /** Below this many extracted characters, treat it as an extraction failure, not "short content". */
     private const MIN_EXTRACTED_CHARS = 40;
@@ -73,14 +76,21 @@ class WorkflowService
     /**
      * Handles Staff (Originator) document submission end-to-end:
      * Process 3.1 -> 3.2 -> 3.3 -> 3.4 -> 4.0 in one pass.
+     *
+     * @param  int|null  $batchId  Links this document to the SubmissionBatch
+     *                             it was uploaded alongside (Feature: grouped
+     *                             approval requests), so the Approver and
+     *                             Admin SLA dashboards can nest documents
+     *                             submitted together under one container.
      */
-    public function ingest(UploadedFile $file, User $originator, string $dueDate): DocumentRepository
+    public function ingest(UploadedFile $file, User $originator, string $dueDate, ?int $batchId = null): DocumentRepository
     {
-        return DB::transaction(function () use ($file, $originator, $dueDate) {
+        return DB::transaction(function () use ($file, $originator, $dueDate, $batchId) {
             $storedPath = $file->store('documents', 'local');
 
             $document = DocumentRepository::create([
                 'originator_id' => $originator->user_id,
+                'batch_id' => $batchId,
                 'title' => $file->getClientOriginalName(),
                 'file_path' => $storedPath,
                 'original_filename' => $file->getClientOriginalName(),
@@ -157,10 +167,12 @@ class WorkflowService
     /**
      * Process 4.0 — Workflow Routing.
      *
-     * If the exact same single approver is eligible for every stage in the
-     * pipeline, all stages are assigned to them immediately. Otherwise only
-     * the FIRST stage is entered now; later stages are entered dynamically
-     * as each prior one resolves (see completeStage()).
+     * If a single approver is the ONLY eligible candidate for every stage
+     * in the pipeline, all stages are assigned to them immediately.
+     * Otherwise only the FIRST stage is entered now, routed to whichever
+     * eligible approver currently has the fewest pending assignments;
+     * later stages are entered dynamically as each prior one resolves
+     * (see completeStage()).
      */
     public function routeToWorkflow(DocumentRepository $document): void
     {
@@ -174,32 +186,53 @@ class WorkflowService
             )]);
         }
 
-        $firstStageApprovers = $this->eligibleApproversForStage($document, $stages->first());
+        $soloApprover = $this->soleEligibleApproverAcrossAllStages($document, $stages);
 
-        $soloApproverHandlesEverything = $firstStageApprovers->count() === 1
-            && $stages->every(function (WorkflowStage $stage) use ($document, $firstStageApprovers) {
-                $stageApprovers = $this->eligibleApproversForStage($document, $stage);
-                return $stageApprovers->count() === 1
-                    && $stageApprovers->first()->user_id === $firstStageApprovers->first()->user_id;
-            });
-
-        if ($soloApproverHandlesEverything) {
+        if ($soloApprover) {
             foreach ($stages as $stage) {
-                $this->assignStageInParallel($document, $stage, $this->eligibleApproversForStage($document, $stage));
+                $this->assignStage($document, $stage, $soloApprover);
             }
         } else {
-            $this->assignStageInParallel($document, $stages->first(), $firstStageApprovers);
+            $this->assignStage($document, $stages->first());
         }
     }
 
     /**
-     * Eligible approvers for a specific stage: matching category, and
-     * either unrestricted (no specific stage picks) or explicitly assigned
-     * to this stage — then load-balanced by availability/workload.
+     * Returns the one approver if — and only if — they are the SOLE
+     * eligible candidate (not merely the busiest/least-busy pick) for
+     * every stage in the pipeline, meaning nobody else could ever take
+     * over a later stage regardless of workload. Returns null otherwise,
+     * in which case each stage is routed independently via
+     * selectApproverForStage() as it is entered.
+     */
+    private function soleEligibleApproverAcrossAllStages(DocumentRepository $document, Collection $stages): ?User
+    {
+        $firstStageCandidates = $this->eligibleApproversForStage($document, $stages->first());
+
+        if ($firstStageCandidates->count() !== 1) {
+            return null;
+        }
+
+        $soloCandidate = $firstStageCandidates->first();
+
+        $sameForEveryStage = $stages->every(function (WorkflowStage $stage) use ($document, $soloCandidate) {
+            $stageCandidates = $this->eligibleApproversForStage($document, $stage);
+            return $stageCandidates->count() === 1 && $stageCandidates->first()->user_id === $soloCandidate->user_id;
+        });
+
+        return $sameForEveryStage ? $soloCandidate : null;
+    }
+
+    /**
+     * Every eligible approver for a specific stage: matching category,
+     * active account, and either unrestricted (no specific stage picks —
+     * eligible for every stage in their category by default) or
+     * explicitly assigned to this stage. Does NOT pick a single winner —
+     * see selectApproverForStage() for the load-balanced pick from this pool.
      */
     private function eligibleApproversForStage(DocumentRepository $document, WorkflowStage $stage): Collection
     {
-        $candidates = User::where('role', 'approver')
+        return User::where('role', 'approver')
             ->where('is_active', true)
             ->where('assigned_category', $document->ml_category)
             ->get()
@@ -209,26 +242,45 @@ class WorkflowService
                 return $assignedStageIds->isEmpty() || $assignedStageIds->contains($stage->stage_id);
             })
             ->values();
+    }
+
+    /**
+     * Selects exactly ONE approver for a stage (Feature: single-assignment
+     * load balancing): whichever eligible approver currently has the
+     * fewest pending assignments across all documents/stages. This is what
+     * guarantees a document is routed to exactly one approver's queue at a
+     * time instead of racing across multiple approvers.
+     *
+     * Approvers marked busy/away are skipped in favor of an available
+     * peer, unless every eligible approver is busy — an approver who
+     * forgot to toggle back "available" should never permanently block a
+     * document. Ties in workload are broken by user_id for determinism.
+     */
+    private function selectApproverForStage(DocumentRepository $document, WorkflowStage $stage): ?User
+    {
+        $candidates = $this->eligibleApproversForStage($document, $stage);
 
         if ($candidates->isEmpty()) {
-            return $candidates;
+            return null;
         }
 
-        // Load-balancing / fallback: prefer approvers who aren't marked
-        // busy/away and are under the active-workload threshold. If that
-        // would leave nobody, fall back to the full candidate list rather
-        // than leaving the document completely unassigned.
-        $available = $candidates->filter(function (User $approver) {
-            if ($approver->is_busy) {
-                return false;
-            }
-            $activeCount = DocumentAssignment::where('user_id', $approver->user_id)
-                ->where('individual_status', 'pending')
-                ->count();
-            return $activeCount < self::MAX_ACTIVE_ASSIGNMENTS_PER_APPROVER;
-        })->values();
+        $available = $candidates->reject(fn (User $approver) => $approver->is_busy)->values();
+        $pool = $available->isNotEmpty() ? $available : $candidates;
 
-        return $available->isNotEmpty() ? $available : $candidates;
+        $workloads = DocumentAssignment::whereIn('user_id', $pool->pluck('user_id'))
+            ->where('individual_status', 'pending')
+            ->selectRaw('user_id, count(*) as active_count')
+            ->groupBy('user_id')
+            ->pluck('active_count', 'user_id');
+
+        $ranked = $pool->values()->all();
+        usort($ranked, function (User $a, User $b) use ($workloads) {
+            $countA = (int) ($workloads[$a->user_id] ?? 0);
+            $countB = (int) ($workloads[$b->user_id] ?? 0);
+            return $countA <=> $countB ?: $a->user_id <=> $b->user_id;
+        });
+
+        return $ranked[0] ?? null;
     }
 
     /**
@@ -260,16 +312,18 @@ class WorkflowService
     }
 
     /**
-     * Creates one DocumentAssignment per eligible approver for this stage,
-     * all sharing the same computed sla_expires_at (parallel assignment).
-     * Pass a pre-fetched $eligibleApprovers to avoid re-querying when the
-     * caller already has it.
+     * Creates exactly ONE DocumentAssignment for this stage — the eligible
+     * approver currently carrying the fewest pending assignments (Feature:
+     * single-assignment load balancing), unless $approver is explicitly
+     * passed (used by the solo-approver shortcut, which already knows who
+     * it's assigning to). A document is therefore only ever visible in one
+     * approver's queue at a time for a given stage.
      */
-    private function assignStageInParallel(DocumentRepository $document, WorkflowStage $stage, ?Collection $eligibleApprovers = null): void
+    private function assignStage(DocumentRepository $document, WorkflowStage $stage, ?User $approver = null): void
     {
-        $eligibleApprovers ??= $this->eligibleApproversForStage($document, $stage);
+        $approver ??= $this->selectApproverForStage($document, $stage);
 
-        if ($eligibleApprovers->isEmpty()) {
+        if (!$approver) {
             AuditLog::record(null, $document->document_id, 'route_no_approver',
                 "No active approver is eligible for stage '{$stage->stage_name}' (category '{$document->ml_category}'). " .
                 'An Admin must create/assign an approver for this category and stage.');
@@ -285,23 +339,21 @@ class WorkflowService
         $slaExpiresAt = $this->computeApproverSlaExpiry($document);
         $priorityRank = $this->computePriority($document->due_date);
 
-        foreach ($eligibleApprovers as $approver) {
-            DocumentAssignment::create([
-                'document_id' => $document->document_id,
-                'user_id' => $approver->user_id,
-                'stage_id' => $stage->stage_id,
-                'due_date' => $document->due_date,
-                'priority_rank' => $priorityRank,
-                'individual_status' => 'pending',
-                'sla_expires_at' => $slaExpiresAt,
-            ]);
+        DocumentAssignment::create([
+            'document_id' => $document->document_id,
+            'user_id' => $approver->user_id,
+            'stage_id' => $stage->stage_id,
+            'due_date' => $document->due_date,
+            'priority_rank' => $priorityRank,
+            'individual_status' => 'pending',
+            'sla_expires_at' => $slaExpiresAt,
+        ]);
 
-            NotificationRecord::send($approver->user_id, $document->document_id,
-                "New document assigned for '{$stage->stage_name}': {$document->title} (parallel review — any one of you may act).");
-        }
+        NotificationRecord::send($approver->user_id, $document->document_id,
+            "New document assigned for '{$stage->stage_name}': {$document->title}.");
 
         AuditLog::record(null, $document->document_id, 'route',
-            "Stage '{$stage->stage_name}': assigned in parallel to {$eligibleApprovers->count()} approver(s) " .
+            "Stage '{$stage->stage_name}': assigned to {$approver->full_name} — least active workload among eligible approvers " .
             "(category '{$document->ml_category}'). SLA window expires {$slaExpiresAt->toDayDateTimeString()}.");
     }
 
@@ -314,7 +366,7 @@ class WorkflowService
         return 3;                        // Low
     }
 
-    /** Process 5.0 — Approval Management. Approver decision on one parallel assignment. */
+    /** Process 5.0 — Approval Management. Approver decision on their assignment. */
     public function decide(DocumentAssignment $assignment, User $approver, string $decision, ?string $comments = null): void
     {
         DB::transaction(function () use ($assignment, $approver, $decision, $comments) {
@@ -331,10 +383,9 @@ class WorkflowService
     }
 
     /**
-     * Resolves a stage once ANY one of its parallel assignments has been
-     * decided (by an approver in decide(), by an Admin in
-     * SlaService::adminOverride(), or automatically by
-     * SlaService::autoApproveUnresolved()).
+     * Resolves a stage once its single assignment has been decided (by an
+     * approver in decide(), by an Admin in SlaService::adminOverride(), or
+     * automatically by SlaService::autoApproveUnresolved()).
      *
      * @param  bool  $auto  true when this resolution came from the SLA
      *                      auto-approval safety net rather than a human
@@ -348,9 +399,9 @@ class WorkflowService
 
         if ($decision === 'rejected') {
             // Rejection terminates the WHOLE document — close every other
-            // pending assignment across ALL stages (not just this stage's
-            // parallel siblings), since with the solo-approver shortcut
-            // multiple stages can be pending simultaneously.
+            // pending assignment across ALL stages, since with the
+            // solo-approver shortcut more than one stage can be pending
+            // simultaneously for the same approver.
             DocumentAssignment::where('document_id', $document->document_id)
                 ->where('individual_status', 'pending')
                 ->where('assignment_id', '!=', $assignment->assignment_id)
@@ -369,26 +420,10 @@ class WorkflowService
             return;
         }
 
-        // Approved — close pending SIBLINGS for the SAME stage only
-        // (parallel peers reviewing that one stage).
-        $siblings = DocumentAssignment::where('document_id', $document->document_id)
-            ->where('stage_id', $stage->stage_id)
-            ->where('individual_status', 'pending')
-            ->where('assignment_id', '!=', $assignment->assignment_id)
-            ->get();
-
-        foreach ($siblings as $sibling) {
-            $sibling->individual_status = 'approved';
-            $sibling->auto_approved = $auto;
-            $sibling->comments = 'Auto-closed — stage already approved' . ($auto ? ' (system timeout)' : '') . '.';
-            $sibling->acted_at = now();
-            $sibling->save();
-        }
-
-        // Ensure the next configured stage has assignments. In the
-        // just-in-time case they won't exist yet and are created here. In
-        // the solo-approver case they were already pre-created in
-        // routeToWorkflow() — skip re-creating them.
+        // Ensure the next configured stage has its single assignment. In
+        // the just-in-time case it won't exist yet and is created here. In
+        // the solo-approver case every stage was already pre-assigned in
+        // routeToWorkflow() — skip re-creating it.
         $nextStage = WorkflowStage::where('document_category', $document->ml_category)
             ->where('sequence_order', '>', $stage->sequence_order)
             ->orderBy('sequence_order')
@@ -400,7 +435,7 @@ class WorkflowService
                 ->exists();
 
             if (!$alreadyAssigned) {
-                $this->assignStageInParallel($document, $nextStage);
+                $this->assignStage($document, $nextStage);
             }
         }
 

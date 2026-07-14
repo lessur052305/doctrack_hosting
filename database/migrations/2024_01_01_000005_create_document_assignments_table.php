@@ -6,16 +6,17 @@ use Illuminate\Support\Facades\Schema;
 
 /**
  * DOCUMENT_ASSIGNMENTS — Data Dictionary Table 3.5.4
- * Powers the PARALLEL approval workflow (Process 5.0): when a document
- * enters a stage, every eligible approver for that stage gets their own row
- * here, all sharing the same `sla_expires_at` (computed as 25% of the time
- * remaining until the document's absolute due_date). Whichever approver
- * acts first resolves the stage; there is no hierarchy or fixed order.
+ * Powers the SINGLE-ASSIGNMENT, LOAD-BALANCED approval workflow
+ * (Process 5.0): when a document enters a stage, it is routed to exactly
+ * ONE eligible approver for that stage — whichever eligible approver
+ * currently has the fewest pending assignments — so a document is never
+ * visible in more than one approver's queue at the same time.
  *
- * `user_id` is the approver this specific assignment belongs to.
- * `escalated_to_admin` is flipped independently per row by the
- * workflow:check-parallel-slas scheduled command — one slow approver's
- * missed deadline never affects their on-time parallel peers.
+ * `user_id` is the approver this assignment belongs to.
+ * `escalated_to_admin` is flipped by the workflow:check-parallel-slas
+ * scheduled command once this assignment's own `sla_expires_at`
+ * (computed as 25% of the time remaining until the document's absolute
+ * due_date) has passed.
  */
 return new class extends Migration
 {
@@ -35,7 +36,7 @@ return new class extends Migration
 
             $table->text('comments')->nullable();
 
-            // --- SLA fields (Section 5 / parallel-approval SLA rule) ---
+            // --- SLA fields (Section 5 / approver SLA rule) ---
             $table->dateTime('sla_expires_at')->nullable();
             $table->timestamp('admin_override_at')->nullable();
             $table->foreignId('admin_override_by')->nullable()->constrained('users', 'user_id')->nullOnDelete();
@@ -54,4 +55,4 @@ return new class extends Migration
     {
         Schema::dropIfExists('document_assignments');
     }
-};
+}; 
