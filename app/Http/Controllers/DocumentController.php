@@ -5,7 +5,9 @@ namespace App\Http\Controllers;
 use App\Models\DocumentAssignment;
 use App\Models\DocumentRepository;
 use App\Models\SubmissionBatch;
+use App\Rules\ReliableMimeType;
 use App\Services\WorkflowService;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 
@@ -36,10 +38,28 @@ class DocumentController extends Controller
     public function store(Request $request)
     {
         // Explicit validation on every document metadata input (Section 3).
+        // Content-based MIME verification is layered on top of mimes:, but
+        // deliberately only for the formats that sniff reliably across
+        // OS/Office versions (pdf/png/jpg/txt) — legacy .doc (OLE2) and
+        // .docx (zip) sniff inconsistently enough that a strict mimetype
+        // check would false-reject legitimate Word files, so those stay
+        // protected by the mimes: extension-mapping rule only (with
+        // WorkflowService::ingest()'s extraction_failed handling as a
+        // downstream backstop for garbage content that slips through).
         $validated = $request->validate([
             'files' => ['required', 'array', 'min:1', 'max:20'],
-            'files.*' => ['file', 'mimes:pdf,docx,doc,txt,png,jpg,jpeg', 'max:20480'],
-            'due_date' => ['required', 'date', 'after:now'],
+            'files.*' => [
+                'file',
+                'mimes:pdf,docx,doc,txt,png,jpg,jpeg',
+                new ReliableMimeType(),
+                'max:20480',
+            ],
+            'due_date' => ['required', 'date', function ($attribute, $value, $fail) {
+                $buffer = config('sla.min_due_date_buffer_minutes', 15);
+                if (Carbon::parse($value)->lt(now()->addMinutes($buffer))) {
+                    $fail("The due date must be at least {$buffer} minutes from now.");
+                }
+            }],
         ]);
 
         $batch = SubmissionBatch::create([

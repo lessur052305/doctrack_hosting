@@ -1,4 +1,4 @@
-@props(['document'])
+@props(['document', 'highlightStageId' => null])
 
 {{--
     Full workflow-stage pipeline for this document's category (Feature:
@@ -17,9 +17,21 @@
     is marked "Your turn" — that's the one the action button elsewhere on
     the page acts on. Their other stage(s) are marked "Up next" — visible,
     but not yet actionable until the current one resolves.
+
+    Explicit override (Feature: Admin SLA Override Queue): the viewer isn't
+    the assigned approver, so the auth-based highlighting above never
+    fires. Pass $highlightStageId to force that one stage into the same
+    highlighted style — the single action box elsewhere on the page acts
+    on exactly that stage — labeled "Escalated" rather than "Your turn"
+    since it isn't the viewer's own assignment.
 --}}
 @php
-    $allStages = \App\Models\WorkflowStage::forCategory($document->ml_category)->get();
+    // A document with no ml_category yet (still processing, or extraction/
+    // classification never completed) has no workflow pipeline to show —
+    // WorkflowStage::forCategory() requires a non-null category string.
+    $allStages = $document->ml_category
+        ? \App\Models\WorkflowStage::forCategory($document->ml_category)->get()
+        : collect();
     $assignmentsByStage = $document->assignments->keyBy('stage_id');
     $currentUserId = auth()->id();
 
@@ -31,13 +43,22 @@
         ->first();
 @endphp
 
+@if(!$document->ml_category)
+    <div class="rounded-lg border border-surface-200 bg-surface-50 p-3 text-xs text-surface-500">
+        This document hasn't been classified yet, so it has no workflow stages to show.
+        @if($document->validation_errors)
+            See the validation issue below for why.
+        @endif
+    </div>
+@else
 <div class="space-y-2">
     @foreach($allStages as $stage)
         @php
             $assignment = $assignmentsByStage->get($stage->stage_id);
             $state = $assignment ? $assignment->individual_status : 'upcoming'; // pending|approved|rejected|auto_approved|upcoming
             $isMine = $state === 'pending' && $assignment->user_id === $currentUserId;
-            $isMyActive = $isMine && $stage->stage_id === $myActiveStageId;
+            $isForcedHighlight = $highlightStageId !== null && $stage->stage_id === $highlightStageId;
+            $isMyActive = ($isMine && $stage->stage_id === $myActiveStageId) || $isForcedHighlight;
         @endphp
         <div class="flex items-center gap-3 rounded-lg border p-3
             @if($isMyActive) border-primary-500 bg-primary-50 ring-1 ring-inset ring-primary-500/40
@@ -61,7 +82,9 @@
             <div class="flex-1 min-w-0">
                 <p class="text-xs font-medium text-surface-800 flex items-center gap-1.5 flex-wrap">
                     {{ $stage->stage_name }}
-                    @if($isMyActive)
+                    @if($isForcedHighlight)
+                        <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-rejected-100 text-rejected-700">Escalated</span>
+                    @elseif($isMyActive)
                         <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold text-gray-600">Your turn</span>
                     @elseif($isMine)
                         <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-primary-100 text-primary-700">Up next</span>
@@ -84,3 +107,4 @@
         </div>
     @endforeach
 </div>
+@endif

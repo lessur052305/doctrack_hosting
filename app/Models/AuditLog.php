@@ -29,6 +29,24 @@ class AuditLog extends Model
     }
 
     /**
+     * Section 5: Immutability. Enforces "insert-only" at the model layer
+     * rather than by convention alone — any save() against an
+     * already-persisted row (or any delete()) throws.
+     */
+    protected static function booted(): void
+    {
+        static::saving(function (self $log) {
+            if ($log->exists) {
+                throw new \LogicException('Audit log entries are immutable and cannot be modified after creation.');
+            }
+        });
+
+        static::deleting(function () {
+            throw new \LogicException('Audit log entries are immutable and cannot be deleted.');
+        });
+    }
+
+    /**
      * Convenience factory used everywhere a transition happens (Section 6).
      * Deliberately insert-only: audit rows are never updated or deleted
      * by application code.

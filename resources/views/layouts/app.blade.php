@@ -60,6 +60,7 @@
             <h1 class="text-lg font-semibold text-surface-900">@yield('page-title', 'Dashboard')</h1>
             <div class="ml-auto flex items-center gap-4">
                 @auth
+                    <x-notification-bell />
                     <span class="text-xs px-2.5 py-1 rounded-full bg-surface-100 text-surface-600 font-medium capitalize">{{ auth()->user()->role }}</span>
                 @endauth
             </div>

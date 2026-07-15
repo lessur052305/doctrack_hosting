@@ -26,6 +26,9 @@ return Application::configure(basePath: dirname(__DIR__))
         $schedule->command('workflow:check-parallel-slas')->everyFiveMinutes()->withoutOverlapping();
         // 2) auto-approve anything still unresolved past the Admin grace window
         $schedule->command('sla:check')->everyFiveMinutes()->withoutOverlapping();
+        // 3) drain the database queue (Section 3 email notifications) —
+        // no long-running queue:work process is documented for this app.
+        $schedule->command('queue:work --stop-when-empty --max-time=50')->everyMinute()->withoutOverlapping();
     })
     ->withExceptions(function (Exceptions $exceptions) {
         //

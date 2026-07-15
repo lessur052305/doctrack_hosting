@@ -2,6 +2,8 @@
 
 namespace App\Services;
 
+use App\Mail\DocumentAssignedMail;
+use App\Mail\DocumentDecisionMail;
 use App\Models\AuditLog;
 use App\Models\DocumentAssignment;
 use App\Models\DocumentRepository;
@@ -12,6 +14,7 @@ use Carbon\Carbon;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Mail;
 
 /**
  * WorkflowService
@@ -77,6 +80,9 @@ class WorkflowService
     /** Flat SLA window used for due dates at or under the short-due threshold above. */
     private const FIXED_SHORT_DUE_SLA_MINUTES = 15;
 
+    /** Tier 2 upper cap: 25% of remaining time never allots more than this many minutes. */
+    private const MAX_APPROVER_SLA_MINUTES = 360;
+
     /** Below this many extracted characters, treat it as an extraction failure, not "short content". */
     private const MIN_EXTRACTED_CHARS = 40;
 
@@ -84,6 +90,7 @@ class WorkflowService
         private TextExtractionService $extractor,
         private ClassificationService $classifier,
         private ValidationService $validator,
+        private BusinessHoursService $businessHours,
     ) {
     }
 
@@ -129,9 +136,7 @@ class WorkflowService
                 $document->ml_confidence = 0;
                 $document->is_validated = false;
                 $document->validation_errors = [
-                    'Could not extract readable text from this file. If it is a scanned image or a non-searchable PDF, ' .
-                    'OCR/PDF-parsing support may not be installed on this system — contact your Administrator, or try ' .
-                    're-uploading as a plain text (.txt) or Word (.docx) file instead.',
+                    $this->extractionFailureMessage($extraction['failure_reason'] ?? null),
                 ];
                 $document->global_status = 'processing';
                 $document->save();
@@ -179,6 +184,28 @@ class WorkflowService
     }
 
     /**
+     * Builds a specific, actionable message for why extraction produced no
+     * usable text — reflecting the actual diagnosed cause from
+     * TextExtractionService rather than a generic hedge ("may not be
+     * installed") when the real cause is already known.
+     */
+    private function extractionFailureMessage(?string $reason): string
+    {
+        return match ($reason) {
+            'ocr_binary_missing' => 'This file needs OCR to read (it looks like a scanned image or non-searchable PDF), but the ' .
+                'OCR engine is not installed on the server yet — an Administrator needs to install the system ' .
+                '"tesseract-ocr" package. In the meantime, try re-uploading as a plain text (.txt) or Word (.docx) file instead.',
+            'ocr_package_missing' => 'This file needs OCR to read (it looks like a scanned image or non-searchable PDF), but OCR ' .
+                'support is not installed on this system at all — contact your Administrator, or try re-uploading as ' .
+                'a plain text (.txt) or Word (.docx) file instead.',
+            'ocr_error' => 'OCR was attempted on this file but failed — it may be corrupted, blank, or in an unsupported ' .
+                'image format. Try re-uploading as a plain text (.txt) or Word (.docx) file instead, or contact your Administrator.',
+            default => 'Could not extract readable text from this file. Try re-uploading as a plain text (.txt) or ' .
+                'Word (.docx) file instead, or contact your Administrator.',
+        };
+    }
+
+    /**
      * Process 4.0 — Workflow Routing.
      *
      * Every configured stage is assigned to its own single, load-balanced
@@ -196,7 +223,7 @@ class WorkflowService
      */
     public function routeToWorkflow(DocumentRepository $document): void
     {
-        $stages = WorkflowStage::forCategory($document->ml_category)->get();
+        $stages = WorkflowStage::forCategory($document->ml_category)->where('is_archived', false)->get();
 
         if ($stages->isEmpty()) {
             // No configured pipeline for this category — create a single generic stage.
@@ -316,16 +343,34 @@ class WorkflowService
      * window. Either way, the window is still clamped to never extend past
      * the document's own absolute due date.
      */
+    /**
+     * The tiered-percentage formula, factored out from computeApproverSlaExpiry()
+     * so recalculateAssignmentSlaExpiry() below can reproduce the exact same
+     * budget from a fixed historical anchor instead of "now".
+     *
+     * Tier 1 (<=60min remaining): flat 15-minute window. Tier 2 (>60min
+     * remaining): 25% of remaining, capped at 6 hours — SLA = min(max(calculated,
+     * 15m), 6h). The max(...,15) is a no-op in Tier 2 since 25% of >60min is
+     * always >15min already; it's kept to match the formula literally.
+     */
+    private function tieredApproverSlaMinutes(Carbon $anchor, Carbon $dueDate): int
+    {
+        $totalMinutesLeft = $anchor->diffInMinutes($dueDate, false); // signed: negative if already overdue
+
+        return $totalMinutesLeft <= self::SHORT_DUE_THRESHOLD_MINUTES
+            ? self::FIXED_SHORT_DUE_SLA_MINUTES
+            : min(self::MAX_APPROVER_SLA_MINUTES, max(self::FIXED_SHORT_DUE_SLA_MINUTES, (int) round($totalMinutesLeft * self::APPROVER_SLA_FRACTION)));
+    }
+
     private function computeApproverSlaExpiry(DocumentRepository $document): Carbon
     {
         $dueDate = Carbon::parse($document->due_date);
-        $totalMinutesLeft = now()->diffInMinutes($dueDate, false); // signed: negative if already overdue
+        $approverSlaMinutes = $this->tieredApproverSlaMinutes(now(), $dueDate);
 
-        $approverSlaMinutes = $totalMinutesLeft <= self::SHORT_DUE_THRESHOLD_MINUTES
-            ? self::FIXED_SHORT_DUE_SLA_MINUTES
-            : (int) round($totalMinutesLeft * self::APPROVER_SLA_FRACTION);
-
-        $slaExpiresAt = now()->copy()->addMinutes($approverSlaMinutes);
+        // Business-hours-aware: the window is consumed only during
+        // configured working hours/days, skipping holidays — see
+        // BusinessHoursService.
+        $slaExpiresAt = $this->businessHours->addBusinessMinutes(now(), $approverSlaMinutes);
 
         // Safety guard: never let the approver's window extend past the
         // document's own absolute due date.
@@ -334,6 +379,75 @@ class WorkflowService
         }
 
         return $slaExpiresAt;
+    }
+
+    /**
+     * Section 1: recomputes ONE pending assignment's SLA deadline against
+     * the CURRENT business-hours/holiday calendar, holding its originally
+     * granted minute budget and grant time (created_at) fixed. Without
+     * this, sla_expires_at is "computed once, stored statically" (by
+     * design — see class docblock) and an Admin marking a day off *after*
+     * a document was already routed would silently leave every affected
+     * deadline stale until the next document happens to be uploaded.
+     */
+    public function recalculateAssignmentSlaExpiry(DocumentAssignment $assignment): Carbon
+    {
+        $dueDate = Carbon::parse($assignment->due_date);
+        $anchor = $assignment->created_at->copy();
+        $minutes = $this->tieredApproverSlaMinutes($anchor, $dueDate);
+        $expiresAt = $this->businessHours->addBusinessMinutes($anchor, $minutes);
+
+        if ($expiresAt->greaterThan($dueDate)) {
+            $expiresAt = $dueDate->copy();
+        }
+
+        return $expiresAt;
+    }
+
+    /**
+     * Re-syncs every still-pending, not-yet-escalated assignment's SLA
+     * deadline against the current calendar. Call after any SlaSetting/
+     * SlaHoliday change — see AdminController::storeHoliday()/
+     * destroyHoliday()/updateSlaSettings(). Escalated assignments are left
+     * alone (they've already left the approver's queue for Admin
+     * resolution — recalculating their deadline now would be meaningless).
+     * If recalculation pushes a deadline into the past, it's simply
+     * overdue already; the next workflow:check-parallel-slas sweep will
+     * escalate it exactly as it would any other lapsed assignment — this
+     * method never escalates directly.
+     *
+     * @return int number of assignments whose deadline actually changed
+     */
+    public function recalculatePendingSlaDeadlines(): int
+    {
+        $changed = 0;
+
+        DocumentAssignment::where('individual_status', 'pending')
+            ->where('escalated_to_admin', false)
+            ->with(['stage', 'document'])
+            ->get()
+            ->each(function (DocumentAssignment $assignment) use (&$changed) {
+                $newExpiry = $this->recalculateAssignmentSlaExpiry($assignment);
+
+                if ($newExpiry->equalTo($assignment->sla_expires_at)) {
+                    return;
+                }
+
+                $old = $assignment->sla_expires_at;
+                $assignment->sla_expires_at = $newExpiry;
+                $assignment->save();
+                $changed++;
+
+                AuditLog::record(null, $assignment->document_id, 'sla_recalculated',
+                    "Stage '{$assignment->stage->stage_name}' SLA deadline recalculated from " .
+                    "{$old->toDayDateTimeString()} to {$newExpiry->toDayDateTimeString()} after a business-hours/holiday calendar update.");
+
+                NotificationRecord::send($assignment->user_id, $assignment->document_id,
+                    "The SLA deadline for '{$assignment->document->title}' (stage '{$assignment->stage->stage_name}') " .
+                    "changed to {$newExpiry->format('M j, Y g:i A')} after an update to the business-hours calendar.");
+            });
+
+        return $changed;
     }
 
     /**
@@ -376,6 +490,10 @@ class WorkflowService
         NotificationRecord::send($approver->user_id, $document->document_id,
             "New document assigned for '{$stage->stage_name}': {$document->title}.");
 
+        if ($approver->email) {
+            Mail::to($approver->email)->queue(new DocumentAssignedMail($document, $stage, $approver));
+        }
+
         AuditLog::record(null, $document->document_id, 'route',
             "Stage '{$stage->stage_name}': assigned to {$approver->full_name} — least active workload among eligible approvers " .
             "(category '{$document->ml_category}'). SLA window expires {$slaExpiresAt->toDayDateTimeString()}.");
@@ -399,8 +517,24 @@ class WorkflowService
             $assignment->acted_at = now();
             $assignment->save();
 
-            AuditLog::record($approver->user_id, $assignment->document_id, $decision,
-                "Stage '{$assignment->stage->stage_name}' {$decision} by {$approver->full_name}." . ($comments ? " Comments: {$comments}" : ''));
+            $stage = $assignment->stage;
+            $document = $assignment->document;
+
+            AuditLog::record($approver->user_id, $document->document_id, $decision,
+                "Stage '{$stage->stage_name}' {$decision} by {$approver->full_name}." . ($comments ? " Comments: {$comments}" : ''));
+
+            // Section 3: Decision Alerts — per-stage notice to the
+            // originator including the approver's comments, distinct from
+            // completeStage()'s whole-document-outcome message below.
+            NotificationRecord::send($document->originator_id, $document->document_id,
+                "Stage '{$stage->stage_name}' of '{$document->title}' was {$decision} by {$approver->full_name}." .
+                ($comments ? " Comments: \"{$comments}\"" : ''));
+
+            if ($document->originator->email) {
+                Mail::to($document->originator->email)->queue(
+                    new DocumentDecisionMail($document, $decision, $comments, $stage->stage_name)
+                );
+            }
 
             $this->completeStage($assignment, $decision);
         });
@@ -448,6 +582,7 @@ class WorkflowService
         // was added to the category's pipeline after this document was
         // already routed, so it still gets picked up.
         $nextStage = WorkflowStage::where('document_category', $document->ml_category)
+            ->where('is_archived', false)
             ->where('sequence_order', '>', $stage->sequence_order)
             ->orderBy('sequence_order')
             ->first();

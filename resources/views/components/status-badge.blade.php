@@ -8,6 +8,7 @@
         'auto_approved' => ['bg-approved-50 text-approved-700 ring-approved-500/20', 'Auto-Approved'],
         'rejected' => ['bg-rejected-50 text-rejected-700 ring-rejected-500/20', 'Rejected'],
         'pending' => ['bg-processing-50 text-processing-700 ring-processing-500/20', 'Pending'],
+        'escalated' => ['bg-rejected-50 text-rejected-700 ring-rejected-500/20', 'Escalated to Admin'],
     ];
     [$classes, $label] = $map[$status] ?? ['bg-surface-100 text-surface-600 ring-surface-300', ucfirst($status)];
 @endphp

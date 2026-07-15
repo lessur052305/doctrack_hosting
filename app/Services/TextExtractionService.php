@@ -4,6 +4,8 @@ namespace App\Services;
 
 use Illuminate\Http\UploadedFile;
 use Smalot\PdfParser\Parser as PdfParser;
+use thiagoalessio\TesseractOCR\TesseractNotFoundException;
+use thiagoalessio\TesseractOCR\TesseractOCR;
 
 /**
  * TextExtractionService
@@ -36,6 +38,7 @@ class TextExtractionService
         $extension = strtolower($file->getClientOriginalExtension());
         $text = '';
         $usedOcr = false;
+        $failureReason = null;
 
         if ($mime === 'application/pdf' || $extension === 'pdf') {
             $text = $this->extractFromPdf($file->getRealPath());
@@ -49,13 +52,22 @@ class TextExtractionService
         // dependency-free way to read either format directly.
 
         if (mb_strlen(trim($text)) < self::MIN_USABLE_CHARS) {
-            $text = $this->extractWithOcr($file->getRealPath());
+            $ocr = $this->extractWithOcr($file->getRealPath());
+            $text = $ocr['text'];
             $usedOcr = true;
+            if (mb_strlen(trim($text)) < self::MIN_USABLE_CHARS) {
+                $failureReason = $ocr['failure_reason'];
+            }
         }
 
         return [
             'text' => trim($text),
             'used_ocr_fallback' => $usedOcr,
+            // Specific, user-facing-safe reason extraction produced no
+            // usable text — null when extraction actually succeeded.
+            // One of: 'ocr_binary_missing', 'ocr_package_missing',
+            // 'ocr_error', or null (generic/unknown).
+            'failure_reason' => $failureReason,
         ];
     }
 
@@ -110,16 +122,55 @@ class TextExtractionService
         }
     }
 
-    private function extractWithOcr(string $path): string
+    /**
+     * @return array{text: string, failure_reason: ?string}
+     */
+    private function extractWithOcr(string $path): array
     {
+        if (!class_exists(TesseractOCR::class)) {
+            return ['text' => '', 'failure_reason' => 'ocr_package_missing'];
+        }
+
         try {
-            if (!class_exists(\TesseractOCR::class)) {
-                return ''; // OCR package/binary not available in this environment
-            }
-            return (new \TesseractOCR($path))->run();
+            $ocr = new TesseractOCR($path);
+            $this->useBundledTesseractIfPresent($ocr);
+            return ['text' => $ocr->run(), 'failure_reason' => null];
+        } catch (TesseractNotFoundException $e) {
+            // The PHP wrapper is installed, but the system `tesseract-ocr`
+            // binary it shells out to isn't — distinct from "no OCR support
+            // was ever installed" so the failure message can tell an admin
+            // exactly what's missing rather than a generic hedge.
+            report($e);
+            return ['text' => '', 'failure_reason' => 'ocr_binary_missing'];
         } catch (\Throwable $e) {
             report($e);
-            return '';
+            return ['text' => '', 'failure_reason' => 'ocr_error'];
         }
+    }
+
+    /**
+     * This environment has no system-wide `tesseract-ocr` package
+     * installed, and installing one via apt requires root privileges this
+     * process doesn't have. A self-contained copy (binary + its
+     * libtesseract/liblept shared libraries + eng.traineddata) was
+     * extracted from the official .deb packages — via `apt-get download`
+     * + `dpkg-deb -x`, neither of which need root — into
+     * storage/tesseract-bin. Point the OCR wrapper at it if present;
+     * otherwise leave it alone so a real system install (e.g. in a
+     * different environment where `sudo apt-get install tesseract-ocr`
+     * was run) is used via $PATH as normal.
+     */
+    private function useBundledTesseractIfPresent(TesseractOCR $ocr): void
+    {
+        $binDir = storage_path('tesseract-bin');
+        $executable = $binDir . '/bin/tesseract';
+
+        if (!is_file($executable)) {
+            return;
+        }
+
+        putenv('LD_LIBRARY_PATH=' . $binDir . '/lib');
+        putenv('TESSDATA_PREFIX=' . $binDir . '/share/5/tessdata');
+        $ocr->executable($executable);
     }
 }

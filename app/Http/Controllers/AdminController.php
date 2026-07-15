@@ -7,12 +7,17 @@ use App\Models\DocumentAssignment;
 use App\Models\DocumentRepository;
 use App\Models\MlModelRepository;
 use App\Models\NotificationRecord;
+use App\Models\SlaHoliday;
+use App\Models\SlaSetting;
+use App\Models\SlaViolation;
 use App\Models\User;
 use App\Models\WorkflowStage;
 use App\Services\ClassificationService;
 use App\Services\SlaService;
 use App\Services\TextExtractionService;
 use App\Services\ValidationService;
+use App\Services\WorkflowService;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\Rule;
@@ -23,6 +28,7 @@ class AdminController extends Controller
         private ClassificationService $classifier,
         private TextExtractionService $extractor,
         private SlaService $sla,
+        private WorkflowService $workflow,
     ) {
     }
 
@@ -56,7 +62,7 @@ class AdminController extends Controller
     public function users()
     {
         $users = User::with(['createdBy', 'workflowStages'])->orderBy('role')->paginate(15);
-        $stagesByCategory = WorkflowStage::orderBy('sequence_order')->get()->groupBy('document_category');
+        $stagesByCategory = WorkflowStage::where('is_archived', false)->orderBy('sequence_order')->get()->groupBy('document_category');
         return view('admin.users', compact('users', 'stagesByCategory'));
     }
 
@@ -113,7 +119,7 @@ class AdminController extends Controller
     {
         abort_unless($user->role === 'approver', 422, 'Only approver accounts have stage assignments.');
 
-        $stages = WorkflowStage::forCategory($user->assigned_category)->get();
+        $stages = WorkflowStage::forCategory($user->assigned_category)->where('is_archived', false)->get();
         $assignedStageIds = $user->workflowStages()->pluck('workflow_stages.stage_id')->all();
 
         return view('admin.approver_stages', compact('user', 'stages', 'assignedStageIds'));
@@ -307,7 +313,14 @@ class AdminController extends Controller
         $stages = WorkflowStage::orderBy('document_category')->orderBy('sequence_order')->get()->groupBy('document_category');
         $categories = ValidationService::knownCategories();
 
-        return view('admin.workflow_config', compact('stages', 'categories'));
+        // Section 2: orphan-prevention data — how many PENDING assignments
+        // (blocks archive/delete) vs. any assignment ever (blocks hard
+        // delete; forces archive instead) each stage has.
+        $activeCounts = DocumentAssignment::where('individual_status', 'pending')
+            ->select('stage_id')->selectRaw('count(*) as cnt')->groupBy('stage_id')->pluck('cnt', 'stage_id');
+        $historyCounts = DocumentAssignment::select('stage_id')->selectRaw('count(*) as cnt')->groupBy('stage_id')->pluck('cnt', 'stage_id');
+
+        return view('admin.workflow_config', compact('stages', 'categories', 'activeCounts', 'historyCounts'));
     }
 
     public function storeStage(Request $request)
@@ -325,6 +338,237 @@ class AdminController extends Controller
             "Added workflow stage '{$stage->stage_name}' for '{$stage->document_category}' (order {$stage->sequence_order}).");
 
         return back()->with('status', 'Workflow stage saved.');
+    }
+
+    public function updateStage(Request $request, WorkflowStage $stage)
+    {
+        $validated = $request->validate([
+            'stage_name' => ['required', 'string', 'max:255'],
+            'description' => ['nullable', 'string', 'max:1000'],
+        ]);
+
+        $stage->update($validated);
+
+        AuditLog::record($request->user()->user_id, null, 'workflow_config',
+            "Renamed/edited workflow stage #{$stage->stage_id} ('{$stage->stage_name}').");
+
+        return back()->with('status', 'Stage updated.');
+    }
+
+    public function moveStageUp(Request $request, WorkflowStage $stage)
+    {
+        $this->swapStageOrder($request, $stage, 'up');
+        return back();
+    }
+
+    public function moveStageDown(Request $request, WorkflowStage $stage)
+    {
+        $this->swapStageOrder($request, $stage, 'down');
+        return back();
+    }
+
+    private function swapStageOrder(Request $request, WorkflowStage $stage, string $direction): void
+    {
+        $neighbor = WorkflowStage::where('document_category', $stage->document_category)
+            ->where('is_archived', false)
+            ->where('stage_id', '!=', $stage->stage_id)
+            ->where('sequence_order', $direction === 'up' ? '<=' : '>=', $stage->sequence_order)
+            ->orderBy('sequence_order', $direction === 'up' ? 'desc' : 'asc')
+            ->first();
+
+        if (!$neighbor) {
+            return;
+        }
+
+        [$a, $b] = [$stage->sequence_order, $neighbor->sequence_order];
+        $stage->update(['sequence_order' => $b]);
+        $neighbor->update(['sequence_order' => $a]);
+
+        AuditLog::record($request->user()->user_id, null, 'workflow_config', "Reordered stage '{$stage->stage_name}'.");
+    }
+
+    public function archiveStage(Request $request, WorkflowStage $stage)
+    {
+        abort_if($this->stageHasActiveAssignments($stage), 409,
+            'This stage has active (pending) assignments. Reassign them to another stage first.');
+
+        $stage->update(['is_archived' => true]);
+
+        AuditLog::record($request->user()->user_id, null, 'workflow_config', "Archived stage '{$stage->stage_name}'.");
+
+        return back()->with('status', 'Stage archived.');
+    }
+
+    public function unarchiveStage(Request $request, WorkflowStage $stage)
+    {
+        $stage->update(['is_archived' => false]);
+
+        AuditLog::record($request->user()->user_id, null, 'workflow_config', "Unarchived stage '{$stage->stage_name}'.");
+
+        return back()->with('status', 'Stage unarchived.');
+    }
+
+    public function reassignStage(Request $request, WorkflowStage $stage)
+    {
+        $validated = $request->validate([
+            'target_stage_id' => [
+                'required',
+                'integer',
+                Rule::exists('workflow_stages', 'stage_id')
+                    ->where('document_category', $stage->document_category)
+                    ->where('is_archived', false),
+            ],
+        ]);
+
+        abort_if((int) $validated['target_stage_id'] === $stage->stage_id, 422, 'Choose a different stage to reassign to.');
+
+        // Reassignment is an admin-privileged manual correction, not a new
+        // routing event — it intentionally does not recompute sla_expires_at
+        // or re-check approver eligibility against the target stage.
+        $count = DocumentAssignment::where('stage_id', $stage->stage_id)
+            ->where('individual_status', 'pending')
+            ->update(['stage_id' => $validated['target_stage_id']]);
+
+        AuditLog::record($request->user()->user_id, null, 'workflow_config',
+            "Reassigned {$count} pending assignment(s) from stage '{$stage->stage_name}' to stage #{$validated['target_stage_id']}.");
+
+        return back()->with('status', "{$count} assignment(s) reassigned.");
+    }
+
+    public function destroyStage(Request $request, WorkflowStage $stage)
+    {
+        abort_if($this->stageHasActiveAssignments($stage), 409,
+            'This stage has active (pending) assignments. Archive it or reassign them first.');
+
+        abort_if(DocumentAssignment::where('stage_id', $stage->stage_id)->exists(), 409,
+            'This stage has historical assignment history and cannot be permanently deleted — archive it instead.');
+
+        $name = $stage->stage_name;
+        $stage->delete();
+
+        AuditLog::record($request->user()->user_id, null, 'workflow_config', "Deleted unused stage '{$name}'.");
+
+        return back()->with('status', 'Stage deleted.');
+    }
+
+    private function stageHasActiveAssignments(WorkflowStage $stage): bool
+    {
+        return DocumentAssignment::where('stage_id', $stage->stage_id)->where('individual_status', 'pending')->exists();
+    }
+
+    // ---------------------------------------------------------------
+    // Operational Window Controls & Holiday Management (Section 1)
+    // ---------------------------------------------------------------
+
+    public function calendar(Request $request)
+    {
+        $month = $request->filled('month') ? Carbon::parse($request->string('month') . '-01') : now()->startOfMonth();
+
+        $holidays = SlaHoliday::whereBetween('holiday_date', [$month->copy()->startOfMonth(), $month->copy()->endOfMonth()])
+            ->get()
+            ->keyBy(fn (SlaHoliday $h) => $h->holiday_date->toDateString());
+
+        $settings = SlaSetting::current();
+
+        return view('admin.calendar', compact('month', 'holidays', 'settings'));
+    }
+
+    public function updateSlaSettings(Request $request)
+    {
+        $validated = $request->validate([
+            'work_start_time' => ['required', 'date_format:H:i'],
+            'work_end_time' => ['required', 'date_format:H:i', 'after:work_start_time'],
+            'working_days' => ['required', 'array', 'min:1'],
+            'working_days.*' => ['integer', 'between:0,6'],
+        ]);
+
+        $settings = SlaSetting::current();
+        $settings->update($validated + ['updated_by' => $request->user()->user_id]);
+
+        AuditLog::record($request->user()->user_id, null, 'sla_settings_update', 'Updated business-hours working window.');
+
+        $changed = $this->workflow->recalculatePendingSlaDeadlines();
+
+        return back()->with('status', "Working hours updated." . ($changed ? " {$changed} pending assignment(s) had their SLA deadline recalculated." : ''));
+    }
+
+    public function storeHoliday(Request $request)
+    {
+        $validated = $request->validate([
+            'holiday_date' => ['required', 'date', 'unique:sla_holidays,holiday_date'],
+            'label' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        SlaHoliday::create($validated + ['created_by' => $request->user()->user_id]);
+
+        AuditLog::record($request->user()->user_id, null, 'sla_holiday_add', "Marked {$validated['holiday_date']} as a non-working day.");
+
+        // Section 1: a newly-marked holiday must retroactively shift the
+        // deadline of every already-routed pending assignment that spans
+        // it — sla_expires_at is otherwise "computed once, stored
+        // statically" at routing time and would silently stay wrong.
+        $changed = $this->workflow->recalculatePendingSlaDeadlines();
+
+        return back()->with('status', "Holiday added." . ($changed ? " {$changed} pending assignment(s) had their SLA deadline recalculated." : ''));
+    }
+
+    public function destroyHoliday(Request $request, SlaHoliday $holiday)
+    {
+        $date = $holiday->holiday_date->toDateString();
+        $holiday->delete();
+
+        AuditLog::record($request->user()->user_id, null, 'sla_holiday_remove', "Unmarked {$date} as a non-working day.");
+
+        $changed = $this->workflow->recalculatePendingSlaDeadlines();
+
+        return back()->with('status', "Holiday removed." . ($changed ? " {$changed} pending assignment(s) had their SLA deadline recalculated." : ''));
+    }
+
+    // ---------------------------------------------------------------
+    // SLA Violation reporting (Section 4)
+    // ---------------------------------------------------------------
+
+    public function violationsReport(Request $request)
+    {
+        $query = SlaViolation::query();
+
+        if ($request->filled('approver_id')) {
+            $query->where('approver_id', $request->integer('approver_id'));
+        }
+        if ($request->filled('stage_name')) {
+            $query->where('stage_name', $request->string('stage_name'));
+        }
+        if ($request->filled('category')) {
+            $category = $request->string('category');
+            $query->whereHas('document', fn ($q) => $q->where('ml_category', $category));
+        }
+        if ($request->filled('date_from')) {
+            $query->whereDate('violation_timestamp', '>=', $request->date('date_from'));
+        }
+        if ($request->filled('date_to')) {
+            $query->whereDate('violation_timestamp', '<=', $request->date('date_to'));
+        }
+
+        $violations = (clone $query)->with(['document', 'approver'])
+            ->orderByDesc('violation_timestamp')->paginate(20)->withQueryString();
+
+        $byApprover = (clone $query)->selectRaw('approver_id, count(*) as total')
+            ->groupBy('approver_id')->with('approver')->orderByDesc('total')->limit(5)->get();
+
+        $byStage = (clone $query)->selectRaw('stage_name, count(*) as total')
+            ->groupBy('stage_name')->orderByDesc('total')->limit(5)->get();
+
+        $totalCount = (clone $query)->count();
+        $avgOverdue = (clone $query)->avg('duration_overdue');
+
+        return view('admin.sla_violations', [
+            'violations' => $violations,
+            'byApprover' => $byApprover,
+            'byStage' => $byStage,
+            'totalCount' => $totalCount,
+            'avgOverdue' => round($avgOverdue ?? 0),
+            'categories' => ValidationService::knownCategories(),
+        ]);
     }
 
     // ---------------------------------------------------------------

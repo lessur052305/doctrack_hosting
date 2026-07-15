@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\AuditLog;
 use App\Models\DocumentRepository;
+use App\Rules\ReliableMimeType;
 use App\Services\TextExtractionService;
 use App\Services\ValidationService;
 use Illuminate\Http\Request;
@@ -143,7 +144,7 @@ class ArchiveController extends Controller
     public function storeLegacy(Request $request)
     {
         $validated = $request->validate([
-            'file' => ['required', 'file', 'mimes:pdf,docx,doc,txt,png,jpg,jpeg', 'max:20480'],
+            'file' => ['required', 'file', 'mimes:pdf,docx,doc,txt,png,jpg,jpeg', new ReliableMimeType(), 'max:20480'],
             'category' => ['required', 'in:' . implode(',', ValidationService::knownCategories())],
             'title' => ['nullable', 'string', 'max:255'],
         ]);

@@ -69,7 +69,15 @@
                             $priorityMap = [1 => ['Urgent', 'bg-rejected-50 text-rejected-700 ring-rejected-500/20'],
                                              2 => ['Normal', 'bg-processing-50 text-processing-700 ring-processing-500/20'],
                                              3 => ['Low', 'bg-surface-100 text-surface-600 ring-surface-300']];
-                            [$pLabel, $pClass] = $priorityMap[$activeAssignment->priority_rank] ?? $priorityMap[2];
+                            // priority_rank reflects the document's overall due-date urgency, not
+                            // this specific stage's own SLA countdown — once that's already past
+                            // (should be rare: ApprovalController escalates expired assignments
+                            // out of this queue on load/decide), "Urgent" would be misleading, so
+                            // "Expired" takes precedence as a defensive override.
+                            $isExpired = $activeAssignment->seconds_remaining !== null && $activeAssignment->seconds_remaining <= 0;
+                            [$pLabel, $pClass] = $isExpired
+                                ? ['Expired', 'bg-rejected-100 text-rejected-800 ring-rejected-500/40']
+                                : ($priorityMap[$activeAssignment->priority_rank] ?? $priorityMap[2]);
                         @endphp
                         <div class="flex flex-col sm:flex-row sm:items-center gap-4 rounded-lg border border-primary-200 bg-primary-50/40 p-4">
                             <div class="flex-1 min-w-0">
@@ -85,6 +93,11 @@
                                         {{ $activeAssignment->sla_expires_at?->diffForHumans() ?? '—' }}
                                     </span>
                                 </p>
+                                @if(!app(App\Services\BusinessHoursService::class)->isWithinWorkingWindow(now()))
+                                    <p class="text-[11px] text-surface-400 mt-0.5">
+                                        SLA clock is paused outside business hours right now — it only counts down during working hours, so this may look longer than the actual review window.
+                                    </p>
+                                @endif
                             </div>
 
                             <form method="POST" action="{{ route('approver.assignments.decide', $activeAssignment) }}" class="flex flex-col sm:w-64 gap-2">

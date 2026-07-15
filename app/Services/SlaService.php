@@ -2,11 +2,15 @@
 
 namespace App\Services;
 
+use App\Mail\DocumentDecisionMail;
+use App\Mail\SlaEscalationMail;
 use App\Models\AuditLog;
 use App\Models\DocumentAssignment;
 use App\Models\NotificationRecord;
+use App\Models\SlaViolation;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Mail;
 
 /**
  * SlaService
@@ -40,6 +44,52 @@ class SlaService
     public function sweep(): array
     {
         return ['auto_approved' => $this->autoApproveUnresolved()];
+    }
+
+    /**
+     * Flags a single expired-but-not-yet-escalated assignment: sets
+     * escalated_to_admin, logs the breach to sla_violations, and notifies
+     * Admins (in-app + email). This is the same logic the scheduled
+     * `workflow:check-parallel-slas` command runs in bulk — factored out
+     * here so it can ALSO be triggered on-demand (see ApprovalController)
+     * the moment someone touches a since-expired assignment, rather than
+     * depending entirely on the next cron tick. Without this, an approver
+     * could still approve/reject an assignment whose SLA had already
+     * lapsed, simply because the periodic sweep hadn't run yet.
+     */
+    public function escalate(DocumentAssignment $assignment): void
+    {
+        DB::transaction(function () use ($assignment) {
+            $assignment->escalated_to_admin = true;
+            $assignment->save();
+
+            AuditLog::record(null, $assignment->document_id, 'sla_escalation',
+                "Approver assignment #{$assignment->assignment_id} (stage '{$assignment->stage->stage_name}') " .
+                'exceeded its SLA window and was flagged for Admin escalation.');
+
+            // abs()+round(): Carbon 3's diffInMinutes() returns a signed
+            // float even with the default $absolute param, so the sign and
+            // fractional part both need normalizing before this hits an
+            // unsignedInteger column.
+            SlaViolation::create([
+                'document_id' => $assignment->document_id,
+                'approver_id' => $assignment->user_id,
+                'violation_timestamp' => now(),
+                'duration_overdue' => (int) round(abs(now()->diffInMinutes($assignment->sla_expires_at))),
+                'stage_name' => $assignment->stage->stage_name,
+            ]);
+
+            foreach (User::where('role', 'admin')->where('is_active', true)->get() as $admin) {
+                NotificationRecord::send($admin->user_id, $assignment->document_id,
+                    "SLA breach: '{$assignment->document->title}' at stage '{$assignment->stage->stage_name}' " .
+                    '(approver: ' . ($assignment->approver->full_name ?? 'unassigned') . ') needs Admin attention.',
+                    'high');
+
+                if ($admin->email) {
+                    Mail::to($admin->email)->queue(new SlaEscalationMail($assignment));
+                }
+            }
+        });
     }
 
     /**
@@ -109,7 +159,14 @@ class SlaService
             $this->workflow->completeStage($assignment, $decision);
 
             NotificationRecord::send($document->originator_id, $document->document_id,
-                "An Admin override was applied to your document '{$document->title}' ({$decision}).");
+                "An Admin override was applied to your document '{$document->title}' ({$decision})." .
+                ($comments ? " Notes: \"{$comments}\"" : ''));
+
+            if ($document->originator->email) {
+                Mail::to($document->originator->email)->queue(
+                    new DocumentDecisionMail($document, $decision, $comments, $assignment->stage->stage_name)
+                );
+            }
         });
     }
 }

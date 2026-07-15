@@ -46,31 +46,46 @@
                                 class="text-primary-700 hover:underline font-medium">View original file</button>
                         </p>
 
+                        {{-- Full stage pipeline for this document's category, so admins can see
+                             what already happened and what's still to come — not just whichever
+                             breached stage currently needs a decision. Only the earliest
+                             (lowest sequence_order) breached stage is highlighted and actionable
+                             below; once it's resolved, the next breached stage (if any) surfaces
+                             the same way on reload. --}}
                         <div class="mb-4">
-                            <x-workflow-stage-list :document="$doc" />
+                            <x-workflow-stage-list :document="$doc" :highlight-stage-id="$stageAssignments->sortBy(fn ($a) => $a->stage->sequence_order)->first()->stage_id" />
                         </div>
 
-                        <div class="space-y-3">
-                            @foreach($stageAssignments as $a)
-                                <div class="flex flex-col sm:flex-row gap-4 rounded-lg border border-rejected-500/20 p-4">
-                                    <div class="flex-1 min-w-0">
-                                        <p class="text-xs text-surface-500">
-                                            Stage: {{ $a->stage->stage_name }} &middot;
-                                            Approver: {{ $a->approver->full_name ?? 'Unassigned' }} &middot;
-                                            Expired <span data-live-time="{{ $a->sla_expires_at->timestamp }}">{{ $a->sla_expires_at->diffForHumans() }}</span>
-                                        </p>
-                                    </div>
-                                    <form method="POST" action="{{ route('admin.sla.override', $a) }}" class="flex flex-col sm:w-72 gap-2">
-                                        @csrf
-                                        <textarea name="comments" rows="1" placeholder="Override reason (optional)…"
-                                            class="w-full rounded-lg border-surface-300 text-xs focus:border-primary-500 focus:ring-primary-500 px-3 py-2"></textarea>
-                                        <div class="flex gap-2">
-                                            <button name="decision" value="approved" class="flex-1 bg-approved-500 hover:bg-approved-700 text-white text-xs font-semibold py-2 rounded-lg">Override: Approve</button>
-                                            <button name="decision" value="rejected" class="flex-1 bg-rejected-500 hover:bg-rejected-700 text-white text-xs font-semibold py-2 rounded-lg">Override: Reject</button>
-                                        </div>
-                                    </form>
+                        @php
+                            $activeAssignment = $stageAssignments->sortBy(fn ($a) => $a->stage->sequence_order)->first();
+                        @endphp
+                        <div class="flex flex-col sm:flex-row sm:items-center gap-4 rounded-lg border border-rejected-500/30 bg-rejected-50/40 p-4">
+                            <div class="flex-1 min-w-0">
+                                <div class="flex items-center gap-2 mb-1">
+                                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ring-1 ring-inset bg-rejected-50 text-rejected-700 ring-rejected-500/20">SLA Breached</span>
+                                    <span class="text-xs text-surface-500 font-medium">Stage: {{ $activeAssignment->stage->stage_name }}</span>
                                 </div>
-                            @endforeach
+                                <p class="text-xs text-surface-500">
+                                    Approver: {{ $activeAssignment->approver->full_name ?? 'Unassigned' }} &middot;
+                                    Expired <span data-live-time="{{ $activeAssignment->sla_expires_at->timestamp }}">{{ $activeAssignment->sla_expires_at->diffForHumans() }}</span>
+                                </p>
+                            </div>
+
+                            <form method="POST" action="{{ route('admin.sla.override', $activeAssignment) }}" class="flex flex-col sm:w-64 gap-2">
+                                @csrf
+                                <textarea name="comments" rows="1" placeholder="Override reason (optional)…"
+                                    class="w-full rounded-lg border-surface-300 text-xs focus:border-primary-500 focus:ring-primary-500 px-3 py-2"></textarea>
+                                <div class="flex gap-2">
+                                    <button type="submit" name="decision" value="approved"
+                                        class="flex-1 bg-approved-500 hover:bg-approved-700 text-white text-xs font-semibold py-2 rounded-lg transition-colors">
+                                        Approve
+                                    </button>
+                                    <button type="submit" name="decision" value="rejected"
+                                        class="flex-1 bg-rejected-500 hover:bg-rejected-700 text-white text-xs font-semibold py-2 rounded-lg transition-colors">
+                                        Reject
+                                    </button>
+                                </div>
+                            </form>
                         </div>
                     </div>
                 @endforeach

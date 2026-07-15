@@ -31,14 +31,29 @@
                 </h2>
                 <a href="{{ route('admin.sla.queue') }}" class="text-xs text-primary-700 hover:underline font-medium">View all &rarr;</a>
             </div>
+            @php
+                // Nest by document — a single document can have more than one
+                // breached stage (e.g. Budget Check and Final Approval both
+                // pending on the same doc), which previously showed as
+                // separate flat rows repeating the same title.
+                $alertsByDocument = $slaAlerts->groupBy('document_id')->take(5);
+            @endphp
             <ul class="divide-y divide-surface-100">
-                @forelse($slaAlerts->take(6) as $a)
-                    <li class="px-6 py-3 flex items-center justify-between text-sm">
-                        <div class="min-w-0">
-                            <p class="font-medium text-surface-800 truncate">{{ $a->document->title }}</p>
-                            <p class="text-xs text-rejected-700">Breached at stage "{{ $a->stage->stage_name }}" — expired <span data-live-time="{{ $a->sla_expires_at->timestamp }}">{{ $a->sla_expires_at->diffForHumans() }}</span></p>
+                @forelse($alertsByDocument as $breaches)
+                    @php $doc = $breaches->first()->document; @endphp
+                    <li class="px-6 py-3">
+                        <div class="flex items-center justify-between gap-3">
+                            <p class="font-medium text-surface-800 truncate">{{ $doc->title }}</p>
+                            <a href="{{ route('admin.sla.queue') }}" class="shrink-0 text-xs bg-primary-700 text-white px-3 py-1.5 rounded-lg font-medium hover:bg-primary-800">Override</a>
                         </div>
-                        <a href="{{ route('admin.sla.queue') }}" class="text-xs bg-primary-700 text-white px-3 py-1.5 rounded-lg font-medium hover:bg-primary-800">Override</a>
+                        <ul class="mt-1.5 space-y-1">
+                            @foreach($breaches as $a)
+                                <li class="text-xs text-rejected-700 flex items-center gap-1.5">
+                                    <span class="w-1 h-1 rounded-full bg-rejected-500 shrink-0"></span>
+                                    <span>Stage "{{ $a->stage->stage_name }}" — expired <span data-live-time="{{ $a->sla_expires_at->timestamp }}">{{ $a->sla_expires_at->diffForHumans() }}</span></span>
+                                </li>
+                            @endforeach
+                        </ul>
                     </li>
                 @empty
                     <li class="px-6 py-8 text-center text-sm text-surface-400">No SLA breaches — everything is on schedule.</li>

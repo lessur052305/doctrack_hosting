@@ -10,7 +10,11 @@ class WorkflowStage extends Model
     protected $primaryKey = 'stage_id';
 
     protected $fillable = [
-        'document_category', 'stage_name', 'sequence_order', 'description',
+        'document_category', 'stage_name', 'sequence_order', 'description', 'is_archived',
+    ];
+
+    protected $casts = [
+        'is_archived' => 'boolean',
     ];
 
     public function assignments()
@@ -18,6 +22,12 @@ class WorkflowStage extends Model
         return $this->hasMany(DocumentAssignment::class, 'stage_id', 'stage_id');
     }
 
+    /**
+     * Deliberately unfiltered by is_archived — admin views (workflow
+     * config, approver stage picker) need to see archived stages too.
+     * Callers that route/assign live documents must chain an explicit
+     * ->where('is_archived', false) themselves (see WorkflowService).
+     */
     public function scopeForCategory($query, string $category)
     {
         return $query->where('document_category', $category)->orderBy('sequence_order');

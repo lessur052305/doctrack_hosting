@@ -3,14 +3,36 @@
 namespace App\Http\Controllers;
 
 use App\Models\DocumentAssignment;
+use App\Services\SlaService;
 use App\Services\WorkflowService;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator;
 
 class ApprovalController extends Controller
 {
-    public function __construct(private WorkflowService $workflow)
+    public function __construct(private WorkflowService $workflow, private SlaService $sla)
     {
+    }
+
+    /**
+     * Escalates any of this approver's own assignments whose SLA window
+     * has already lapsed but haven't been picked up by the periodic
+     * `workflow:check-parallel-slas` sweep yet. Called on-demand (page
+     * load, decide attempt) so a stale cron interval can never leave an
+     * expired assignment sitting in the approver's actionable queue —
+     * the Clock-Stop Mechanism (Section 4) needs to take effect the
+     * moment the deadline passes, not on whatever the next tick happens
+     * to be.
+     */
+    private function escalateExpiredFor(int $userId): void
+    {
+        DocumentAssignment::where('user_id', $userId)
+            ->where('individual_status', 'pending')
+            ->where('escalated_to_admin', false)
+            ->where('sla_expires_at', '<', now())
+            ->with(['stage', 'document', 'approver'])
+            ->get()
+            ->each(fn (DocumentAssignment $a) => $this->sla->escalate($a));
     }
 
     /**
@@ -31,6 +53,8 @@ class ApprovalController extends Controller
      */
     public function dashboard(Request $request)
     {
+        $this->escalateExpiredFor($request->user()->user_id);
+
         $pending = DocumentAssignment::pendingFor($request->user()->user_id)
             ->with(['document.batch', 'document.originator', 'document.assignments.approver', 'stage'])
             ->orderBy('priority_rank')
@@ -79,6 +103,15 @@ class ApprovalController extends Controller
 
         abort_if($assignment->individual_status !== 'pending', 409, 'This assignment has already been actioned.');
 
+        // Escalate right now if the deadline passed since this page was
+        // loaded, rather than trust that the periodic sweep already caught
+        // it — closes the window where a stale cron interval would let a
+        // late decision through.
+        if (!$assignment->escalated_to_admin && $assignment->sla_expires_at && now()->greaterThan($assignment->sla_expires_at)) {
+            $this->sla->escalate($assignment);
+        }
+        abort_if($assignment->escalated_to_admin, 409, 'This assignment\'s SLA deadline has passed — it was just escalated to Admin and can no longer be decided here.');
+
         $this->workflow->decide($assignment, $request->user(), $validated['decision'], $validated['comments'] ?? null);
 
         return redirect()->route('approver.dashboard')->with('status', 'Decision recorded: ' . ucfirst($validated['decision']) . '.');
@@ -109,19 +142,38 @@ class ApprovalController extends Controller
         $assignments = DocumentAssignment::whereIn('assignment_id', $validated['assignment_ids'])
             ->where('user_id', $request->user()->user_id)
             ->where('individual_status', 'pending')
+            ->with(['stage', 'document', 'approver'])
             ->get();
 
         abort_if($assignments->isEmpty(), 409, 'These assignments have already been actioned.');
+
+        $skippedExpired = 0;
 
         foreach ($assignments as $assignment) {
             $assignment->refresh();
             if ($assignment->individual_status !== 'pending') {
                 continue; // already closed as a side effect of an earlier iteration (e.g. rejection cascade)
             }
+
+            // Same on-demand escalation guard as decide() — don't let a
+            // stale cron interval allow a late decision through.
+            if (!$assignment->escalated_to_admin && $assignment->sla_expires_at && now()->greaterThan($assignment->sla_expires_at)) {
+                $this->sla->escalate($assignment);
+            }
+            if ($assignment->escalated_to_admin) {
+                $skippedExpired++;
+                continue;
+            }
+
             $this->workflow->decide($assignment, $request->user(), $validated['decision'], $validated['comments'] ?? null);
         }
 
-        return redirect()->route('approver.dashboard')->with('status', 'Decision recorded: ' . ucfirst($validated['decision']) . '.');
+        $status = 'Decision recorded: ' . ucfirst($validated['decision']) . '.';
+        if ($skippedExpired > 0) {
+            $status .= " {$skippedExpired} assignment(s) had already breached their SLA and were escalated to Admin instead.";
+        }
+
+        return redirect()->route('approver.dashboard')->with('status', $status);
     }
 
     /**

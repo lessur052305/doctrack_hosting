@@ -5,6 +5,7 @@ use App\Http\Controllers\ApprovalController;
 use App\Http\Controllers\ArchiveController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\DocumentController;
+use App\Http\Controllers\NotificationController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -26,6 +27,11 @@ Route::middleware('guest')->group(function () {
 
 Route::middleware('auth')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout'])->name('logout');
+
+    // --- Notification Center (shared across all roles) ---
+    Route::get('/notifications', [NotificationController::class, 'index'])->name('notifications.index');
+    Route::post('/notifications/{notification}/read', [NotificationController::class, 'markRead'])->name('notifications.read');
+    Route::post('/notifications/read-all', [NotificationController::class, 'markAllRead'])->name('notifications.readAll');
 
     // --- Originator ---
     Route::middleware('role:originator')->prefix('originator')->name('originator.')->group(function () {
@@ -63,6 +69,20 @@ Route::middleware('auth')->group(function () {
 
         Route::get('/workflow-config', [AdminController::class, 'workflowConfig'])->name('workflow.config');
         Route::post('/workflow-config', [AdminController::class, 'storeStage'])->name('workflow.store');
+        Route::put('/workflow-config/{stage}', [AdminController::class, 'updateStage'])->name('workflow.stages.update');
+        Route::post('/workflow-config/{stage}/move-up', [AdminController::class, 'moveStageUp'])->name('workflow.stages.moveUp');
+        Route::post('/workflow-config/{stage}/move-down', [AdminController::class, 'moveStageDown'])->name('workflow.stages.moveDown');
+        Route::post('/workflow-config/{stage}/archive', [AdminController::class, 'archiveStage'])->name('workflow.stages.archive');
+        Route::post('/workflow-config/{stage}/unarchive', [AdminController::class, 'unarchiveStage'])->name('workflow.stages.unarchive');
+        Route::post('/workflow-config/{stage}/reassign', [AdminController::class, 'reassignStage'])->name('workflow.stages.reassign');
+        Route::delete('/workflow-config/{stage}', [AdminController::class, 'destroyStage'])->name('workflow.stages.destroy');
+
+        Route::get('/calendar', [AdminController::class, 'calendar'])->name('calendar');
+        Route::put('/calendar/settings', [AdminController::class, 'updateSlaSettings'])->name('calendar.settings.update');
+        Route::post('/calendar/holidays', [AdminController::class, 'storeHoliday'])->name('calendar.holidays.store');
+        Route::delete('/calendar/holidays/{holiday}', [AdminController::class, 'destroyHoliday'])->name('calendar.holidays.destroy');
+
+        Route::get('/sla-violations', [AdminController::class, 'violationsReport'])->name('sla.violations');
 
         Route::get('/audit-logs', [AdminController::class, 'auditLogs'])->name('audit.logs');
 

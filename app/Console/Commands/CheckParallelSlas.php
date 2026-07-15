@@ -2,8 +2,8 @@
 
 namespace App\Console\Commands;
 
-use App\Models\AuditLog;
 use App\Models\DocumentAssignment;
+use App\Services\SlaService;
 use Illuminate\Console\Command;
 
 /**
@@ -18,28 +18,32 @@ use Illuminate\Console\Command;
  *
  * This is the first half of the Section 5 safety net; the second half
  * (auto-approval after an Admin grace window) is handled by the existing
- * `sla:check` command via SlaService.
+ * `sla:check` command via SlaService. The actual per-assignment escalation
+ * logic lives in SlaService::escalate() — this command is a bulk periodic
+ * sweep, but ApprovalController also calls the same method on-demand so
+ * an approver can never act on an assignment past its own SLA window just
+ * because this sweep hasn't run yet.
  */
 class CheckParallelSlas extends Command
 {
     protected $signature = 'workflow:check-parallel-slas';
     protected $description = 'Flag individual approver assignments whose SLA window has expired.';
 
+    public function __construct(private SlaService $sla)
+    {
+        parent::__construct();
+    }
+
     public function handle(): int
     {
         $expired = DocumentAssignment::where('individual_status', 'pending')
             ->where('escalated_to_admin', false)
             ->where('sla_expires_at', '<', now())
-            ->with('stage')
+            ->with(['stage', 'document', 'approver'])
             ->get();
 
         foreach ($expired as $assignment) {
-            $assignment->escalated_to_admin = true;
-            $assignment->save();
-
-            AuditLog::record(null, $assignment->document_id, 'sla_escalation',
-                "Approver assignment #{$assignment->assignment_id} (stage '{$assignment->stage->stage_name}') " .
-                'exceeded its SLA window and was flagged for Admin escalation.');
+            $this->sla->escalate($assignment);
         }
 
         $this->info("{$expired->count()} assignment(s) flagged as escalated_to_admin.");

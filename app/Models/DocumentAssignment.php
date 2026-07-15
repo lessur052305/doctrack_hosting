@@ -63,11 +63,20 @@ class DocumentAssignment extends Model
         if (!$this->sla_expires_at) {
             return null;
         }
-        return now()->diffInSeconds($this->sla_expires_at, false);
+        // Carbon 3's diffInSeconds() returns a float even with the signed
+        // ($absolute=false) form; round explicitly rather than let PHP's
+        // implicit float->int narrowing throw a deprecation warning.
+        return (int) round(now()->diffInSeconds($this->sla_expires_at, false));
     }
 
+    /**
+     * Section 3: once escalated, the assignment leaves the approver's own
+     * queue — it's now the Admin's to resolve via the SLA override queue.
+     */
     public function scopePendingFor($query, $userId)
     {
-        return $query->where('user_id', $userId)->where('individual_status', 'pending');
+        return $query->where('user_id', $userId)
+            ->where('individual_status', 'pending')
+            ->where('escalated_to_admin', false);
     }
 }
