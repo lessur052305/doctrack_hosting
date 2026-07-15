@@ -26,8 +26,8 @@
 
                 <div class="mt-4">
                     <label for="due_date" class="block text-xs font-medium text-surface-700 mb-1">Due date &amp; time <span class="text-rejected-700">*</span></label>
-                    <p class="text-[11px] text-surface-400 mb-1">Approvers' review window is calculated as 25% of the time left until this deadline.</p>
-                    <input type="datetime-local" id="due_date" name="due_date" required min="{{ now()->addHour()->format('Y-m-d\TH:i') }}"
+                    <p class="text-[11px] text-surface-400 mb-1">Approvers' review window is 25% of the time left until this deadline (a flat 15 minutes if due within the next hour).</p>
+                    <input type="datetime-local" id="due_date" name="due_date" required min="{{ now()->addMinutes(15)->format('Y-m-d\TH:i') }}"
                         class="w-full rounded-lg border-surface-300 focus:border-primary-500 focus:ring-primary-500 text-sm px-3 py-2">
                 </div>
 

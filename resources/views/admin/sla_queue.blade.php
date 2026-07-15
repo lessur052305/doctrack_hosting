@@ -57,7 +57,7 @@
                                         <p class="text-xs text-surface-500">
                                             Stage: {{ $a->stage->stage_name }} &middot;
                                             Approver: {{ $a->approver->full_name ?? 'Unassigned' }} &middot;
-                                            Expired {{ $a->sla_expires_at->diffForHumans() }}
+                                            Expired <span data-live-time="{{ $a->sla_expires_at->timestamp }}">{{ $a->sla_expires_at->diffForHumans() }}</span>
                                         </p>
                                     </div>
                                     <form method="POST" action="{{ route('admin.sla.override', $a) }}" class="flex flex-col sm:w-72 gap-2">

@@ -36,7 +36,7 @@
                     <li class="px-6 py-3 flex items-center justify-between text-sm">
                         <div class="min-w-0">
                             <p class="font-medium text-surface-800 truncate">{{ $a->document->title }}</p>
-                            <p class="text-xs text-rejected-700">Breached at stage "{{ $a->stage->stage_name }}" — expired {{ $a->sla_expires_at->diffForHumans() }}</p>
+                            <p class="text-xs text-rejected-700">Breached at stage "{{ $a->stage->stage_name }}" — expired <span data-live-time="{{ $a->sla_expires_at->timestamp }}">{{ $a->sla_expires_at->diffForHumans() }}</span></p>
                         </div>
                         <a href="{{ route('admin.sla.queue') }}" class="text-xs bg-primary-700 text-white px-3 py-1.5 rounded-lg font-medium hover:bg-primary-800">Override</a>
                     </li>

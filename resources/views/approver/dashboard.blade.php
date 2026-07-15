@@ -17,7 +17,7 @@
                         <svg class="w-4 h-4 text-primary-700" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
                         </svg>
-                        <span class="text-xs font-semibold text-primary-800">Submitted together — {{ $docCount }} documents</span>
+                        <span class="text-xs font-semibold text-primary-800">Submitted Document/s - {{ $docCount }}</span>
                         <span class="text-xs text-surface-500">by {{ $container->originator->full_name }}</span>
                     </div>
                     <div class="text-xs font-medium {{ $container->due_date && $container->due_date->isPast() ? 'text-rejected-700' : 'text-surface-600' }}">
@@ -59,47 +59,49 @@
                             <x-workflow-stage-list :document="$doc" />
                         </div>
 
-                        {{-- One row per pending stage for this document (solo-approver shortcut can leave more than one open at once) --}}
-                        <div class="space-y-3">
-                            @foreach($stageAssignments as $a)
-                                @php
-                                    $priorityMap = [1 => ['Urgent', 'bg-rejected-50 text-rejected-700 ring-rejected-500/20'],
-                                                     2 => ['Normal', 'bg-processing-50 text-processing-700 ring-processing-500/20'],
-                                                     3 => ['Low', 'bg-surface-100 text-surface-600 ring-surface-300']];
-                                    [$pLabel, $pClass] = $priorityMap[$a->priority_rank] ?? $priorityMap[2];
-                                @endphp
-                                <div class="flex flex-col sm:flex-row sm:items-center gap-4 rounded-lg border border-surface-200 p-4">
-                                    <div class="flex-1 min-w-0">
-                                        <div class="flex items-center gap-2 mb-1">
-                                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ring-1 ring-inset {{ $pClass }}">{{ $pLabel }}</span>
-                                            <span class="text-xs text-surface-500 font-medium">Stage: {{ $a->stage->stage_name }}</span>
-                                        </div>
-                                        <p class="text-xs text-surface-400">
-                                            SLA expires
-                                            <span class="font-semibold {{ $a->seconds_remaining !== null && $a->seconds_remaining < 3600 ? 'text-rejected-700' : 'text-surface-600' }}"
-                                                  data-countdown="{{ optional($a->sla_expires_at)->timestamp }}">
-                                                {{ $a->sla_expires_at?->diffForHumans() ?? '—' }}
-                                            </span>
-                                        </p>
-                                    </div>
-
-                                    <form method="POST" action="{{ route('approver.assignments.decide', $a) }}" class="flex flex-col sm:w-64 gap-2">
-                                        @csrf
-                                        <textarea name="comments" rows="1" placeholder="Optional comments…"
-                                            class="w-full rounded-lg border-surface-300 text-xs focus:border-primary-500 focus:ring-primary-500 px-3 py-2"></textarea>
-                                        <div class="flex gap-2">
-                                            <button type="submit" name="decision" value="approved"
-                                                class="flex-1 bg-approved-500 hover:bg-approved-700 text-white text-xs font-semibold py-2 rounded-lg transition-colors">
-                                                Approve
-                                            </button>
-                                            <button type="submit" name="decision" value="rejected"
-                                                class="flex-1 bg-rejected-500 hover:bg-rejected-700 text-white text-xs font-semibold py-2 rounded-lg transition-colors">
-                                                Reject
-                                            </button>
-                                        </div>
-                                    </form>
+                        {{-- Full stage pipeline above already highlights which of these belong
+                             to you and which one is "Your turn" — this action targets only that
+                             one. If you also hold a later stage on this same document, it stays
+                             visible up there as "Up next" and becomes actionable here once this
+                             one is resolved. --}}
+                        @php
+                            $activeAssignment = $stageAssignments->sortBy(fn ($a) => $a->stage->sequence_order)->first();
+                            $priorityMap = [1 => ['Urgent', 'bg-rejected-50 text-rejected-700 ring-rejected-500/20'],
+                                             2 => ['Normal', 'bg-processing-50 text-processing-700 ring-processing-500/20'],
+                                             3 => ['Low', 'bg-surface-100 text-surface-600 ring-surface-300']];
+                            [$pLabel, $pClass] = $priorityMap[$activeAssignment->priority_rank] ?? $priorityMap[2];
+                        @endphp
+                        <div class="flex flex-col sm:flex-row sm:items-center gap-4 rounded-lg border border-primary-200 bg-primary-50/40 p-4">
+                            <div class="flex-1 min-w-0">
+                                <div class="flex items-center gap-2 mb-1">
+                                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ring-1 ring-inset {{ $pClass }}">{{ $pLabel }}</span>
+                                    <span class="text-xs text-surface-500 font-medium">Stage: {{ $activeAssignment->stage->stage_name }}</span>
                                 </div>
-                            @endforeach
+                                <p class="text-xs text-surface-400">
+                                    SLA expires
+                                    <span class="font-semibold {{ $activeAssignment->seconds_remaining !== null && $activeAssignment->seconds_remaining < 3600 ? 'text-rejected-700' : 'text-surface-600' }}"
+                                          data-live-time="{{ optional($activeAssignment->sla_expires_at)->timestamp }}"
+                                          data-live-urgent-under="3600">
+                                        {{ $activeAssignment->sla_expires_at?->diffForHumans() ?? '—' }}
+                                    </span>
+                                </p>
+                            </div>
+
+                            <form method="POST" action="{{ route('approver.assignments.decide', $activeAssignment) }}" class="flex flex-col sm:w-64 gap-2">
+                                @csrf
+                                <textarea name="comments" rows="1" placeholder="Optional comments…"
+                                    class="w-full rounded-lg border-surface-300 text-xs focus:border-primary-500 focus:ring-primary-500 px-3 py-2"></textarea>
+                                <div class="flex gap-2">
+                                    <button type="submit" name="decision" value="approved"
+                                        class="flex-1 bg-approved-500 hover:bg-approved-700 text-white text-xs font-semibold py-2 rounded-lg transition-colors">
+                                        Approve
+                                    </button>
+                                    <button type="submit" name="decision" value="rejected"
+                                        class="flex-1 bg-rejected-500 hover:bg-rejected-700 text-white text-xs font-semibold py-2 rounded-lg transition-colors">
+                                        Reject
+                                    </button>
+                                </div>
+                            </form>
                         </div>
                     </div>
                 @endforeach

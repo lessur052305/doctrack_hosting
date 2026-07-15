@@ -23,10 +23,11 @@ class ApprovalController extends Controller
      *     once at the container level. A document with no batch (legacy
      *     data, or a lone single-file submission) becomes a container of
      *     its own.
-     *   - Inner: each document's own pending stage assignment(s) — the
-     *     solo-approver shortcut can leave more than one stage pending for
-     *     the same document at once, so those still nest under that one
-     *     document card rather than duplicating it.
+     *   - Inner: each document's own pending stage assignment(s) — since
+     *     every configured stage is routed up front (not gated behind the
+     *     prior stage's decision), a document can have more than one stage
+     *     pending at once, and those still nest under that one document
+     *     card rather than duplicating it.
      */
     public function dashboard(Request $request)
     {
@@ -79,6 +80,46 @@ class ApprovalController extends Controller
         abort_if($assignment->individual_status !== 'pending', 409, 'This assignment has already been actioned.');
 
         $this->workflow->decide($assignment, $request->user(), $validated['decision'], $validated['comments'] ?? null);
+
+        return redirect()->route('approver.dashboard')->with('status', 'Decision recorded: ' . ucfirst($validated['decision']) . '.');
+    }
+
+    /**
+     * Decides ALL of this approver's pending stages for one document in a
+     * single action (Feature: one Approve/Reject button set per document,
+     * not one per stage). Since every configured stage is routed up front,
+     * the same approver can end up holding more than one stage for the
+     * same document at once (e.g. stages 1 and 3, if they're the eligible
+     * pick for both) — previously each showed its own Approve/Reject row,
+     * which looked like duplicated buttons for what the approver sees as
+     * one decision on one document. Rejecting any one stage already
+     * cascades to close every other pending stage for the document (see
+     * WorkflowService::completeStage()), so the loop below simply skips
+     * any assignment that's no longer pending by the time it's reached.
+     */
+    public function decideBatch(Request $request)
+    {
+        $validated = $request->validate([
+            'assignment_ids' => ['required', 'array', 'min:1'],
+            'assignment_ids.*' => ['integer', 'exists:document_assignments,assignment_id'],
+            'decision' => ['required', 'in:approved,rejected'],
+            'comments' => ['nullable', 'string', 'max:1000'],
+        ]);
+
+        $assignments = DocumentAssignment::whereIn('assignment_id', $validated['assignment_ids'])
+            ->where('user_id', $request->user()->user_id)
+            ->where('individual_status', 'pending')
+            ->get();
+
+        abort_if($assignments->isEmpty(), 409, 'These assignments have already been actioned.');
+
+        foreach ($assignments as $assignment) {
+            $assignment->refresh();
+            if ($assignment->individual_status !== 'pending') {
+                continue; // already closed as a side effect of an earlier iteration (e.g. rejection cascade)
+            }
+            $this->workflow->decide($assignment, $request->user(), $validated['decision'], $validated['comments'] ?? null);
+        }
 
         return redirect()->route('approver.dashboard')->with('status', 'Decision recorded: ' . ucfirst($validated['decision']) . '.');
     }

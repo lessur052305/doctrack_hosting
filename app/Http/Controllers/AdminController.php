@@ -263,6 +263,41 @@ class AdminController extends Controller
         return back()->with('status', 'Override applied: ' . ucfirst($validated['decision']) . '.');
     }
 
+    /**
+     * Overrides every breached stage assigned to the SAME approver for one
+     * document in a single action — mirrors
+     * ApprovalController::decideBatch() so the SLA queue doesn't show one
+     * override form per stage when a single approver is holding more than
+     * one breached stage for the same document.
+     */
+    public function overrideBatch(Request $request)
+    {
+        $validated = $request->validate([
+            'assignment_ids' => ['required', 'array', 'min:1'],
+            'assignment_ids.*' => ['integer', 'exists:document_assignments,assignment_id'],
+            'decision' => ['required', 'in:approved,rejected'],
+            'comments' => ['nullable', 'string', 'max:1000'],
+        ]);
+
+        $assignments = DocumentAssignment::whereIn('assignment_id', $validated['assignment_ids'])
+            ->where('escalated_to_admin', true)
+            ->whereNull('admin_override_at')
+            ->where('individual_status', 'pending')
+            ->get();
+
+        abort_if($assignments->isEmpty(), 409, 'These assignments have already been actioned.');
+
+        foreach ($assignments as $assignment) {
+            $assignment->refresh();
+            if ($assignment->individual_status !== 'pending') {
+                continue; // already closed as a side effect of an earlier iteration (e.g. rejection cascade)
+            }
+            $this->sla->adminOverride($assignment, $request->user(), $validated['decision'], $validated['comments'] ?? null);
+        }
+
+        return back()->with('status', 'Override applied: ' . ucfirst($validated['decision']) . '.');
+    }
+
     // ---------------------------------------------------------------
     // Workflow stage configuration
     // ---------------------------------------------------------------

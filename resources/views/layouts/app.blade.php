@@ -90,6 +90,53 @@
 @auth
     <x-document-viewer-modal />
 @endauth
+<script>
+    // Live relative-time updater (Feature: SLA countdowns/expiries update in
+    // real time without a page refresh). Any element with a
+    // data-live-time="<unix seconds>" attribute gets its text kept in sync
+    // every second, formatted as "Xh Ym Zs remaining" (or "... ago" once
+    // past) so the seconds digit visibly ticks — a coarser "X minutes from
+    // now" style wording only changes once a minute, which looks frozen.
+    // Optionally pass data-live-urgent-under="<seconds>" to toggle an
+    // "urgent" red color once less than that many seconds remain.
+    function __docTrackFormatDuration(totalSeconds) {
+        const h = Math.floor(totalSeconds / 3600);
+        const m = Math.floor((totalSeconds % 3600) / 60);
+        const s = totalSeconds % 60;
+
+        if (h > 0) return `${h}h ${m}m ${s}s`;
+        if (m > 0) return `${m}m ${s}s`;
+        return `${s}s`;
+    }
+
+    function __docTrackRelativeTime(unixSeconds) {
+        const diffMs = (unixSeconds * 1000) - Date.now();
+        const isFuture = diffMs >= 0;
+        const totalSeconds = Math.max(0, Math.round(Math.abs(diffMs) / 1000));
+        const duration = __docTrackFormatDuration(totalSeconds);
+
+        return isFuture ? `${duration} remaining` : `${duration} ago`;
+    }
+
+    function __docTrackUpdateLiveTimes() {
+        document.querySelectorAll('[data-live-time]').forEach((el) => {
+            const ts = parseInt(el.getAttribute('data-live-time'), 10);
+            if (!ts) return;
+
+            el.textContent = __docTrackRelativeTime(ts);
+
+            const urgentUnder = el.getAttribute('data-live-urgent-under');
+            if (urgentUnder !== null) {
+                const secondsRemaining = ts - Math.floor(Date.now() / 1000);
+                el.classList.toggle('text-rejected-700', secondsRemaining < parseInt(urgentUnder, 10));
+                el.classList.toggle('text-surface-600', secondsRemaining >= parseInt(urgentUnder, 10));
+            }
+        });
+    }
+
+    document.addEventListener('DOMContentLoaded', __docTrackUpdateLiveTimes);
+    setInterval(__docTrackUpdateLiveTimes, 1000);
+</script>
 @stack('scripts')
 </body>
 </html>

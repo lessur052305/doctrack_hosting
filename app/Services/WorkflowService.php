@@ -22,12 +22,21 @@ use Illuminate\Support\Facades\DB;
  *   processing -> classified_validated -> approved   (or auto_approved)
  *                                       -> rejected
  *
- * SINGLE-ASSIGNMENT, LOAD-BALANCED APPROVAL MODEL: when a document enters
- * a stage, it is routed to exactly ONE eligible approver for that stage —
- * whichever eligible approver currently has the fewest pending assignments
- * (see selectApproverForStage()). This guarantees a document is never
- * visible in more than one approver's queue at the same time, so two
- * approvers can never act on — or race to approve — the same document.
+ * SINGLE-ASSIGNMENT, LOAD-BALANCED APPROVAL MODEL: every configured stage
+ * for a document's category is routed the moment the document is uploaded
+ * (see routeToWorkflow()) — not one at a time. Each stage is routed to
+ * exactly ONE eligible approver: whichever eligible approver currently has
+ * the fewest pending assignments (see selectApproverForStage()). This
+ * guarantees a document is never visible in more than one approver's
+ * queue for the same stage at the same time, so two approvers can never
+ * act on — or race to approve — the same stage.
+ *
+ * Because every stage is assigned up front, a document can have more than
+ * one stage pending at once (e.g. Stage 2 assigned to a specialist while
+ * Stage 1 is still awaiting a different approver's decision). Stages
+ * resolve independently of each other and of sequence order; the document
+ * only finalizes once every stage's assignment has been resolved (see
+ * completeStage()).
  *
  * ELIGIBILITY: an approver is eligible for a stage if (a) their
  * assigned_category matches the document, and (b) either they have no
@@ -35,33 +44,38 @@ use Illuminate\Support\Facades\DB;
  * category by default) or this stage is explicitly among their assigned
  * stages (User::workflowStages()). Among eligible approvers, the one
  * currently carrying the least workload (fewest pending assignments) is
- * selected; approvers marked busy/away are skipped unless doing so would
- * leave nobody eligible at all, in which case busy status is ignored
- * rather than leaving the document unassigned.
+ * selected; ties are broken by fairness (whoever's last assignment was
+ * longest ago), and approvers marked busy/away are skipped unless doing so
+ * would leave nobody eligible at all.
  *
- * Example: if Approver A covers stages 1 and 2, and Approver B covers
- * stages 2 and 3, stage 2 goes to whichever of them has fewer pending
- * documents at that moment — not to both.
+ * Example: if Approver A covers stages 1–3 and Approver B is dedicated to
+ * stage 2 only, stage 2 goes to whichever of them has fewer pending
+ * documents at that moment — including Approver B outright if Approver A
+ * just picked up stage 1 for this same document a moment earlier, since
+ * that pending assignment already counts against them.
  *
- * SOLO-APPROVER SHORTCUT: if the exact same single approver is the ONLY
- * eligible candidate for every stage in the pipeline (nobody else could
- * ever take over a later stage), all stages are assigned to them
- * immediately at upload time instead of one at a time — since the same
- * person handles every stage regardless of order, there's no reason to
- * hide later stages. Otherwise stages are entered one at a time,
- * just-in-time, as each prior stage resolves.
- *
- * Each assignment's SLA window is computed as 25% of the hours remaining
- * until the document's own absolute due_date (min 2 hours, never
- * extending past the due_date itself).
+ * Each assignment's SLA window is 25% of the minutes remaining until the
+ * document's own absolute due_date, computed at minute granularity so it
+ * scales smoothly rather than in coarse hour jumps. Due dates at or under
+ * 1 hour away skip the percentage and get a flat 15-minute window instead.
+ * Either way, the window never extends past the due_date itself.
  */
 class WorkflowService
 {
-    /** Portion of the document's remaining time allotted to each stage's approvers. */
+    /** Portion of the document's remaining time allotted to each stage's approvers, once past the short-due threshold. */
     private const APPROVER_SLA_FRACTION = 0.25;
 
-    /** Floor for the approver SLA window, unless the due date doesn't allow it. */
-    private const MIN_APPROVER_SLA_HOURS = 2;
+    /**
+     * Due dates at or under this many minutes away skip the percentage
+     * calculation entirely and get a flat SLA window instead (see
+     * FIXED_SHORT_DUE_SLA_MINUTES) — 25% of anything that short leaves an
+     * approver with only a few minutes, which isn't a workable review
+     * window in practice.
+     */
+    private const SHORT_DUE_THRESHOLD_MINUTES = 60;
+
+    /** Flat SLA window used for due dates at or under the short-due threshold above. */
+    private const FIXED_SHORT_DUE_SLA_MINUTES = 15;
 
     /** Below this many extracted characters, treat it as an extraction failure, not "short content". */
     private const MIN_EXTRACTED_CHARS = 40;
@@ -167,12 +181,18 @@ class WorkflowService
     /**
      * Process 4.0 — Workflow Routing.
      *
-     * If a single approver is the ONLY eligible candidate for every stage
-     * in the pipeline, all stages are assigned to them immediately.
-     * Otherwise only the FIRST stage is entered now, routed to whichever
-     * eligible approver currently has the fewest pending assignments;
-     * later stages are entered dynamically as each prior one resolves
-     * (see completeStage()).
+     * Every configured stage is assigned to its own single, load-balanced
+     * approver immediately at upload time (Feature: all stages routed up
+     * front, not one at a time). Stages are processed in sequence_order so
+     * that workload counts accumulate correctly within this same routing
+     * pass — e.g. if the same approver is picked for stage 1, that pending
+     * assignment already counts against them when stage 2 is routed a
+     * moment later, so a second eligible approver with less on their plate
+     * (or one dedicated to just that stage) can take it instead.
+     *
+     * A document can therefore have more than one stage pending at once;
+     * see completeStage() for how out-of-order resolution and final
+     * document approval are handled.
      */
     public function routeToWorkflow(DocumentRepository $document): void
     {
@@ -186,41 +206,9 @@ class WorkflowService
             )]);
         }
 
-        $soloApprover = $this->soleEligibleApproverAcrossAllStages($document, $stages);
-
-        if ($soloApprover) {
-            foreach ($stages as $stage) {
-                $this->assignStage($document, $stage, $soloApprover);
-            }
-        } else {
-            $this->assignStage($document, $stages->first());
+        foreach ($stages as $stage) {
+            $this->assignStage($document, $stage);
         }
-    }
-
-    /**
-     * Returns the one approver if — and only if — they are the SOLE
-     * eligible candidate (not merely the busiest/least-busy pick) for
-     * every stage in the pipeline, meaning nobody else could ever take
-     * over a later stage regardless of workload. Returns null otherwise,
-     * in which case each stage is routed independently via
-     * selectApproverForStage() as it is entered.
-     */
-    private function soleEligibleApproverAcrossAllStages(DocumentRepository $document, Collection $stages): ?User
-    {
-        $firstStageCandidates = $this->eligibleApproversForStage($document, $stages->first());
-
-        if ($firstStageCandidates->count() !== 1) {
-            return null;
-        }
-
-        $soloCandidate = $firstStageCandidates->first();
-
-        $sameForEveryStage = $stages->every(function (WorkflowStage $stage) use ($document, $soloCandidate) {
-            $stageCandidates = $this->eligibleApproversForStage($document, $stage);
-            return $stageCandidates->count() === 1 && $stageCandidates->first()->user_id === $soloCandidate->user_id;
-        });
-
-        return $sameForEveryStage ? $soloCandidate : null;
     }
 
     /**
@@ -249,12 +237,21 @@ class WorkflowService
      * load balancing): whichever eligible approver currently has the
      * fewest pending assignments across all documents/stages. This is what
      * guarantees a document is routed to exactly one approver's queue at a
-     * time instead of racing across multiple approvers.
+     * time instead of racing across multiple approvers, and lets an
+     * approver dedicated to a specific stage take it over a busier
+     * unrestricted peer even mid-pipeline.
      *
      * Approvers marked busy/away are skipped in favor of an available
      * peer, unless every eligible approver is busy — an approver who
      * forgot to toggle back "available" should never permanently block a
-     * document. Ties in workload are broken by user_id for determinism.
+     * document.
+     *
+     * Ties in workload are broken by fairness, not by an arbitrary ID:
+     * whichever tied approver's most recent assignment (of any status)
+     * happened longest ago gets this one — "the approver who gets a
+     * document first" rather than whoever "gets a document recently".
+     * An approver who has never received an assignment is treated as
+     * having waited the longest and wins the tie outright.
      */
     private function selectApproverForStage(DocumentRepository $document, WorkflowStage $stage): ?User
     {
@@ -266,41 +263,69 @@ class WorkflowService
 
         $available = $candidates->reject(fn (User $approver) => $approver->is_busy)->values();
         $pool = $available->isNotEmpty() ? $available : $candidates;
+        $userIds = $pool->pluck('user_id');
 
-        $workloads = DocumentAssignment::whereIn('user_id', $pool->pluck('user_id'))
+        $workloads = DocumentAssignment::whereIn('user_id', $userIds)
             ->where('individual_status', 'pending')
             ->selectRaw('user_id, count(*) as active_count')
             ->groupBy('user_id')
             ->pluck('active_count', 'user_id');
 
+        $lastAssignedAt = DocumentAssignment::whereIn('user_id', $userIds)
+            ->selectRaw('user_id, MAX(created_at) as last_assigned_at')
+            ->groupBy('user_id')
+            ->pluck('last_assigned_at', 'user_id');
+
         $ranked = $pool->values()->all();
-        usort($ranked, function (User $a, User $b) use ($workloads) {
+        usort($ranked, function (User $a, User $b) use ($workloads, $lastAssignedAt) {
             $countA = (int) ($workloads[$a->user_id] ?? 0);
             $countB = (int) ($workloads[$b->user_id] ?? 0);
-            return $countA <=> $countB ?: $a->user_id <=> $b->user_id;
+            if ($countA !== $countB) {
+                return $countA <=> $countB;
+            }
+
+            // Tie on workload: fairness tie-break by who's waited longest
+            // since their last assignment (never-assigned sorts first).
+            $lastA = $lastAssignedAt[$a->user_id] ?? null;
+            $lastB = $lastAssignedAt[$b->user_id] ?? null;
+
+            if ($lastA === null && $lastB === null) {
+                return $a->user_id <=> $b->user_id; // final deterministic fallback
+            }
+            if ($lastA === null) {
+                return -1;
+            }
+            if ($lastB === null) {
+                return 1;
+            }
+
+            return strcmp($lastA, $lastB);
         });
 
         return $ranked[0] ?? null;
     }
 
     /**
-     * The 25% Rule: allocate a quarter of the time remaining until the
-     * document's absolute due_date as the approvers' SLA window for this
-     * stage, floored at 2 hours (unless the due date itself doesn't allow
-     * even that much, in which case the window is clamped to the due date).
+     * The 25% Rule, with a short-due exception: due dates more than 1 hour
+     * away get 25% of the remaining time as the approvers' SLA window
+     * (computed in minutes, not whole hours, so it stays proportional
+     * rather than collapsing to a flat value for anything under ~10
+     * hours). Due dates at or under 1 hour away skip the percentage
+     * entirely and get a flat 15-minute window instead — 25% of a due date
+     * that close would only be a few minutes, not a workable review
+     * window. Either way, the window is still clamped to never extend past
+     * the document's own absolute due date.
      */
     private function computeApproverSlaExpiry(DocumentRepository $document): Carbon
     {
         $dueDate = Carbon::parse($document->due_date);
-        $totalHoursLeft = now()->diffInHours($dueDate, false); // signed: negative if already overdue
+        $totalMinutesLeft = now()->diffInMinutes($dueDate, false); // signed: negative if already overdue
 
-        $approverSlaHours = (int) round($totalHoursLeft * self::APPROVER_SLA_FRACTION);
+        $approverSlaMinutes = $totalMinutesLeft <= self::SHORT_DUE_THRESHOLD_MINUTES
+            ? self::FIXED_SHORT_DUE_SLA_MINUTES
+            : (int) round($totalMinutesLeft * self::APPROVER_SLA_FRACTION);
 
-        if ($approverSlaHours < self::MIN_APPROVER_SLA_HOURS) {
-            $approverSlaHours = self::MIN_APPROVER_SLA_HOURS;
-        }
-
-        $slaExpiresAt = now()->copy()->addHours($approverSlaHours);
+        $slaExpiresAt = now()->copy()->addMinutes($approverSlaMinutes);
 
         // Safety guard: never let the approver's window extend past the
         // document's own absolute due date.
@@ -314,14 +339,13 @@ class WorkflowService
     /**
      * Creates exactly ONE DocumentAssignment for this stage — the eligible
      * approver currently carrying the fewest pending assignments (Feature:
-     * single-assignment load balancing), unless $approver is explicitly
-     * passed (used by the solo-approver shortcut, which already knows who
-     * it's assigning to). A document is therefore only ever visible in one
-     * approver's queue at a time for a given stage.
+     * single-assignment load balancing; see selectApproverForStage()). A
+     * document is therefore only ever visible in one approver's queue at a
+     * time for a given stage.
      */
-    private function assignStage(DocumentRepository $document, WorkflowStage $stage, ?User $approver = null): void
+    private function assignStage(DocumentRepository $document, WorkflowStage $stage): void
     {
-        $approver ??= $this->selectApproverForStage($document, $stage);
+        $approver = $this->selectApproverForStage($document, $stage);
 
         if (!$approver) {
             AuditLog::record(null, $document->document_id, 'route_no_approver',
@@ -399,9 +423,8 @@ class WorkflowService
 
         if ($decision === 'rejected') {
             // Rejection terminates the WHOLE document — close every other
-            // pending assignment across ALL stages, since with the
-            // solo-approver shortcut more than one stage can be pending
-            // simultaneously for the same approver.
+            // pending assignment across ALL stages, since every stage is
+            // routed up front and more than one can be pending at once.
             DocumentAssignment::where('document_id', $document->document_id)
                 ->where('individual_status', 'pending')
                 ->where('assignment_id', '!=', $assignment->assignment_id)
@@ -420,10 +443,10 @@ class WorkflowService
             return;
         }
 
-        // Ensure the next configured stage has its single assignment. In
-        // the just-in-time case it won't exist yet and is created here. In
-        // the solo-approver case every stage was already pre-assigned in
-        // routeToWorkflow() — skip re-creating it.
+        // Safety net only: every stage is normally already assigned at
+        // upload time (see routeToWorkflow()). This only fires if a stage
+        // was added to the category's pipeline after this document was
+        // already routed, so it still gets picked up.
         $nextStage = WorkflowStage::where('document_category', $document->ml_category)
             ->where('sequence_order', '>', $stage->sequence_order)
             ->orderBy('sequence_order')
