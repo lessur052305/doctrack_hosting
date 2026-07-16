@@ -1,0 +1,6 @@
+PURCHASE REQUISITION
+Requisition No: PR-2026-0307
+Department: General Services
+Item Description: Industrial floor cleaning detergent and mop supplies for the janitorial staff
+Quantity: 30 gallons
+Budget: PHP 15,000.00

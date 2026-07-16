@@ -1,0 +1,6 @@
+PURCHASE REQUISITION
+Requisition No: PR-2026-0308
+Department: Transport and Vehicle Maintenance
+Item Description: Replacement heavy-duty tires for the delivery fleet, size matching the current truck specifications
+Quantity: 12 units
+Budget: PHP 96,000.00

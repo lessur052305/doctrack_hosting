@@ -1,0 +1,6 @@
+PURCHASE REQUISITION
+Requisition No: PR-2026-0305
+Department: Security and Safety
+Item Description: First aid kits fully stocked per DOLE requirements, for placement in each department
+Quantity: 8 units
+Budget: PHP 9,600.00

@@ -1,0 +1,7 @@
+JOB ORDER
+Job Order No: JO-2026-0206
+Date Requested: February 9, 2026
+Requested By: Bienvenido Torres, Warehouse Supervisor
+Department: Warehouse Operations
+Description of Work:
+Repair the malfunctioning overhead door at loading bay three, which is failing to close fully and poses a security risk overnight. Inspect the motor, chain, and track alignment. Grease all moving parts and test the safety sensor before returning the bay to service.

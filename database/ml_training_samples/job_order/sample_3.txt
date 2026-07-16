@@ -1,0 +1,7 @@
+JOB ORDER
+Job Order No: JO-2026-0203
+Date Requested: January 18, 2026
+Requested By: Grace Manalo, IT Supervisor
+Department: Information Technology
+Description of Work:
+Install and configure three new desktop workstations in the accounting department, including operating system setup, antivirus deployment, and network printer mapping. Migrate existing user files from the old machines and decommission the outdated units for disposal.

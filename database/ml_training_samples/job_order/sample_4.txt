@@ -1,0 +1,7 @@
+JOB ORDER
+Job Order No: JO-2026-0204
+Date Requested: January 25, 2026
+Requested By: Danilo Reyes, Electrical Foreman
+Department: Electrical and Mechanical
+Description of Work:
+Troubleshoot the recurring circuit breaker trips affecting the third floor lighting panel. Inspect wiring for shorts, test the load balance across circuits, and replace any damaged breakers. Provide a written summary of findings and recommended preventive measures.

@@ -1,0 +1,6 @@
+SERVICE REPORT
+Service Report No: SR-2026-0402
+Technician: Michelle Panganiban
+Date of Service: January 15, 2026
+Findings:
+Network connectivity issues in the second floor sales office were traced to a faulty switch port and a damaged patch cable. Both were replaced and connectivity was restored to all eight affected workstations. No further packet loss observed during a 30-minute monitoring window.

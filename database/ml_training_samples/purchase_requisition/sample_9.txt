@@ -1,0 +1,6 @@
+PURCHASE REQUISITION
+Requisition No: PR-2026-0309
+Department: Electrical and Mechanical
+Item Description: Digital multimeters and insulated hand tool sets for the electrical maintenance team
+Quantity: 5 sets
+Budget: PHP 22,500.00

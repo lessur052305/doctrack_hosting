@@ -1,0 +1,6 @@
+PURCHASE REQUISITION
+Requisition No: PR-2026-0302
+Department: Information Technology
+Item Description: 24-inch LED monitors for the new workstation setup in the customer service area
+Quantity: 6 units
+Budget: PHP 42,000.00

@@ -1,0 +1,6 @@
+PURCHASE REQUISITION
+Requisition No: PR-2026-0310
+Department: Power and Utilities
+Item Description: Diesel fuel for the backup generator reserve tank ahead of the rainy season
+Quantity: 500 liters
+Budget: PHP 45,000.00

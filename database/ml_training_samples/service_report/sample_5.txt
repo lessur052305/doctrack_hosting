@@ -1,0 +1,6 @@
+SERVICE REPORT
+Service Report No: SR-2026-0405
+Technician: Teodoro Villaruel
+Date of Service: February 5, 2026
+Findings:
+Office printer on the third floor was jamming repeatedly and producing streaked output. The fuser unit was found worn and was replaced, and internal rollers were cleaned of accumulated toner dust. Test prints came out clean with no further jamming after twenty consecutive pages.

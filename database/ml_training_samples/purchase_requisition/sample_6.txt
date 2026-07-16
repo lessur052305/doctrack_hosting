@@ -1,0 +1,6 @@
+PURCHASE REQUISITION
+Requisition No: PR-2026-0306
+Department: Facilities and Grounds
+Item Description: Replacement fluorescent light fixtures for the main production floor, energy-efficient LED type
+Quantity: 25 units
+Budget: PHP 31,250.00

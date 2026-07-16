@@ -1,0 +1,6 @@
+PURCHASE REQUISITION
+Requisition No: PR-2026-0304
+Department: Human Resources
+Item Description: Ergonomic office chairs for the newly renovated training room
+Quantity: 15 units
+Budget: PHP 67,500.00

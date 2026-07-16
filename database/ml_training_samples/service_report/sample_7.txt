@@ -1,0 +1,6 @@
+SERVICE REPORT
+Service Report No: SR-2026-0407
+Technician: Wilfredo Domingo
+Date of Service: February 19, 2026
+Findings:
+Water pump supplying the third floor restrooms was found producing insufficient pressure. Inspection revealed a clogged intake filter, which was cleaned, and worn impeller seals, which were replaced. Pressure was restored to normal operating range after reassembly and testing.

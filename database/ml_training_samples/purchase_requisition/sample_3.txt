@@ -1,0 +1,6 @@
+PURCHASE REQUISITION
+Requisition No: PR-2026-0303
+Department: Warehouse Operations
+Item Description: Industrial pallet wrapping film, 500mm width, for outbound shipment packaging
+Quantity: 40 rolls
+Budget: PHP 12,800.00

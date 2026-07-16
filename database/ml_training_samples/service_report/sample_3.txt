@@ -1,0 +1,6 @@
+SERVICE REPORT
+Service Report No: SR-2026-0403
+Technician: Roberto Salazar
+Date of Service: January 22, 2026
+Findings:
+Quarterly inspection of the standby generator revealed a weak starting battery reading below acceptable voltage. Battery was replaced and a full load test was conducted, confirming the unit can sustain critical loads for at least four hours. Oil and coolant levels were also topped off.

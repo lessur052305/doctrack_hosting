@@ -1,0 +1,6 @@
+PURCHASE REQUISITION
+Requisition No: PR-2026-0301
+Department: Accounting Department
+Item Description: Heavy-duty paper shredder for confidential document disposal, model capable of shredding 20 sheets per pass
+Quantity: 1 unit
+Budget: PHP 18,500.00

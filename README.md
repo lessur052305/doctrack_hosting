@@ -42,35 +42,84 @@ php artisan serve        # http://localhost:8000
 
 ### Demo accounts (created by the seeder)
 
-| Role       | Username | Password       |
-|------------|----------|----------------|
-| Admin      | `admin`  | `ChangeMe123!` |
-| Originator | `jsantos`| `ChangeMe123!` |
-| Approver   | `mreyes` | `ChangeMe123!` |
+| Role       | Username | Password    |
+|------------|----------|-------------|
+| Admin      | `admin`  | `admin123`  |
+| Originator | `jsantos`| `jsantos123`|
+| Approver   | `mreyes` | `mreyes123` |
+| Approver   | `arose`  | `arose123`  |
+| Approver   | `lvinz`  | `lvinz123`  |
 
-> Change these before any real use.
+> Change these before any real use. `DatabaseSeeder` uses `updateOrCreate()`/`firstOrCreate()`
+> throughout, so `php artisan db:seed` is safe to re-run at any time without duplicate-key errors.
 
 ---
 
-## 2. Running the SLA daemon (Section 5)
+## 2. Continuous operation (Section 5) — three processes this app needs running
 
-The escalation logic (expire → Admin override window → system auto-approval) runs through an Artisan command driven by Laravel's scheduler.
+Unlike a plain request/response app, DocTrack has real-time and scheduled behavior that
+does **not** run just by pointing a web server at `public/`. There are three separate
+pieces of infrastructure, and all three are required together — missing any one silently
+degrades a feature instead of erroring loudly, so this section exists specifically so a
+fresh deployment doesn't quietly lose functionality. Reusable install files for all three
+live in [`deploy/`](deploy/).
 
-**One-off manual sweep:**
+### 2.1 The persistent queue worker (real-time SLA escalation)
+
+SLA breach detection is **event-driven**, not polling: when a document is routed,
+`WorkflowService::assignStage()` dispatches `EscalateAssignmentJob` with a `delay()` set
+to the exact moment that assignment's SLA expires (see `app/Jobs/EscalateAssignmentJob.php`).
+That job only ever fires if something is continuously running `php artisan queue:work` —
+without it, delayed jobs just sit in the `jobs` table forever and breach detection silently
+falls back to the 5-minute safety-net sweep in `bootstrap/app.php`
+(`workflow:check-parallel-slas`), which still works but is no longer "real-time."
+
+Install it as a `systemd --user` service (no root needed for the service itself):
 ```bash
-php artisan sla:check
+./deploy/install-queue-worker.sh
 ```
+This templates `deploy/docuwise-queue-worker.service.template` with your actual project
+path and PHP binary, installs it to `~/.config/systemd/user/`, and starts it immediately.
 
-**Continuous (development):**
+By default a `systemd --user` service only runs while you're logged in. For a demo/production
+box, also enable lingering (one-time, needs sudo) so it survives logout and reboots:
 ```bash
-php artisan schedule:work
+sudo loginctl enable-linger $USER
 ```
+Verify anytime with: `systemctl --user status docuwise-queue-worker.service`
+
+### 2.2 The scheduler (safety-net sweeps)
+
+Two backstop commands run on a timer regardless of the queue worker's health — see the
+`withSchedule()` closure in `bootstrap/app.php` for exactly what and why. They only fire
+if Laravel's scheduler is driven every minute:
 
 **Production (cron — add once):**
 ```
 * * * * * cd /path/to/doctrack && php artisan schedule:run >> /dev/null 2>&1
 ```
-`bootstrap/app.php` already schedules `sla:check` every 5 minutes with `withoutOverlapping()`.
+
+**Continuous (development, no cron needed):**
+```bash
+php artisan schedule:work
+```
+
+### 2.3 The bundled OCR engine (scanned-document fallback)
+
+`TextExtractionService` OCRs scanned/image documents via the system `tesseract-ocr`
+binary. If your deployment has root, just install it normally and skip the rest of this
+section — the service prefers a system install on `$PATH` automatically:
+```bash
+sudo apt-get install -y tesseract-ocr tesseract-ocr-eng
+```
+If you don't have root, this repo ships a self-contained copy at `storage/tesseract-bin`
+(committed to git — works out of the box on Debian/Ubuntu amd64, no install step required).
+It was built without root via `apt-get download` + `dpkg-deb -x`; `TextExtractionService`
+points `LD_LIBRARY_PATH`/`TESSDATA_PREFIX` at it automatically when no system binary is
+found. If you're on a different distro/architecture and need to rebuild it:
+```bash
+./deploy/build-tesseract-bin.sh
+```
 
 ---
 
@@ -146,35 +195,21 @@ count, so every classified document records exactly which SVM version produced i
 category. The admin ML dashboard enforces the **5–10 samples per category** rule
 from Scope 1.4.
 
-### ⚠️ Verify these two things when you first run it on your machine
+### Verified working
 
-I built this against php-ml's documented API but could not execute php-ml in the
-build environment. Confirm the following once installed (a 2-minute check via
-`php artisan tinker` or by training a model through the admin UI):
+Both risk areas noted during initial development have since been confirmed working by
+training the model against 30 real, varied sample documents (10 per category) and
+classifying fresh, never-seen documents against it: inference correctly reuses the
+vectorizer's frozen vocabulary from training (no `Unclassified` misfires), and
+`predictProbability()` returns real, varying confidence scores (not the flat 85%
+fallback) rather than a fixed value.
 
-1. **Inference vocabulary alignment.** `classify()` reuses the *serialized fitted
-   `TokenCountVectorizer`* from training so a new document's features line up with
-   what the SVM learned. Train a model, then classify one of the training documents
-   — it should return that document's own category with high confidence. If it
-   returns `Unclassified` or wrong categories, the vectorizer isn't reusing its
-   frozen vocabulary; the fix is to snapshot `$vectorizer->getVocabulary()` after
-   `fit()` and hand it to a fresh `TokenCountVectorizer` seeded via its constructor
-   before `transform()` at inference. (Left inline as a code comment.)
-2. **`predictProbability`.** The SVM is built with `probabilityEstimates = true`.
-   If your php-ml version lacks `predictProbability()`, `predictConfidence()`
-   already falls back to a neutral 85% — classification still works, only the
-   confidence figure is affected.
-
-### Optional: full-fidelity hybrid text extraction (Scope 1.4)
-
-```bash
-composer require smalot/pdfparser thiagoalessio/tesseract_ocr
-#   plus the system OCR engine:
-#   Ubuntu/Debian:  sudo apt install tesseract-ocr
-#   Windows:        install the UB-Mannheim Tesseract build, add to PATH
-```
-`TextExtractionService` degrades gracefully without these (born-digital text still
-extracts; only scanned-image OCR fallback needs them).
+`TextExtractionService`'s OCR fallback (`smalot/pdfparser` + `thiagoalessio/tesseract_ocr`,
+both already required in `composer.json`) degrades gracefully without a working OCR
+engine — born-digital PDF/DOCX/TXT text still extracts fine either way; only scanned-image
+OCR needs the system `tesseract-ocr` binary. See §2.3 above for how that binary is
+provisioned (system install if you have root, bundled copy in `storage/tesseract-bin`
+otherwise).
 
 ---
 

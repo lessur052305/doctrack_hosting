@@ -1,0 +1,7 @@
+JOB ORDER
+Job Order No: JO-2026-0201
+Date Requested: January 5, 2026
+Requested By: Nestor Villanueva, Fleet Supervisor
+Department: Transport and Vehicle Maintenance
+Description of Work:
+Perform scheduled servicing on the company delivery truck with plate number XPT-4471. Change the engine oil, replace worn brake pads, inspect the suspension system, and rotate all four tires. Check the coolant and transmission fluid levels. Vehicle must be roadworthy before the next scheduled delivery route on Monday.
