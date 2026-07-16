@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Jobs\EscalateAssignmentJob;
 use App\Mail\DocumentAssignedMail;
 use App\Mail\DocumentDecisionMail;
 use App\Models\AuditLog;
@@ -95,6 +96,75 @@ class WorkflowService
     }
 
     /**
+     * Section 1 (extended): if the requested due date falls on a
+     * non-working day (weekend/holiday per the current calendar), bumps it
+     * forward to the next working day — same time-of-day, only the date
+     * moves. Called by DocumentController::store() BEFORE the
+     * SubmissionBatch and its documents are created, so the batch header,
+     * every document, and every routed assignment all agree on the same
+     * (possibly adjusted) due date instead of drifting apart.
+     */
+    public function resolveEffectiveDueDate(string $dueDate): Carbon
+    {
+        return $this->businessHours->nextWorkingDueDate(Carbon::parse($dueDate));
+    }
+
+    /**
+     * Section 1 (extended): when an Admin's calendar edit makes a
+     * previously-working day non-working (a new holiday, or unchecking a
+     * working-day box), any in-flight document already using that day as
+     * its due date needs its deadline pushed forward too — otherwise the
+     * document (and its approvers) stay bound to a hard commitment that
+     * lands on a day nobody's actually working. Only touches documents
+     * still in the pipeline and their still-pending, non-escalated
+     * assignments; SLA windows are then re-synced against the (possibly
+     * new) due dates via recalculatePendingSlaDeadlines(). Call after
+     * AdminController::storeHoliday()/updateSlaSettings() — never needed
+     * for destroyHoliday(), since removing a holiday only ever frees up
+     * days, it never invalidates an existing due date.
+     *
+     * @return array{documents_shifted: int, assignments_recalculated: int}
+     */
+    public function syncDueDatesWithCalendar(): array
+    {
+        $shifted = 0;
+
+        DocumentRepository::whereIn('global_status', ['processing', 'classified_validated'])
+            ->whereNotNull('due_date')
+            ->get()
+            ->each(function (DocumentRepository $document) use (&$shifted) {
+                $old = Carbon::parse($document->due_date);
+                $adjusted = $this->businessHours->nextWorkingDueDate($old);
+
+                if ($adjusted->equalTo($old)) {
+                    return;
+                }
+
+                $document->due_date = $adjusted;
+                $document->save();
+                $shifted++;
+
+                DocumentAssignment::where('document_id', $document->document_id)
+                    ->where('individual_status', 'pending')
+                    ->where('escalated_to_admin', false)
+                    ->update(['due_date' => $adjusted]);
+
+                AuditLog::record(null, $document->document_id, 'due_date_adjusted',
+                    "Due date {$old->toDayDateTimeString()} now falls on a non-working day after a calendar update; " .
+                    "automatically moved to {$adjusted->toDayDateTimeString()}.");
+
+                NotificationRecord::send($document->originator_id, $document->document_id,
+                    "The due date for your document '{$document->title}' was moved to {$adjusted->format('M j, Y g:i A')} " .
+                    'because the original date became a non-working day.');
+            });
+
+        return [
+            'documents_shifted' => $shifted,
+            'assignments_recalculated' => $this->recalculatePendingSlaDeadlines(),
+        ];
+    }
+
+    /**
      * Handles Staff (Originator) document submission end-to-end:
      * Process 3.1 -> 3.2 -> 3.3 -> 3.4 -> 4.0 in one pass.
      *
@@ -104,9 +174,16 @@ class WorkflowService
      *                             Admin SLA dashboards can nest documents
      *                             submitted together under one container.
      */
-    public function ingest(UploadedFile $file, User $originator, string $dueDate, ?int $batchId = null): DocumentRepository
+    /**
+     * @param  DocumentRepository|null  $revisionOf  When set, this upload is
+     *         a resubmission revising a previously REJECTED document (see
+     *         DocumentController::resubmit()) rather than a brand new,
+     *         unrelated submission — links the two into a version chain
+     *         instead of leaving the rejection as a dead end.
+     */
+    public function ingest(UploadedFile $file, User $originator, string $dueDate, ?int $batchId = null, ?DocumentRepository $revisionOf = null): DocumentRepository
     {
-        return DB::transaction(function () use ($file, $originator, $dueDate, $batchId) {
+        return DB::transaction(function () use ($file, $originator, $dueDate, $batchId, $revisionOf) {
             $storedPath = $file->store('documents', 'local');
 
             $document = DocumentRepository::create([
@@ -118,9 +195,16 @@ class WorkflowService
                 'mime_type' => $file->getMimeType(),
                 'due_date' => $dueDate,
                 'global_status' => 'processing',
+                'previous_version_id' => $revisionOf?->document_id,
+                'version_number' => $revisionOf ? $revisionOf->version_number + 1 : 1,
             ]);
 
             AuditLog::record($originator->user_id, $document->document_id, 'upload', "Document '{$document->title}' submitted.");
+
+            if ($revisionOf) {
+                AuditLog::record($originator->user_id, $document->document_id, 'resubmit',
+                    "Resubmitted as version {$document->version_number}, revising rejected document #{$revisionOf->document_id} ('{$revisionOf->title}').");
+            }
 
             // 3.1 + 3.2 — extraction & preprocessing
             $extraction = $this->extractor->extract($file);
@@ -438,6 +522,12 @@ class WorkflowService
                 $assignment->save();
                 $changed++;
 
+                // Re-dispatch for the new deadline — the job scheduled for
+                // the old deadline will still fire at its original time,
+                // but its staleness guard will see this new sla_expires_at
+                // and no-op instead of escalating early/wrongly.
+                EscalateAssignmentJob::dispatch($assignment->assignment_id, $newExpiry)->delay($newExpiry);
+
                 AuditLog::record(null, $assignment->document_id, 'sla_recalculated',
                     "Stage '{$assignment->stage->stage_name}' SLA deadline recalculated from " .
                     "{$old->toDayDateTimeString()} to {$newExpiry->toDayDateTimeString()} after a business-hours/holiday calendar update.");
@@ -477,7 +567,7 @@ class WorkflowService
         $slaExpiresAt = $this->computeApproverSlaExpiry($document);
         $priorityRank = $this->computePriority($document->due_date);
 
-        DocumentAssignment::create([
+        $assignment = DocumentAssignment::create([
             'document_id' => $document->document_id,
             'user_id' => $approver->user_id,
             'stage_id' => $stage->stage_id,
@@ -486,6 +576,12 @@ class WorkflowService
             'individual_status' => 'pending',
             'sla_expires_at' => $slaExpiresAt,
         ]);
+
+        // True event-driven escalation (Section 4/5): fires at the exact
+        // deadline instant instead of waiting for the next periodic sweep —
+        // see EscalateAssignmentJob's docblock for the staleness guard that
+        // makes this safe across later recalculation.
+        EscalateAssignmentJob::dispatch($assignment->assignment_id, $slaExpiresAt)->delay($slaExpiresAt);
 
         NotificationRecord::send($approver->user_id, $document->document_id,
             "New document assigned for '{$stage->stage_name}': {$document->title}.");

@@ -22,6 +22,32 @@ class NotificationController extends Controller
         return view('notifications.index', compact('notifications'));
     }
 
+    /**
+     * Lightweight JSON endpoint the notification bell polls every ~5-10s
+     * (see startLivePoll() in resources/js/app.js, wired up in the bell's
+     * own markup since it appears on every page, not just one dashboard).
+     */
+    public function poll(Request $request)
+    {
+        return response()->json([
+            'unread_count' => $request->user()->notifications()->where('is_read', false)->count(),
+        ]);
+    }
+
+    /**
+     * Renders just the bell's inner content (notifications/partials/bell.blade.php)
+     * for the live-poll JS to swap in place — see components/notification-bell.blade.php's
+     * docblock for why only the <details> tag's children are swapped, never
+     * the tag itself (preserves open/closed state across the swap).
+     */
+    public function refresh(Request $request)
+    {
+        $unread = $request->user()->notifications()->where('is_read', false)->limit(6)->get();
+        $unreadCount = $request->user()->notifications()->where('is_read', false)->count();
+
+        return view('notifications.partials.bell', compact('unread', 'unreadCount'));
+    }
+
     public function markRead(Request $request, NotificationRecord $notification)
     {
         abort_unless($notification->recipient_id === $request->user()->user_id, 403);

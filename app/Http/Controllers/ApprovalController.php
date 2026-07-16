@@ -36,6 +36,24 @@ class ApprovalController extends Controller
     }
 
     /**
+     * The set of priority labels ("Urgent"/"Normal"/"Low"/"Expired")
+     * present across a container's document(s) — mirrors the exact same
+     * per-document computation the Blade view uses for its badge (see
+     * resources/views/approver/dashboard.blade.php), so the priority
+     * filter matches what's actually displayed.
+     */
+    private function containerPriorityLabels($container): \Illuminate\Support\Collection
+    {
+        $priorityMap = [1 => 'Urgent', 2 => 'Normal', 3 => 'Low'];
+
+        return $container->documents->map(function ($stageAssignments) use ($priorityMap) {
+            $active = $stageAssignments->sortBy(fn (DocumentAssignment $a) => $a->stage->sequence_order)->first();
+            $isExpired = $active->seconds_remaining !== null && $active->seconds_remaining <= 0;
+            return $isExpired ? 'Expired' : ($priorityMap[$active->priority_rank] ?? $priorityMap[2]);
+        })->unique()->values();
+    }
+
+    /**
      * Approver dashboard: action-oriented review queue with SLA countdowns.
      *
      * Requests are rendered as nested containers, two levels deep:
@@ -51,15 +69,53 @@ class ApprovalController extends Controller
      *     pending at once, and those still nest under that one document
      *     card rather than duplicating it.
      */
-    public function dashboard(Request $request)
-    {
-        $this->escalateExpiredFor($request->user()->user_id);
+    /** Section 4: a breached assignment stays visible (disabled) in the approver's own queue for this long, so they see their own SLA misses instead of it silently vanishing. */
+    private const BREACH_VISIBILITY_HOURS = 24;
 
-        $pending = DocumentAssignment::pendingFor($request->user()->user_id)
+    /**
+     * Genuinely actionable (still within SLA) OR recently breached — the
+     * latter stays visible read-only so the approver sees their own
+     * misses instead of the item just disappearing the instant it
+     * escalates. It drops off after BREACH_VISIBILITY_HOURS even if still
+     * unresolved by Admin, so this queue never accumulates old breaches
+     * forever; once Admin actually resolves it, individual_status stops
+     * being 'pending' and it falls out of this query immediately
+     * regardless of the time window. Shared by dashboard() (full data)
+     * and poll() (just a count) so both always agree on what "pending"
+     * means.
+     */
+    private function pendingQueryFor(int $userId)
+    {
+        return DocumentAssignment::where('user_id', $userId)
+            ->where('individual_status', 'pending')
+            ->where(function ($q) {
+                $q->where('escalated_to_admin', false)
+                    ->orWhere(function ($q2) {
+                        $q2->where('escalated_to_admin', true)
+                            ->whereNull('admin_override_at')
+                            ->where('sla_expires_at', '>=', now()->subHours(self::BREACH_VISIBILITY_HOURS));
+                    });
+            });
+    }
+
+    /**
+     * Builds the paginated, filtered container list both dashboard() (full
+     * page) and refresh() (AJAX fragment for the live-polling swap) render
+     * — kept in exactly one place so a live-swapped queue can never drift
+     * from what a normal page load would have shown for the same filters.
+     */
+    private function buildQueue(Request $request, int $userId): array
+    {
+        $pending = $this->pendingQueryFor($userId)
             ->with(['document.batch', 'document.originator', 'document.assignments.approver', 'stage'])
             ->orderBy('priority_rank')
             ->orderBy('sla_expires_at')
             ->get();
+
+        // Raw assignment count (same unit poll() returns), not the number
+        // of grouped containers below — passed to the view as the polling
+        // JS's starting baseline so "N new" comparisons are apples-to-apples.
+        $initialPendingCount = $pending->count();
 
         $containers = $pending
             ->groupBy(fn (DocumentAssignment $a) => $a->document->batch_id ? 'batch-' . $a->document->batch_id : 'doc-' . $a->document_id)
@@ -78,6 +134,23 @@ class ApprovalController extends Controller
             ->sortBy(fn ($c) => $c->due_date)
             ->values();
 
+        if ($request->filled('priority')) {
+            $wanted = $request->string('priority');
+            $containers = $containers->filter(fn ($c) => $this->containerPriorityLabels($c)->contains($wanted))->values();
+        }
+
+        if ($request->filled('document')) {
+            $term = mb_strtolower($request->string('document'));
+            $containers = $containers->filter(function ($c) use ($term) {
+                foreach ($c->documents as $stageAssignments) {
+                    if (str_contains(mb_strtolower($stageAssignments->first()->document->title), $term)) {
+                        return true;
+                    }
+                }
+                return false;
+            })->values();
+        }
+
         $perPage = 10;
         $page = (int) $request->input('page', 1);
 
@@ -89,7 +162,49 @@ class ApprovalController extends Controller
             ['path' => $request->url(), 'query' => $request->query()]
         );
 
-        return view('approver.dashboard', compact('containers'));
+        return [$containers, $initialPendingCount];
+    }
+
+    public function dashboard(Request $request)
+    {
+        $this->escalateExpiredFor($request->user()->user_id);
+
+        [$containers, $initialPendingCount] = $this->buildQueue($request, $request->user()->user_id);
+
+        return view('approver.dashboard', compact('containers', 'initialPendingCount'));
+    }
+
+    /**
+     * Renders just the queue fragment (resources/views/approver/partials/queue.blade.php)
+     * for the dashboard's polling JS to swap into the page in place — see
+     * dashboard.blade.php for why this is a smoother, less jarring update
+     * than reloading the whole page. Respects the same priority/document
+     * filters as a normal page load (the JS forwards the current query
+     * string), so a live update never silently drops an active filter.
+     */
+    public function refresh(Request $request)
+    {
+        $this->escalateExpiredFor($request->user()->user_id);
+
+        [$containers, $initialPendingCount] = $this->buildQueue($request, $request->user()->user_id);
+
+        return view('approver.partials.queue', compact('containers', 'initialPendingCount'));
+    }
+
+    /**
+     * Lightweight JSON endpoint the dashboard's JS polls every ~5-10s
+     * (resources/views/approver/dashboard.blade.php) so a newly routed
+     * document shows up without the approver having to manually refresh.
+     * Deliberately just a count, not the full nested container payload
+     * dashboard()/refresh() build — cheap enough to hit repeatedly; the
+     * heavier refresh() fetch only happens when this actually detects a
+     * change.
+     */
+    public function poll(Request $request)
+    {
+        $count = $this->pendingQueryFor($request->user()->user_id)->count();
+
+        return response()->json(['pending_count' => $count]);
     }
 
     public function decide(Request $request, DocumentAssignment $assignment)

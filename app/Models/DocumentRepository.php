@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Events\DocumentStatusChanged;
 use Illuminate\Database\Eloquent\Model;
 
 class DocumentRepository extends Model
@@ -9,16 +10,34 @@ class DocumentRepository extends Model
     protected $table = 'document_repository';
     protected $primaryKey = 'document_id';
 
+    /**
+     * Broadcasts DocumentStatusChanged over Reverb whenever global_status
+     * actually changes, from wherever it changes — a single hook here
+     * instead of manually firing the event at every WorkflowService call
+     * site that touches this column, so a future new call site can't
+     * silently forget to push the update live.
+     */
+    protected static function booted(): void
+    {
+        static::updated(function (self $document) {
+            if ($document->wasChanged('global_status')) {
+                event(new DocumentStatusChanged($document));
+            }
+        });
+    }
+
     protected $fillable = [
         'originator_id', 'batch_id', 'model_id', 'title', 'file_path', 'original_filename',
         'mime_type', 'ocr_text', 'used_ocr_fallback', 'ml_category', 'ml_confidence',
         'is_validated', 'validation_errors', 'due_date', 'global_status',
+        'previous_version_id', 'version_number', 'is_legacy_import',
     ];
 
     protected $casts = [
         'validation_errors' => 'array',
         'is_validated' => 'boolean',
         'used_ocr_fallback' => 'boolean',
+        'is_legacy_import' => 'boolean',
         'due_date' => 'datetime',
         'upload_date' => 'datetime',
     ];
@@ -62,6 +81,18 @@ class DocumentRepository extends Model
     public function auditLogs()
     {
         return $this->hasMany(AuditLog::class, 'document_id', 'document_id')->orderByDesc('timestamp');
+    }
+
+    /** The document this one was resubmitted to revise, if any. */
+    public function previousVersion()
+    {
+        return $this->belongsTo(self::class, 'previous_version_id', 'document_id');
+    }
+
+    /** The resubmission that superseded this document, if one exists yet. */
+    public function nextVersion()
+    {
+        return $this->hasOne(self::class, 'previous_version_id', 'document_id');
     }
 
     public function scopeForOriginator($query, $userId)

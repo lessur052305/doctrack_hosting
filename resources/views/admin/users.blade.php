@@ -33,7 +33,7 @@
                 <div id="create-category-field">
                     <label class="block text-xs font-medium text-surface-700 mb-1">
                         Assigned Category
-                        <span class="text-surface-400 font-normal">(Approvers only — locked after creation)</span>
+                        <span class="text-surface-400 font-normal">(Approvers only — changeable later via "Manage Category & Stages")</span>
                     </label>
                     <select name="assigned_category" id="create-category" class="w-full rounded-lg border-surface-300 text-sm px-3 py-2 focus:border-primary-500 focus:ring-primary-500">
                         @foreach(\App\Services\ValidationService::knownCategories() as $c)
@@ -125,7 +125,7 @@
                             </td>
                             <td class="px-6 py-3 text-right space-x-2 whitespace-nowrap">
                                 @if($u->role === 'approver')
-                                    <a href="{{ route('admin.users.stages.edit', $u) }}" class="text-xs font-medium text-primary-700 hover:underline">Manage Stages</a>
+                                    <a href="{{ route('admin.users.stages.edit', $u) }}" class="text-xs font-medium text-primary-700 hover:underline">Manage Category & Stages</a>
                                 @endif
                                 <form method="POST" action="{{ route('admin.users.toggle', $u) }}" class="inline">
                                     @csrf
@@ -139,7 +139,7 @@
                 </tbody>
             </table>
             <p class="px-6 py-2 text-xs text-surface-400 border-t border-surface-200 bg-surface-50">
-                An approver's category is locked at creation. Their specific stage assignments within that category can be adjusted anytime via "Manage Stages." Originators are never category-restricted.
+                An approver's category and specific stage assignments can be changed anytime via "Manage Category & Stages" — this only affects future document routing, never assignments they already hold. Originators are never category-restricted.
             </p>
             <div class="px-6 py-4 border-t border-surface-200">{{ $users->links() }}</div>
         </div>

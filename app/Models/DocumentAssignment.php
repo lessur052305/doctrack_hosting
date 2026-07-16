@@ -2,6 +2,8 @@
 
 namespace App\Models;
 
+use App\Events\AssignmentRouted;
+use App\Events\DocumentStatusChanged;
 use Illuminate\Database\Eloquent\Model;
 
 /**
@@ -16,6 +18,63 @@ class DocumentAssignment extends Model
 {
     protected $table = 'document_assignments';
     protected $primaryKey = 'assignment_id';
+
+    protected static function booted(): void
+    {
+        // Broadcasts AssignmentRouted over Reverb the instant a new
+        // assignment is routed — to every approver who has ANY assignment
+        // on this document (including the new one's own holder), not just
+        // the new one's own holder. The approver dashboard shows the full
+        // stage pipeline for a document for context (see
+        // approver/partials/queue.blade.php's <x-workflow-stage-list>), so
+        // an approver already working stage 1 needs to know the moment
+        // stage 2 gets routed to someone else too, not only when their own
+        // stage changes.
+        static::created(function (self $assignment) {
+            static::notifyDocumentApprovers($assignment);
+        });
+
+        static::updated(function (self $assignment) {
+            if (!$assignment->wasChanged('individual_status')) {
+                return;
+            }
+
+            // A single stage being decided (e.g. Technical Review approved)
+            // doesn't necessarily change the document's overall
+            // global_status — later stages may still be pending — but the
+            // originator's tracking page (Approval Stages list) needs to
+            // update the moment it happens regardless. Reuses
+            // DocumentStatusChanged rather than a new event class: same
+            // channels/payload shape, and "something about my document
+            // changed, go re-fetch it" is exactly the right signal either
+            // way.
+            event(new DocumentStatusChanged($assignment->document));
+
+            // Same "notify everyone with a stake in this document" logic
+            // as created() above — most importantly, this is what makes
+            // WorkflowService::completeStage()'s rejection cascade (which
+            // auto-closes every OTHER pending assignment on a document)
+            // actually reach those other approvers' dashboards, since
+            // none of them touched anything themselves and nothing else
+            // in their own browser tab would otherwise trigger a refresh.
+            static::notifyDocumentApprovers($assignment);
+        });
+    }
+
+    /**
+     * Fires one AssignmentRouted per distinct approver who currently has
+     * (or ever had) an assignment on $assignment's document — see the
+     * booted() hooks above for why this needs to be everyone, not just
+     * $assignment's own holder.
+     */
+    private static function notifyDocumentApprovers(self $assignment): void
+    {
+        $approverIds = static::where('document_id', $assignment->document_id)->pluck('user_id')->unique();
+
+        foreach ($approverIds as $approverId) {
+            event(new AssignmentRouted($assignment, (int) $approverId));
+        }
+    }
 
     protected $fillable = [
         'document_id', 'user_id', 'stage_id', 'due_date', 'priority_rank',

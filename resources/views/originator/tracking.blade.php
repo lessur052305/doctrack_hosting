@@ -3,56 +3,41 @@
 @section('page-title', 'Document Tracking')
 
 @section('content')
-<div class="max-w-4xl mx-auto space-y-6">
-
-    <div class="bg-white rounded-xl shadow-card border border-surface-200 p-6">
-        <div class="flex items-start justify-between mb-6">
-            <div>
-                <h2 class="text-base font-semibold text-surface-900">{{ $document->title }}</h2>
-                <p class="text-xs text-surface-500 mt-1">
-                    Category: <span class="font-medium text-surface-700">{{ $document->ml_category ?? 'Unclassified' }}</span>
-                    @if($document->ml_confidence)
-                        &middot; Confidence: {{ $document->ml_confidence }}%
-                    @endif
-                    @if($document->used_ocr_fallback)
-                        &middot; <span class="text-processing-700">OCR fallback used</span>
-                    @endif
-                    &middot;
-                    <button type="button"
-                        onclick="openDocumentViewer('{{ route('documents.file', $document) }}', '{{ $document->mime_type }}', '{{ addslashes($document->original_filename ?? $document->title) }}')"
-                        class="text-primary-700 hover:underline font-medium">View original file</button>
-                </p>
-            </div>
-            <x-status-badge :status="$document->global_status" />
-        </div>
-
-        <x-lifecycle-stepper :document="$document" />
-    </div>
-
-    <div class="bg-white rounded-xl shadow-card border border-surface-200 overflow-hidden">
-        <div class="px-6 py-4 border-b border-surface-200">
-            <h3 class="text-sm font-semibold text-surface-900">Approval Stages</h3>
-        </div>
-        <div class="p-6">
-            <x-workflow-stage-list :document="$document" />
-        </div>
-    </div>
-
-    <div class="bg-white rounded-xl shadow-card border border-surface-200 overflow-hidden">
-        <div class="px-6 py-4 border-b border-surface-200">
-            <h3 class="text-sm font-semibold text-surface-900">Audit Trail</h3>
-        </div>
-        <ul class="divide-y divide-surface-100">
-            @foreach($document->auditLogs as $log)
-                <li class="px-6 py-3 text-sm flex items-start gap-3">
-                    <span class="mt-1 w-1.5 h-1.5 rounded-full bg-primary-500 flex-shrink-0"></span>
-                    <div>
-                        <p class="text-surface-700">{{ $log->description }}</p>
-                        <p class="text-xs text-surface-400 mt-0.5">{{ $log->timestamp->format('M j, Y g:i A') }} @if($log->user) &middot; {{ $log->user->full_name }} @endif</p>
-                    </div>
-                </li>
-            @endforeach
-        </ul>
-    </div>
+<div class="max-w-4xl mx-auto space-y-6" id="tracking-content"
+    data-document-id="{{ $document->document_id }}"
+    data-user-id="{{ auth()->id() }}"
+    data-poll-url="{{ route('originator.documents.trackingPoll', $document) }}"
+    data-refresh-url="{{ route('originator.documents.trackingRefresh', $document) }}">
+    @include('originator.partials.tracking-content')
 </div>
+
+<script>
+    // Live-updates this document's status/stages/audit trail without a
+    // full page reload — instant via Reverb the moment any stage on THIS
+    // document is decided or its overall status changes (not just full
+    // approval/rejection — a single stage being approved mid-pipeline
+    // updates the Approval Stages list here too); the slow poll behind it
+    // is only a fallback in case the WebSocket connection is down. See
+    // startLiveChannel()/startLivePoll() in resources/js/app.js, and the
+    // matching comment in approver/dashboard.blade.php for why this is
+    // wrapped in DOMContentLoaded rather than a bare IIFE.
+    document.addEventListener('DOMContentLoaded', function () {
+        const contentEl = document.getElementById('tracking-content');
+        if (!contentEl) return;
+
+        const thisDocumentId = parseInt(contentEl.dataset.documentId, 10);
+
+        const opts = {
+            refreshUrl: contentEl.dataset.refreshUrl,
+            target: contentEl,
+            // The originator's channel carries events for ALL of their
+            // documents, not just this one — only react when the event is
+            // actually about the document this page is showing.
+            filter: (data) => data.document_id === thisDocumentId,
+        };
+
+        startLiveChannel(`originator.${contentEl.dataset.userId}`, '.document.status-changed', opts);
+        startLivePoll({ ...opts, pollUrl: contentEl.dataset.pollUrl });
+    });
+</script>
 @endsection

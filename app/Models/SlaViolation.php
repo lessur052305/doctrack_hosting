@@ -20,7 +20,7 @@ class SlaViolation extends Model
     public $timestamps = false;
 
     protected $fillable = [
-        'document_id', 'approver_id', 'violation_timestamp', 'duration_overdue', 'stage_name',
+        'document_id', 'assignment_id', 'approver_id', 'violation_timestamp', 'duration_overdue', 'stage_name',
     ];
 
     protected $casts = [
@@ -30,6 +30,11 @@ class SlaViolation extends Model
     public function document()
     {
         return $this->belongsTo(DocumentRepository::class, 'document_id', 'document_id');
+    }
+
+    public function assignment()
+    {
+        return $this->belongsTo(DocumentAssignment::class, 'assignment_id', 'assignment_id');
     }
 
     public function approver()

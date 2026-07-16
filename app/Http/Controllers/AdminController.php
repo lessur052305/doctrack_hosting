@@ -6,6 +6,7 @@ use App\Models\AuditLog;
 use App\Models\DocumentAssignment;
 use App\Models\DocumentRepository;
 use App\Models\MlModelRepository;
+use App\Models\MlStagingSample;
 use App\Models\NotificationRecord;
 use App\Models\SlaHoliday;
 use App\Models\SlaSetting;
@@ -32,8 +33,13 @@ class AdminController extends Controller
     ) {
     }
 
-    /** Admin control-center overview. */
-    public function dashboard()
+    /**
+     * The KPI stats + SLA alert list — shared by dashboard() (full page),
+     * refresh() (the AJAX fragment the live-poll JS swaps in), and poll()
+     * (which reuses the same cheap COUNT queries as its "did anything
+     * change" signal, since they're already inexpensive).
+     */
+    private function overviewData(): array
     {
         $stats = [
             'total_documents' => DocumentRepository::count(),
@@ -50,9 +56,47 @@ class AdminController extends Controller
             ->orderBy('sla_expires_at')
             ->get();
 
+        return [$stats, $slaAlerts];
+    }
+
+    /** Admin control-center overview. */
+    public function dashboard()
+    {
+        [$stats, $slaAlerts] = $this->overviewData();
         $activeModel = MlModelRepository::active();
 
         return view('admin.dashboard', compact('stats', 'slaAlerts', 'activeModel'));
+    }
+
+    /**
+     * Renders the KPI cards + SLA alerts + Active ML Model fragment
+     * (admin/partials/overview.blade.php) for the dashboard's live-poll JS
+     * to swap in place — see resources/js/app.js's startLivePoll() and
+     * dashboard.blade.php for why this beats a full page reload. The ML
+     * Model panel is included here too, even though it rarely changes,
+     * purely so the whole 3-column grid row (SLA alerts + ML model side
+     * by side) stays one swap target instead of splitting the layout
+     * across two independently-swapped pieces.
+     */
+    public function overviewRefresh()
+    {
+        [$stats, $slaAlerts] = $this->overviewData();
+        $activeModel = MlModelRepository::active();
+
+        return view('admin.partials.overview', compact('stats', 'slaAlerts', 'activeModel'));
+    }
+
+    /**
+     * Lightweight JSON endpoint the dashboard's JS polls every ~5-10s.
+     * Reuses the same COUNT queries overviewData() already runs — they're
+     * cheap enough that there's no separate "cheaper" signal worth
+     * computing just for the poll.
+     */
+    public function overviewPoll()
+    {
+        [$stats, $slaAlerts] = $this->overviewData();
+
+        return response()->json(['stats' => $stats, 'sla_alert_count' => $slaAlerts->count()]);
     }
 
     // ---------------------------------------------------------------
@@ -119,35 +163,67 @@ class AdminController extends Controller
     {
         abort_unless($user->role === 'approver', 422, 'Only approver accounts have stage assignments.');
 
-        $stages = WorkflowStage::forCategory($user->assigned_category)->where('is_archived', false)->get();
+        $stagesByCategory = WorkflowStage::where('is_archived', false)->orderBy('sequence_order')->get()->groupBy('document_category');
         $assignedStageIds = $user->workflowStages()->pluck('workflow_stages.stage_id')->all();
 
-        return view('admin.approver_stages', compact('user', 'stages', 'assignedStageIds'));
+        // Informational only — reassigning category/stages never touches
+        // already-created DocumentAssignment rows (their approver_id and
+        // sla_expires_at are fixed at routing time and never re-evaluated),
+        // so this doesn't block the change. It just tells the admin what's
+        // still sitting in this approver's queue before they decide.
+        $pendingInOldCategory = DocumentAssignment::pendingFor($user->user_id)->count();
+
+        return view('admin.approver_stages', compact('user', 'stagesByCategory', 'assignedStageIds', 'pendingInOldCategory'));
     }
 
     /**
-     * Updates which specific stages an approver handles (Feature: Dynamic
-     * Workflow Assignment). The approver's category itself remains locked
-     * at creation — this only scopes them within that fixed category.
-     * Leaving every checkbox unchecked resets them to "eligible for every
-     * stage in my category" (the default, unrestricted behavior).
+     * Updates an approver's category and/or which specific stages within it
+     * they handle (Feature: Dynamic Workflow Assignment). Changing category
+     * always resets stage picks to "every stage in the new category"
+     * (unrestricted) rather than silently carrying over stage_ids that
+     * belonged to the old category and would be meaningless in the new one.
+     * Leaving every checkbox unchecked has the same "unrestricted" effect.
+     *
+     * Already-created DocumentAssignment rows are untouched by this — see
+     * WorkflowService::eligibleApproversForStage(), which only consults
+     * assigned_category/workflowStages() when routing a NEW document. A
+     * pending assignment this approver already holds stays in their queue
+     * and can still be decided normally regardless of this change.
      */
     public function updateApproverStages(Request $request, User $user)
     {
         abort_unless($user->role === 'approver', 422, 'Only approver accounts have stage assignments.');
 
-        $validStageIds = WorkflowStage::where('document_category', $user->assigned_category)->pluck('stage_id');
-
         $validated = $request->validate([
+            'assigned_category' => ['required', 'in:' . implode(',', ValidationService::knownCategories())],
             'stage_ids' => ['nullable', 'array'],
-            'stage_ids.*' => ['integer', Rule::in($validStageIds)],
+            'stage_ids.*' => ['integer', 'exists:workflow_stages,stage_id'],
         ]);
 
-        $user->workflowStages()->sync($validated['stage_ids'] ?? []);
+        $categoryChanged = $validated['assigned_category'] !== $user->assigned_category;
+        $oldCategory = $user->assigned_category;
 
-        AuditLog::record($request->user()->user_id, null, 'assign_stages',
-            "Updated stage assignments for {$user->full_name} (#{$user->user_id}): " .
-            (empty($validated['stage_ids']) ? 'all stages in category (no restriction).' : implode(', ', $validated['stage_ids'])));
+        // Re-validated server-side against whichever category was actually
+        // submitted — the category dropdown and stage checkboxes are only
+        // kept in sync client-side, so a tampered request could otherwise
+        // submit stage IDs from a different category entirely.
+        $validStageIds = WorkflowStage::where('document_category', $validated['assigned_category'])
+            ->whereIn('stage_id', $validated['stage_ids'] ?? [])
+            ->pluck('stage_id');
+
+        $user->assigned_category = $validated['assigned_category'];
+        $user->save();
+
+        // A category switch always clears stage picks (see docblock above);
+        // otherwise sync whatever was actually submitted for this category.
+        $user->workflowStages()->sync($categoryChanged ? [] : $validStageIds);
+
+        $description = $categoryChanged
+            ? "Reassigned {$user->full_name} (#{$user->user_id}) from '{$oldCategory}' to '{$validated['assigned_category']}'. Stage assignments reset to unrestricted (all stages in the new category)."
+            : "Updated stage assignments for {$user->full_name} (#{$user->user_id}): " .
+                ($validStageIds->isEmpty() ? 'all stages in category (no restriction).' : implode(', ', $validStageIds->all()));
+
+        AuditLog::record($request->user()->user_id, null, 'assign_stages', $description);
 
         return redirect()->route('admin.users')->with('status', "Stage assignments updated for {$user->full_name}.");
     }
@@ -167,41 +243,102 @@ class AdminController extends Controller
     // ML dataset training (5–10 sample uploads per category — Scope 1.4)
     // ---------------------------------------------------------------
 
+    private const TRAINING_MIN_PER_CATEGORY = 5;
+    private const TRAINING_MAX_PER_CATEGORY = 10;
+
     public function mlTraining()
     {
         $categories = ValidationService::knownCategories();
         $activeModel = MlModelRepository::active();
         $history = MlModelRepository::orderByDesc('last_trained')->limit(10)->get();
 
-        return view('admin.ml_training', compact('categories', 'activeModel', 'history'));
+        // Shared across every admin, not scoped to the current session —
+        // deliberately so: this app only ever has one active classifier at
+        // a time, so there's nothing "personal" about staged samples for
+        // it. Storing them in the session tied them to one browser/login
+        // and silently lost progress on logout, session expiry, or
+        // switching devices; any admin can now pick up where another left
+        // off. See the ml_staging_samples migration.
+        $stagedSamples = MlStagingSample::with('stagedBy')->orderBy('created_at')->get()->groupBy('category');
+
+        return view('admin.ml_training', compact('categories', 'activeModel', 'history', 'stagedSamples'));
+    }
+
+    /**
+     * Uploads and text-extracts sample documents for ONE category at a
+     * time, accumulating them in a shared table rather than requiring
+     * every category's files in a single request. A single combined
+     * submission (up to 30 files across 3 categories) can silently exceed
+     * PHP's max_file_uploads ini limit (default 20) — files past that
+     * cutoff are dropped by PHP itself before Laravel ever sees them, with
+     * no error pointing at the real cause. max_file_uploads is
+     * PHP_INI_SYSTEM only (no .htaccess/.user.ini/runtime override exists
+     * for it), so fixing this by raising the limit isn't an option without
+     * root on every future deployment — staging per category (well under
+     * any reasonable limit) sidesteps the ceiling entirely instead of
+     * depending on it.
+     */
+    public function stageTrainingSamples(Request $request, string $category)
+    {
+        abort_unless(in_array($category, ValidationService::knownCategories(), true), 404);
+
+        $alreadyStaged = MlStagingSample::where('category', $category)->count();
+
+        $validated = $request->validate([
+            'files' => ['required', 'array', 'min:1', 'max:' . (self::TRAINING_MAX_PER_CATEGORY - $alreadyStaged)],
+            'files.*' => ['required', 'file', 'mimes:pdf,txt,docx', 'max:10240'],
+        ]);
+
+        foreach ($validated['files'] as $file) {
+            MlStagingSample::create([
+                'category' => $category,
+                'original_filename' => $file->getClientOriginalName(),
+                'extracted_text' => $this->extractor->extract($file)['text'],
+                'staged_by' => $request->user()->user_id,
+            ]);
+        }
+
+        $totalStaged = MlStagingSample::where('category', $category)->count();
+
+        return back()->with('status', count($validated['files']) . " sample(s) added for '{$category}' ({$totalStaged} total staged).");
+    }
+
+    public function clearTrainingStaging(Request $request, string $category)
+    {
+        abort_unless(in_array($category, ValidationService::knownCategories(), true), 404);
+
+        MlStagingSample::where('category', $category)->delete();
+
+        return back()->with('status', "Cleared staged samples for '{$category}'.");
+    }
+
+    /** Removes one staged sample without clearing the rest of its category. */
+    public function destroyTrainingSample(Request $request, MlStagingSample $sample)
+    {
+        $sample->delete();
+
+        return back()->with('status', "Removed '{$sample->original_filename}' from staging.");
     }
 
     public function trainModel(Request $request)
     {
         $categories = ValidationService::knownCategories();
+        $stagedSamples = MlStagingSample::orderBy('category')->get()->groupBy('category');
 
-        $rules = [];
         foreach ($categories as $category) {
-            $key = 'samples_' . str_replace(' ', '_', strtolower($category));
-            $rules[$key] = ['required', 'array', 'min:5', 'max:10'];
-            $rules[$key . '.*'] = ['required', 'file', 'mimes:pdf,txt,docx', 'max:10240'];
+            $count = $stagedSamples->get($category, collect())->count();
+            abort_if($count < self::TRAINING_MIN_PER_CATEGORY, 422,
+                "'{$category}' needs at least " . self::TRAINING_MIN_PER_CATEGORY . " staged samples (has {$count}).");
         }
-        $validated = $request->validate($rules);
 
-        $samplesByCategory = [];
-        foreach ($categories as $category) {
-            $key = 'samples_' . str_replace(' ', '_', strtolower($category));
-            $texts = [];
-            foreach ($validated[$key] as $file) {
-                $texts[] = $this->extractor->extract($file)['text'];
-            }
-            $samplesByCategory[$category] = $texts;
-        }
+        $samplesByCategory = $stagedSamples->map(fn ($samples) => $samples->pluck('extracted_text')->all())->all();
 
         $model = $this->classifier->train($samplesByCategory);
 
         AuditLog::record($request->user()->user_id, null, 'ml_train',
             "Trained model #{$model->model_id} ({$model->version}) on {$model->training_sample_count} samples across " . count($categories) . ' categories. Estimated accuracy: ' . $model->accuracy_score . '%.');
+
+        MlStagingSample::truncate();
 
         return back()->with('status', "Model {$model->version} trained successfully (est. accuracy {$model->accuracy_score}%).");
     }
@@ -320,7 +457,17 @@ class AdminController extends Controller
             ->select('stage_id')->selectRaw('count(*) as cnt')->groupBy('stage_id')->pluck('cnt', 'stage_id');
         $historyCounts = DocumentAssignment::select('stage_id')->selectRaw('count(*) as cnt')->groupBy('stage_id')->pluck('cnt', 'stage_id');
 
-        return view('admin.workflow_config', compact('stages', 'categories', 'activeCounts', 'historyCounts'));
+        // The actual pending assignments blocking archive/delete, so the
+        // Admin can resolve each one directly (approve/reject on the
+        // approver's behalf via the same SlaService::adminOverride() used
+        // by the SLA Override Queue) instead of reassigning the document
+        // to a stage its approver isn't actually eligible for.
+        $pendingByStage = DocumentAssignment::where('individual_status', 'pending')
+            ->with('document')
+            ->get()
+            ->groupBy('stage_id');
+
+        return view('admin.workflow_config', compact('stages', 'categories', 'activeCounts', 'historyCounts', 'pendingByStage'));
     }
 
     public function storeStage(Request $request)
@@ -347,12 +494,67 @@ class AdminController extends Controller
             'description' => ['nullable', 'string', 'max:1000'],
         ]);
 
+        $oldName = $stage->stage_name;
         $stage->update($validated);
 
         AuditLog::record($request->user()->user_id, null, 'workflow_config',
             "Renamed/edited workflow stage #{$stage->stage_id} ('{$stage->stage_name}').");
 
+        $this->notifyApproversOfStageChange($stage, "updated the '{$oldName}' stage's details to '{$stage->stage_name}'");
+
         return back()->with('status', 'Stage updated.');
+    }
+
+    /**
+     * Confirms to every approver currently holding a pending assignment on
+     * this stage that an edit/archive already happened. In-app only,
+     * purely a record of what occurred — does not block or delay the
+     * Admin's action. See notifyPendingApprovers() for the ADVANCE notice
+     * sent before the Admin acts, which is the one meant to actually give
+     * the approver a chance to review first.
+     */
+    private function notifyApproversOfStageChange(WorkflowStage $stage, string $what): void
+    {
+        $approverIds = DocumentAssignment::where('stage_id', $stage->stage_id)
+            ->where('individual_status', 'pending')
+            ->distinct()
+            ->pluck('user_id');
+
+        foreach ($approverIds as $approverId) {
+            NotificationRecord::send($approverId, null,
+                "An Admin {$what} — you have a pending document on this stage; nothing about your task itself changed, but the stage details did.");
+        }
+    }
+
+    /**
+     * Section 3/4: sent BEFORE the Admin edits or archives a stage — an
+     * explicit, separate action the Admin triggers to give each affected
+     * approver a heads-up and a real chance to review/act on their own
+     * pending document(s) first, rather than the Admin immediately
+     * overriding them via "Review & decide pending". High priority since
+     * it's time-sensitive; does not itself change or block anything —
+     * the Admin decides when enough time has passed to proceed.
+     */
+    public function notifyPendingApprovers(Request $request, WorkflowStage $stage)
+    {
+        $pending = DocumentAssignment::where('stage_id', $stage->stage_id)
+            ->where('individual_status', 'pending')
+            ->with('document')
+            ->get();
+
+        abort_if($pending->isEmpty(), 409, 'No pending assignments on this stage to notify about.');
+
+        foreach ($pending->unique('user_id') as $assignment) {
+            NotificationRecord::send($assignment->user_id, null,
+                "Heads up: an Admin is planning to edit or archive the '{$stage->stage_name}' stage soon. " .
+                "Please review and act on your pending document(s) for it as soon as you can, before the Admin steps in on your behalf.",
+                'high');
+        }
+
+        AuditLog::record($request->user()->user_id, null, 'workflow_config',
+            "Notified " . $pending->unique('user_id')->count() . " approver(s) with pending work on stage '{$stage->stage_name}' ahead of a planned edit/archive.");
+
+        return back()->with('status', 'Approver(s) notified — give them time to review before editing or archiving.');
     }
 
     public function moveStageUp(Request $request, WorkflowStage $stage)
@@ -390,7 +592,9 @@ class AdminController extends Controller
     public function archiveStage(Request $request, WorkflowStage $stage)
     {
         abort_if($this->stageHasActiveAssignments($stage), 409,
-            'This stage has active (pending) assignments. Reassign them to another stage first.');
+            'This stage has active (pending) assignments. Resolve them first — see "Review & decide pending" below.');
+
+        $this->notifyApproversOfStageChange($stage, "archived the '{$stage->stage_name}' stage");
 
         $stage->update(['is_archived' => true]);
 
@@ -408,37 +612,10 @@ class AdminController extends Controller
         return back()->with('status', 'Stage unarchived.');
     }
 
-    public function reassignStage(Request $request, WorkflowStage $stage)
-    {
-        $validated = $request->validate([
-            'target_stage_id' => [
-                'required',
-                'integer',
-                Rule::exists('workflow_stages', 'stage_id')
-                    ->where('document_category', $stage->document_category)
-                    ->where('is_archived', false),
-            ],
-        ]);
-
-        abort_if((int) $validated['target_stage_id'] === $stage->stage_id, 422, 'Choose a different stage to reassign to.');
-
-        // Reassignment is an admin-privileged manual correction, not a new
-        // routing event — it intentionally does not recompute sla_expires_at
-        // or re-check approver eligibility against the target stage.
-        $count = DocumentAssignment::where('stage_id', $stage->stage_id)
-            ->where('individual_status', 'pending')
-            ->update(['stage_id' => $validated['target_stage_id']]);
-
-        AuditLog::record($request->user()->user_id, null, 'workflow_config',
-            "Reassigned {$count} pending assignment(s) from stage '{$stage->stage_name}' to stage #{$validated['target_stage_id']}.");
-
-        return back()->with('status', "{$count} assignment(s) reassigned.");
-    }
-
     public function destroyStage(Request $request, WorkflowStage $stage)
     {
         abort_if($this->stageHasActiveAssignments($stage), 409,
-            'This stage has active (pending) assignments. Archive it or reassign them first.');
+            'This stage has active (pending) assignments. Resolve them first — see "Review & decide pending" below.');
 
         abort_if(DocumentAssignment::where('stage_id', $stage->stage_id)->exists(), 409,
             'This stage has historical assignment history and cannot be permanently deleted — archive it instead.');
@@ -487,9 +664,9 @@ class AdminController extends Controller
 
         AuditLog::record($request->user()->user_id, null, 'sla_settings_update', 'Updated business-hours working window.');
 
-        $changed = $this->workflow->recalculatePendingSlaDeadlines();
+        $sync = $this->workflow->syncDueDatesWithCalendar();
 
-        return back()->with('status', "Working hours updated." . ($changed ? " {$changed} pending assignment(s) had their SLA deadline recalculated." : ''));
+        return back()->with('status', 'Working hours updated.' . $this->calendarSyncSummary($sync));
     }
 
     public function storeHoliday(Request $request)
@@ -503,13 +680,15 @@ class AdminController extends Controller
 
         AuditLog::record($request->user()->user_id, null, 'sla_holiday_add', "Marked {$validated['holiday_date']} as a non-working day.");
 
-        // Section 1: a newly-marked holiday must retroactively shift the
-        // deadline of every already-routed pending assignment that spans
-        // it — sla_expires_at is otherwise "computed once, stored
-        // statically" at routing time and would silently stay wrong.
-        $changed = $this->workflow->recalculatePendingSlaDeadlines();
+        // Section 1: a newly-marked holiday must (a) push forward the due
+        // date of any in-flight document that was already using that day
+        // as its hard deadline, and (b) retroactively recalculate every
+        // already-routed pending assignment's SLA window that spans it —
+        // both are otherwise "computed once, stored statically" at
+        // routing/submission time and would silently stay wrong.
+        $sync = $this->workflow->syncDueDatesWithCalendar();
 
-        return back()->with('status', "Holiday added." . ($changed ? " {$changed} pending assignment(s) had their SLA deadline recalculated." : ''));
+        return back()->with('status', 'Holiday added.' . $this->calendarSyncSummary($sync));
     }
 
     public function destroyHoliday(Request $request, SlaHoliday $holiday)
@@ -519,9 +698,26 @@ class AdminController extends Controller
 
         AuditLog::record($request->user()->user_id, null, 'sla_holiday_remove', "Unmarked {$date} as a non-working day.");
 
+        // Removing a holiday only ever frees up time — it can't invalidate
+        // an existing due date — but SLA windows still need re-syncing
+        // since more business time may now be available before the
+        // (unchanged) due date than was assumed when they were computed.
         $changed = $this->workflow->recalculatePendingSlaDeadlines();
 
-        return back()->with('status', "Holiday removed." . ($changed ? " {$changed} pending assignment(s) had their SLA deadline recalculated." : ''));
+        return back()->with('status', 'Holiday removed.' . ($changed ? " {$changed} pending assignment(s) had their SLA deadline recalculated." : ''));
+    }
+
+    private function calendarSyncSummary(array $sync): string
+    {
+        $parts = [];
+        if ($sync['documents_shifted'] > 0) {
+            $parts[] = "{$sync['documents_shifted']} document(s) had their due date moved off a now-non-working day";
+        }
+        if ($sync['assignments_recalculated'] > 0) {
+            $parts[] = "{$sync['assignments_recalculated']} pending assignment(s) had their SLA deadline recalculated";
+        }
+
+        return $parts ? ' ' . implode('; ', $parts) . '.' : '';
     }
 
     // ---------------------------------------------------------------
@@ -532,11 +728,9 @@ class AdminController extends Controller
     {
         $query = SlaViolation::query();
 
-        if ($request->filled('approver_id')) {
-            $query->where('approver_id', $request->integer('approver_id'));
-        }
-        if ($request->filled('stage_name')) {
-            $query->where('stage_name', $request->string('stage_name'));
+        if ($request->filled('document')) {
+            $term = $request->string('document');
+            $query->whereHas('document', fn ($q) => $q->where('title', 'like', "%{$term}%"));
         }
         if ($request->filled('category')) {
             $category = $request->string('category');
@@ -549,7 +743,7 @@ class AdminController extends Controller
             $query->whereDate('violation_timestamp', '<=', $request->date('date_to'));
         }
 
-        $violations = (clone $query)->with(['document', 'approver'])
+        $violations = (clone $query)->with(['document', 'approver', 'assignment.adminOverrideBy', 'assignment.approver'])
             ->orderByDesc('violation_timestamp')->paginate(20)->withQueryString();
 
         $byApprover = (clone $query)->selectRaw('approver_id, count(*) as total')
@@ -575,6 +769,17 @@ class AdminController extends Controller
     // Audit trail viewer (Section 6)
     // ---------------------------------------------------------------
 
+    /**
+     * Session/auth events — hidden by default (see auditLogs()) since they
+     * dominate the list without being what's usually being audited for.
+     * Covers both the web session login/logout and the API's token-based
+     * equivalents (Api\AuthController) — same "routine noise" category,
+     * just a different transport, so the "Show login/logout events"
+     * checkbox should hide/reveal both consistently rather than only
+     * filtering the web ones.
+     */
+    private const AUDIT_SESSION_ACTIONS = ['login', 'logout', 'api_login', 'api_logout'];
+
     public function auditLogs(Request $request)
     {
         $query = AuditLog::with(['user', 'document'])->orderByDesc('timestamp');
@@ -582,12 +787,39 @@ class AdminController extends Controller
         if ($request->filled('action_type')) {
             $query->where('action_type', $request->string('action_type'));
         }
-        if ($request->filled('document_id')) {
-            $query->where('document_id', (int) $request->integer('document_id'));
+        if ($request->filled('document')) {
+            // Matches either a document title substring or, if the term
+            // looks numeric (with or without a leading "#"), the exact
+            // document_id — so "47" or "#47" both find it directly
+            // without needing to know/guess the title.
+            $term = trim($request->string('document'));
+            $numericId = ltrim($term, '#');
+
+            $query->where(function ($q) use ($term, $numericId) {
+                $q->whereHas('document', fn ($q2) => $q2->where('title', 'like', "%{$term}%"));
+                if ($numericId !== '' && ctype_digit($numericId)) {
+                    $q->orWhere('document_id', (int) $numericId);
+                }
+            });
+        }
+        if ($request->filled('actor_id')) {
+            $query->where('user_id', $request->integer('actor_id'));
+        }
+        if ($request->filled('date_from')) {
+            $query->whereDate('timestamp', '>=', $request->date('date_from'));
+        }
+        if ($request->filled('date_to')) {
+            $query->whereDate('timestamp', '<=', $request->date('date_to'));
+        }
+        if (!$request->boolean('show_session')) {
+            $query->whereNotIn('action_type', self::AUDIT_SESSION_ACTIONS);
         }
 
         $logs = $query->paginate(25)->withQueryString();
 
-        return view('admin.audit_logs', compact('logs'));
+        $actionTypes = AuditLog::select('action_type')->distinct()->orderBy('action_type')->pluck('action_type');
+        $actors = User::orderBy('full_name')->get(['user_id', 'full_name']);
+
+        return view('admin.audit_logs', compact('logs', 'actionTypes', 'actors'));
     }
 }

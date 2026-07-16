@@ -73,6 +73,7 @@ class SlaService
             // unsignedInteger column.
             SlaViolation::create([
                 'document_id' => $assignment->document_id,
+                'assignment_id' => $assignment->assignment_id,
                 'approver_id' => $assignment->user_id,
                 'violation_timestamp' => now(),
                 'duration_overdue' => (int) round(abs(now()->diffInMinutes($assignment->sla_expires_at))),
@@ -126,6 +127,15 @@ class SlaService
                             'high');
                     }
 
+                    // individual_status and auto_approved must be set here —
+                    // completeStage() only finalizes the DOCUMENT's
+                    // global_status; it never touches the assignment's own
+                    // status (that's the caller's job, same as decide() and
+                    // adminOverride() already do). Without this, the
+                    // assignment stays 'pending' forever and would get
+                    // caught — and re-notified on — every subsequent sweep.
+                    $assignment->individual_status = 'approved';
+                    $assignment->auto_approved = true;
                     $assignment->acted_at = now();
                     $assignment->save();
 

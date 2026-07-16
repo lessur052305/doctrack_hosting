@@ -21,11 +21,11 @@ use Illuminate\Support\Facades\Storage;
  *   - Admin sees every category, unrestricted, and can additionally import a
  *     pre-existing, already-approved legacy document straight into the
  *     repository (bypassing classification/validation/workflow entirely).
- *   - Approver is hard-scoped to their own `assigned_category`, set once at
- *     account creation and never editable afterward. An approver with no
- *     category assigned yet cannot browse the archive at all. This makes
- *     sense because multiple approvers typically split review work by
- *     document category.
+ *   - Approver is hard-scoped to their own `assigned_category` (admin-editable
+ *     via Users > Manage Category & Stages, see AdminController::
+ *     updateApproverStages()). An approver with no category assigned yet
+ *     cannot browse the archive at all. This makes sense because multiple
+ *     approvers typically split review work by document category.
  *   - Originator is NOT scoped by category at all — an originator can
  *     upload any kind of document (the ML classifier determines its
  *     category automatically per upload), so tying their account to one
@@ -147,6 +147,12 @@ class ArchiveController extends Controller
             'file' => ['required', 'file', 'mimes:pdf,docx,doc,txt,png,jpg,jpeg', new ReliableMimeType(), 'max:20480'],
             'category' => ['required', 'in:' . implode(',', ValidationService::knownCategories())],
             'title' => ['nullable', 'string', 'max:255'],
+            // Required, not optional — this is the only record of WHY a
+            // document skipped classification/validation/peer review
+            // entirely. A bare "admin X imported this" audit line doesn't
+            // tell a future auditor whether that was legitimate (digitizing
+            // old paperwork) or something worth questioning.
+            'import_reason' => ['required', 'string', 'min:10', 'max:500'],
         ]);
 
         $file = $validated['file'];
@@ -155,7 +161,7 @@ class ArchiveController extends Controller
 
         $document = DocumentRepository::create([
             'originator_id' => $request->user()->user_id, // attributed to the importing admin
-            'title' => $validated['title'] ?: $file->getClientOriginalName(),
+            'title' => ($validated['title'] ?? null) ?: $file->getClientOriginalName(),
             'file_path' => $storedPath,
             'original_filename' => $file->getClientOriginalName(),
             'mime_type' => $file->getMimeType(),
@@ -167,10 +173,11 @@ class ArchiveController extends Controller
             'is_validated' => true,
             'validation_errors' => null,
             'global_status' => 'approved',
+            'is_legacy_import' => true,
         ]);
 
         AuditLog::record($request->user()->user_id, $document->document_id, 'legacy_import',
-            "Admin {$request->user()->full_name} imported pre-existing approved document '{$document->title}' (category: {$validated['category']}) directly into the archive.");
+            "Admin {$request->user()->full_name} imported pre-existing approved document '{$document->title}' (category: {$validated['category']}) directly into the archive, bypassing classification/validation/approval. Reason: \"{$validated['import_reason']}\"");
 
         return back()->with('status', "'{$document->title}' added to the archive.");
     }

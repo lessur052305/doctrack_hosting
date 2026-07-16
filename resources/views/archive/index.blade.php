@@ -21,7 +21,7 @@
                 <form method="GET" class="flex flex-wrap gap-3 items-end">
                     <div class="flex-1 min-w-[180px]">
                         <label class="block text-xs font-medium text-surface-700 mb-1">Keyword</label>
-                        <input type="text" name="keyword" value="{{ request('keyword') }}" placeholder="Title or content…"
+                        <input type="text" id="archive-keyword" name="keyword" value="{{ request('keyword') }}" placeholder="Title or content…" autocomplete="off"
                             class="w-full rounded-lg border-surface-300 text-sm px-3 py-2 focus:border-primary-500 focus:ring-primary-500">
                     </div>
 
@@ -33,7 +33,7 @@
                     @else
                         <div>
                             <label class="block text-xs font-medium text-surface-700 mb-1">Category</label>
-                            <select name="category" class="rounded-lg border-surface-300 text-sm px-3 py-2 focus:border-primary-500 focus:ring-primary-500">
+                            <select name="category" id="archive-category" class="rounded-lg border-surface-300 text-sm px-3 py-2 focus:border-primary-500 focus:ring-primary-500">
                                 <option value="">All Categories</option>
                                 @foreach($categories as $c)
                                     <option value="{{ $c }}" @selected(request('category') === $c)>{{ $c }}</option>
@@ -44,17 +44,20 @@
 
                     <div>
                         <label class="block text-xs font-medium text-surface-700 mb-1">From</label>
-                        <input type="date" name="date_from" value="{{ request('date_from') }}"
+                        <input type="date" name="date_from" value="{{ request('date_from') }}" onchange="this.form.submit()"
                             class="rounded-lg border-surface-300 text-sm px-3 py-2 focus:border-primary-500 focus:ring-primary-500">
                     </div>
                     <div>
                         <label class="block text-xs font-medium text-surface-700 mb-1">To</label>
-                        <input type="date" name="date_to" value="{{ request('date_to') }}"
+                        <input type="date" name="date_to" value="{{ request('date_to') }}" onchange="this.form.submit()"
                             class="rounded-lg border-surface-300 text-sm px-3 py-2 focus:border-primary-500 focus:ring-primary-500">
                     </div>
 
                     <button class="bg-primary-700 hover:bg-primary-800 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">Search</button>
-                    <a href="{{ url()->current() }}" class="text-xs text-surface-500 hover:underline self-center">Clear</a>
+                    <a href="{{ url()->current() }}"
+                        class="inline-flex items-center text-xs font-medium text-surface-700 bg-surface-100 hover:bg-surface-200 border border-surface-300 px-4 py-2 rounded-lg transition-colors">
+                        Clear
+                    </a>
                 </form>
             </div>
 
@@ -79,10 +82,15 @@
                             <th class="px-6 py-3"></th>
                         </tr>
                     </thead>
-                    <tbody class="divide-y divide-surface-100">
+                    <tbody id="archive-rows" class="divide-y divide-surface-100">
                         @forelse($documents as $doc)
-                            <tr class="hover:bg-surface-50 transition-colors">
-                                <td class="px-6 py-3 font-medium text-surface-800 max-w-xs truncate">{{ $doc->title }}</td>
+                            <tr class="archive-row hover:bg-surface-50 transition-colors" data-document-title="{{ strtolower($doc->title) }}" data-document-category="{{ strtolower($doc->ml_category) }}">
+                                <td class="px-6 py-3 font-medium text-surface-800 max-w-xs truncate">
+                                    {{ $doc->title }}
+                                    @if($doc->is_legacy_import)
+                                        <span class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-processing-50 text-processing-700 align-middle">Imported</span>
+                                    @endif
+                                </td>
                                 <td class="px-6 py-3 text-surface-600">{{ $doc->ml_category }}</td>
                                 <td class="px-6 py-3 text-surface-500">{{ $doc->originator->full_name ?? '—' }}</td>
                                 <td class="px-6 py-3 text-surface-500">{{ $doc->updated_at->format('M j, Y') }}</td>
@@ -95,6 +103,9 @@
                                 <td colspan="5" class="px-6 py-10 text-center text-surface-400 text-sm">No archived documents match your search.</td>
                             </tr>
                         @endforelse
+                        <tr id="archive-no-matches" class="hidden">
+                            <td colspan="5" class="px-6 py-10 text-center text-surface-400 text-sm">No documents on this page match "<span id="archive-no-matches-term"></span>". Press Enter to search every page.</td>
+                        </tr>
                     </tbody>
                 </table>
                 @if($documents->hasPages())
@@ -129,6 +140,12 @@
                         <input type="text" name="title" placeholder="Defaults to the file name"
                             class="w-full rounded-lg border-surface-300 text-sm px-3 py-2 focus:border-primary-500 focus:ring-primary-500">
                     </div>
+                    <div>
+                        <label class="block text-xs font-medium text-surface-700 mb-1">Reason for direct import <span class="text-rejected-700">*</span></label>
+                        <p class="text-[11px] text-surface-400 mb-1">Recorded in the audit trail — this is the only record of why this document skipped review.</p>
+                        <textarea name="import_reason" required minlength="10" maxlength="500" rows="2" placeholder="e.g. Digitizing 2019 paper records approved before this system existed"
+                            class="w-full rounded-lg border-surface-300 text-sm px-3 py-2 focus:border-primary-500 focus:ring-primary-500"></textarea>
+                    </div>
                     <button class="w-full bg-primary-700 hover:bg-primary-800 text-white text-sm font-medium py-2.5 rounded-lg transition-colors">
                         Add to Archive
                     </button>
@@ -139,4 +156,45 @@
     </div>
     @endif
 </div>
+
+<script>
+    // Real-time, client-side filter over the rows already rendered on this
+    // page — instant, no round trip. Keyword and Category combine (both
+    // must match). Pressing Enter still submits the surrounding <form>
+    // normally, running both filters server-side (see
+    // ArchiveController::index()) across every page, not just this one.
+    (function () {
+        const keywordInput = document.getElementById('archive-keyword');
+        const categorySelect = document.getElementById('archive-category');
+        const rows = Array.from(document.querySelectorAll('.archive-row'));
+        const noMatches = document.getElementById('archive-no-matches');
+        const noMatchesTerm = document.getElementById('archive-no-matches-term');
+        if (rows.length === 0) return;
+
+        const applyFilters = () => {
+            const term = keywordInput ? keywordInput.value.trim().toLowerCase() : '';
+            const category = categorySelect ? categorySelect.value.toLowerCase() : '';
+            let visibleCount = 0;
+
+            rows.forEach((row) => {
+                const matchesKeyword = term === '' || row.dataset.documentTitle.includes(term);
+                const matchesCategory = category === '' || row.dataset.documentCategory === category;
+                const matches = matchesKeyword && matchesCategory;
+                row.classList.toggle('hidden', !matches);
+                if (matches) visibleCount++;
+            });
+
+            const showNoMatches = (term !== '' || category !== '') && visibleCount === 0;
+            if (noMatches) {
+                noMatches.classList.toggle('hidden', !showNoMatches);
+                if (showNoMatches && noMatchesTerm) {
+                    noMatchesTerm.textContent = term || (categorySelect ? categorySelect.options[categorySelect.selectedIndex].text : '');
+                }
+            }
+        };
+
+        if (keywordInput) keywordInput.addEventListener('input', applyFilters);
+        if (categorySelect) categorySelect.addEventListener('change', applyFilters);
+    })();
+</script>
 @endsection

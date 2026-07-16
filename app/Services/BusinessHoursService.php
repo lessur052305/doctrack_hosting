@@ -14,10 +14,19 @@ use Carbon\Carbon;
  * working window (SlaSetting) and non-working dates (SlaHoliday), which
  * are treated identically to a non-working weekday.
  *
- * Settings are loaded once per instance (constructor) — this service is
- * resolved fresh per request via normal DI, so there's no staleness risk
- * and deliberately no Cache:: usage (CACHE_STORE=database has no `cache`
- * table migrated in this app, same latent gap the queue tables had).
+ * Settings are lazy-loaded on first actual use, not in the constructor —
+ * this service is resolved fresh per request via normal DI, so there's no
+ * staleness risk within a request, and deliberately no Cache:: usage
+ * (CACHE_STORE=database has no `cache` table migrated in this app, same
+ * latent gap the queue tables had). Lazy loading specifically matters
+ * because Laravel's console kernel auto-discovers every command in
+ * app/Console/Commands at boot — including ones that depend on this
+ * service several layers down (CheckParallelSlas -> SlaService ->
+ * WorkflowService) — just to register them, before any actual command
+ * (including `migrate` itself) runs. An eager constructor query here
+ * would hit the database for a table that may not exist yet on a brand
+ * new install or test database, before the first migration has even had
+ * a chance to run.
  *
  * The `due_date` an Originator supplies is NEVER shifted by this service —
  * it's the hard wall-clock ceiling and is only ever used elsewhere as a
@@ -36,15 +45,20 @@ class BusinessHoursService
     /** Trip-wire against misconfiguration (e.g. empty working_days or holiday-flooded calendar), not a real limit. */
     private const MAX_ITERATIONS = 400;
 
-    private array $workingDays;
-    private string $workStartTime;
-    private string $workEndTime;
+    private ?array $workingDays = null;
+    private ?string $workStartTime = null;
+    private ?string $workEndTime = null;
 
     /** ['Y-m-d' => true, ...] for O(1) lookup. */
-    private array $holidayDates;
+    private ?array $holidayDates = null;
 
-    public function __construct()
+    /** Loads settings/holidays from the database on first actual use — see class docblock for why this can't happen in the constructor. */
+    private function ensureLoaded(): void
     {
+        if ($this->workingDays !== null) {
+            return;
+        }
+
         $settings = SlaSetting::current();
         $this->workingDays = $settings->working_days ?: config('sla.default_working_days');
         $this->workStartTime = $settings->work_start_time;
@@ -58,6 +72,8 @@ class BusinessHoursService
 
     public function isWorkingDay(Carbon $date): bool
     {
+        $this->ensureLoaded();
+
         return in_array($date->dayOfWeek, $this->workingDays, true)
             && !isset($this->holidayDates[$date->toDateString()]);
     }
@@ -138,13 +154,42 @@ class BusinessHoursService
         );
     }
 
+    /**
+     * Section 1 (extended): if $dueDate's calendar day isn't a working day
+     * (non-working weekday or an admin-marked holiday), advances the DATE —
+     * never the time-of-day — forward until it lands on one. A due date is
+     * an external human commitment, not an internal review-time budget, so
+     * unlike addBusinessMinutes() this only ever cares about the calendar
+     * day, never what hour it falls at.
+     */
+    public function nextWorkingDueDate(Carbon $dueDate): Carbon
+    {
+        $adjusted = $dueDate->copy();
+
+        for ($i = 0; $i <= self::MAX_ITERATIONS; $i++) {
+            if ($this->isWorkingDay($adjusted)) {
+                return $adjusted;
+            }
+            $adjusted->addDay();
+        }
+
+        throw new \RuntimeException(
+            'BusinessHoursService: no working day found within ' . self::MAX_ITERATIONS .
+            ' days while adjusting a due date — check sla_settings.working_days / sla_holidays for misconfiguration.'
+        );
+    }
+
     private function startOfWindow(Carbon $date): Carbon
     {
+        $this->ensureLoaded();
+
         return $date->copy()->setTimeFromTimeString($this->workStartTime);
     }
 
     private function endOfWindow(Carbon $date): Carbon
     {
+        $this->ensureLoaded();
+
         return $date->copy()->setTimeFromTimeString($this->workEndTime);
     }
 }

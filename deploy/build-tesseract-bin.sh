@@ -39,7 +39,11 @@ done
 # Flatten the parts TextExtractionService actually needs into a predictable
 # layout: bin/tesseract, lib/*.so*, share/5/tessdata/eng.traineddata
 mkdir -p "$OUT_DIR/bin" "$OUT_DIR/lib" "$OUT_DIR/share"
-find "$WORK_DIR/extracted" -type f -path "*/bin/tesseract" -exec cp {} "$OUT_DIR/bin/" \;
+# The app only ever shells out to bin/tesseract, but copy every executable
+# tesseract-ocr ships (training utilities like cntraining, mftraining, etc.)
+# rather than just that one, so a rebuild reproduces the full committed set.
+find "$WORK_DIR/extracted/usr/bin" -maxdepth 1 -type f -exec cp {} "$OUT_DIR/bin/" \;
+chmod +x "$OUT_DIR/bin/"*
 # dpkg-deb -x resolves the .deb's symlinks into real files rather than
 # preserving them as symlinks, so the runtime SONAME (e.g. libtesseract.so.5,
 # which the dynamic linker looks for) never lands in $OUT_DIR/lib on its
@@ -60,8 +64,6 @@ mkdir -p "$OUT_DIR/share/5"
 if [ -d "$OUT_DIR/share/5-tmp-tessdata" ]; then
     mv "$OUT_DIR/share/5-tmp-tessdata" "$OUT_DIR/share/5/tessdata"
 fi
-
-chmod +x "$OUT_DIR/bin/tesseract"
 
 echo ""
 echo "Built $OUT_DIR:"

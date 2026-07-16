@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Events\NotificationBroadcast;
 use Illuminate\Database\Eloquent\Model;
 
 class NotificationRecord extends Model
@@ -31,7 +32,7 @@ class NotificationRecord extends Model
 
     public static function send(int $recipientId, ?int $documentId, string $message, string $priority = 'normal'): self
     {
-        return static::create([
+        $notification = static::create([
             'recipient_id' => $recipientId,
             'document_id' => $documentId,
             'message_body' => $message,
@@ -39,5 +40,9 @@ class NotificationRecord extends Model
             'is_read' => false,
             'created_at' => now(),
         ]);
+
+        event(new NotificationBroadcast($recipientId));
+
+        return $notification;
     }
 }

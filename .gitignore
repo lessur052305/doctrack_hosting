@@ -5,6 +5,7 @@
 /storage/*.key
 /storage/app/documents
 /storage/app/ml_models
+/storage/app/backups
 /vendor
 .env
 .env.backup

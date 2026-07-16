@@ -22,7 +22,12 @@ Route::get('/', fn () => redirect()->route('login'));
 
 Route::middleware('guest')->group(function () {
     Route::get('/login', [AuthController::class, 'showLogin'])->name('login');
-    Route::post('/login', [AuthController::class, 'login'])->name('login.attempt');
+    // Per-account throttling lives inside AuthController::login() itself
+    // (keyed by username+IP, with a tailored lockout message). This
+    // IP-only cap is a second, coarser layer on top of that — it catches
+    // an attacker sweeping through many different usernames from one IP,
+    // which the per-username limiter alone wouldn't trip.
+    Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:10,1')->name('login.attempt');
 });
 
 Route::middleware('auth')->group(function () {
@@ -30,20 +35,48 @@ Route::middleware('auth')->group(function () {
 
     // --- Notification Center (shared across all roles) ---
     Route::get('/notifications', [NotificationController::class, 'index'])->name('notifications.index');
+    // Same live-poll pair pattern as the role dashboards — the bell
+    // appears on every page (see components/notification-bell.blade.php),
+    // so these live outside any single role's route group.
+    Route::get('/notifications/poll', [NotificationController::class, 'poll'])->middleware('throttle:30,1')->name('notifications.poll');
+    Route::get('/notifications/refresh', [NotificationController::class, 'refresh'])->middleware('throttle:30,1')->name('notifications.refresh');
     Route::post('/notifications/{notification}/read', [NotificationController::class, 'markRead'])->name('notifications.read');
     Route::post('/notifications/read-all', [NotificationController::class, 'markAllRead'])->name('notifications.readAll');
 
     // --- Originator ---
     Route::middleware('role:originator')->prefix('originator')->name('originator.')->group(function () {
         Route::get('/dashboard', [DocumentController::class, 'dashboard'])->name('dashboard');
-        Route::post('/documents', [DocumentController::class, 'store'])->name('documents.store');
+        // Live-poll pair, same headroom reasoning as the approver queue's
+        // equivalent routes: poll is cheap and hit every 5-10s, refresh is
+        // heavier and only fetched when poll detects a change.
+        Route::get('/documents/poll', [DocumentController::class, 'poll'])->middleware('throttle:30,1')->name('documents.poll');
+        Route::get('/documents/refresh', [DocumentController::class, 'refresh'])->middleware('throttle:30,1')->name('documents.refresh');
+        // Upload endpoints are rate-limited (keyed by authenticated user
+        // ID, per Laravel's default ThrottleRequests behavior) — each
+        // request can trigger text extraction, OCR, and SVM classification,
+        // so this caps both accidental runaway scripts and deliberate abuse.
+        Route::post('/documents', [DocumentController::class, 'store'])->middleware('throttle:20,1')->name('documents.store');
         Route::get('/documents/{document}', [DocumentController::class, 'show'])->name('documents.show');
+        // Per-document live-poll pair for the tracking page — reacts to a
+        // single stage being decided, not just the document's overall
+        // status finalizing (§ see DocumentAssignment::booted()).
+        Route::get('/documents/{document}/poll', [DocumentController::class, 'trackingPoll'])->middleware('throttle:30,1')->name('documents.trackingPoll');
+        Route::get('/documents/{document}/refresh', [DocumentController::class, 'trackingRefresh'])->middleware('throttle:30,1')->name('documents.trackingRefresh');
+        Route::post('/documents/{document}/resubmit', [DocumentController::class, 'resubmit'])->middleware('throttle:20,1')->name('documents.resubmit');
         Route::get('/archive', [ArchiveController::class, 'index'])->name('archive');
     });
 
     // --- Approver ---
     Route::middleware('role:approver')->prefix('approver')->name('approver.')->group(function () {
         Route::get('/dashboard', [ApprovalController::class, 'dashboard'])->name('dashboard');
+        // 5-10s client polling (see dashboard.blade.php) means up to ~12
+        // requests/min from one tab; throttle:30,1 gives headroom for a
+        // couple of open tabs without letting a runaway/malicious loop
+        // hammer the DB unbounded.
+        Route::get('/assignments/poll', [ApprovalController::class, 'poll'])->middleware('throttle:30,1')->name('assignments.poll');
+        // Only fetched when poll() actually detects a change, not every
+        // 5-10s cycle — same headroom reasoning as poll() above.
+        Route::get('/assignments/refresh', [ApprovalController::class, 'refresh'])->middleware('throttle:30,1')->name('assignments.refresh');
         Route::post('/assignments/{assignment}/decide', [ApprovalController::class, 'decide'])->name('assignments.decide');
         Route::post('/assignments/decide-batch', [ApprovalController::class, 'decideBatch'])->name('assignments.decideBatch');
         Route::post('/availability/toggle', [ApprovalController::class, 'toggleAvailability'])->name('availability.toggle');
@@ -53,6 +86,9 @@ Route::middleware('auth')->group(function () {
     // --- Admin ---
     Route::middleware('role:admin')->prefix('admin')->name('admin.')->group(function () {
         Route::get('/dashboard', [AdminController::class, 'dashboard'])->name('dashboard');
+        // Same live-poll pair pattern as the approver/originator dashboards.
+        Route::get('/dashboard/poll', [AdminController::class, 'overviewPoll'])->middleware('throttle:30,1')->name('dashboard.poll');
+        Route::get('/dashboard/refresh', [AdminController::class, 'overviewRefresh'])->middleware('throttle:30,1')->name('dashboard.refresh');
 
         Route::get('/users', [AdminController::class, 'users'])->name('users');
         Route::post('/users', [AdminController::class, 'storeUser'])->name('users.store');
@@ -62,6 +98,9 @@ Route::middleware('auth')->group(function () {
 
         Route::get('/ml-training', [AdminController::class, 'mlTraining'])->name('ml.training');
         Route::post('/ml-training', [AdminController::class, 'trainModel'])->name('ml.train');
+        Route::post('/ml-training/stage/{category}', [AdminController::class, 'stageTrainingSamples'])->middleware('throttle:20,1')->name('ml.training.stage');
+        Route::delete('/ml-training/stage/{category}', [AdminController::class, 'clearTrainingStaging'])->name('ml.training.stage.clear');
+        Route::delete('/ml-training/samples/{sample}', [AdminController::class, 'destroyTrainingSample'])->name('ml.training.sample.destroy');
 
         Route::get('/sla-queue', [AdminController::class, 'slaQueue'])->name('sla.queue');
         Route::post('/sla-queue/{assignment}/override', [AdminController::class, 'override'])->name('sla.override');
@@ -72,9 +111,9 @@ Route::middleware('auth')->group(function () {
         Route::put('/workflow-config/{stage}', [AdminController::class, 'updateStage'])->name('workflow.stages.update');
         Route::post('/workflow-config/{stage}/move-up', [AdminController::class, 'moveStageUp'])->name('workflow.stages.moveUp');
         Route::post('/workflow-config/{stage}/move-down', [AdminController::class, 'moveStageDown'])->name('workflow.stages.moveDown');
+        Route::post('/workflow-config/{stage}/notify-pending', [AdminController::class, 'notifyPendingApprovers'])->name('workflow.stages.notifyPending');
         Route::post('/workflow-config/{stage}/archive', [AdminController::class, 'archiveStage'])->name('workflow.stages.archive');
         Route::post('/workflow-config/{stage}/unarchive', [AdminController::class, 'unarchiveStage'])->name('workflow.stages.unarchive');
-        Route::post('/workflow-config/{stage}/reassign', [AdminController::class, 'reassignStage'])->name('workflow.stages.reassign');
         Route::delete('/workflow-config/{stage}', [AdminController::class, 'destroyStage'])->name('workflow.stages.destroy');
 
         Route::get('/calendar', [AdminController::class, 'calendar'])->name('calendar');
@@ -87,7 +126,7 @@ Route::middleware('auth')->group(function () {
         Route::get('/audit-logs', [AdminController::class, 'auditLogs'])->name('audit.logs');
 
         Route::get('/archive', [ArchiveController::class, 'index'])->name('archive');
-        Route::post('/archive/legacy', [ArchiveController::class, 'storeLegacy'])->name('archive.legacy');
+        Route::post('/archive/legacy', [ArchiveController::class, 'storeLegacy'])->middleware('throttle:20,1')->name('archive.legacy');
     });
 
     // Archive download is shared across all three roles; ArchiveController
