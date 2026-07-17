@@ -29,6 +29,18 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'role' => RoleMiddleware::class,
         ]);
+
+        // Trust every proxy in front of this app (Railway, or any other
+        // platform that terminates TLS at its own edge and forwards
+        // requests to this container over plain HTTP). Without this,
+        // Laravel has no way to know the original request was HTTPS, so
+        // url()/asset()/Vite all generate http:// links — which the
+        // browser then silently blocks as mixed content on an https:// page
+        // (this is exactly what broke all CSS/JS on first deploy). Trusting
+        // '*' is safe here specifically because the platform's edge is the
+        // only way any traffic reaches this container — there's no direct
+        // path for an external client to spoof X-Forwarded-* headers.
+        $middleware->trustProxies(at: '*');
     })
     ->withSchedule(function (Schedule $schedule) {
         // Section 5 safety net. Primary detection is now event-driven —
