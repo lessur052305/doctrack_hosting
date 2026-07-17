@@ -162,6 +162,20 @@ class TextExtractionService
      */
     private function useBundledTesseractIfPresent(TesseractOCR $ocr): void
     {
+        // Prefer a real system install when one's on $PATH — the bundled
+        // copy only carries its own libtesseract/liblept, not the ~15
+        // further transitive shared libraries tesseract itself links
+        // against (libarchive, libcurl, libnettle, etc.). Those happen to
+        // already be present on a typical dev machine but are NOT
+        // guaranteed on a minimal container image, where the bundled
+        // binary can fail with "error while loading shared libraries" for
+        // whichever one is missing. A real `apt-get install tesseract-ocr`
+        // pulls in its complete, correct dependency chain automatically,
+        // so it's strictly more reliable whenever it's available.
+        if ($this->systemTesseractAvailable()) {
+            return;
+        }
+
         $binDir = storage_path('tesseract-bin');
         $executable = $binDir . '/bin/tesseract';
 
@@ -172,5 +186,12 @@ class TextExtractionService
         putenv('LD_LIBRARY_PATH=' . $binDir . '/lib');
         putenv('TESSDATA_PREFIX=' . $binDir . '/share/5/tessdata');
         $ocr->executable($executable);
+    }
+
+    private function systemTesseractAvailable(): bool
+    {
+        $path = trim((string) @shell_exec('command -v tesseract 2>/dev/null'));
+
+        return $path !== '';
     }
 }
