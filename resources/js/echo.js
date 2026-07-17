@@ -18,21 +18,28 @@ window.Pusher = Pusher;
 // bootstrap.js would.
 const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content;
 
-// wsHost deliberately does NOT come from VITE_REVERB_HOST. That value gets
-// compiled into the JS bundle once, at build time — so "localhost" means
-// something different depending on which device loads the page. On the
-// same machine the server runs on, "localhost" correctly means itself; on
-// a phone or any other device on the network, "localhost" in ITS browser
-// means the phone, not the server, so the WebSocket connection silently
-// fails and everything falls back to the slow poll instead. Using
-// window.location.hostname instead means it always resolves to whatever
-// address the browser actually used to reach this page — 127.0.0.1,
-// localhost, or a LAN IP like 192.168.1.9 — which is always correct
-// regardless of device. The Reverb server itself already listens on
-// 0.0.0.0 (every interface, see deploy/docuwise-reverb.service.template),
-// so it's reachable at all of those addresses already; only the client
-// was hardcoded to just one of them.
-const wsHost = window.location.hostname;
+// wsHost: prefer the build-time VITE_REVERB_HOST, but only when it's a
+// real, distinct hostname — fall back to window.location.hostname when
+// it's a same-machine placeholder (localhost/127.0.0.1).
+//
+// Two deployment shapes need to both work here:
+//   1. Local self-hosting — Reverb runs on the SAME machine as the web
+//      app, just a different port. REVERB_HOST is baked in as
+//      "localhost" at build time, which means something different
+//      depending on which device loads the page (on a phone, "localhost"
+//      means the phone, not the server). window.location.hostname fixes
+//      this — it always resolves to whatever address the browser
+//      actually used to reach the page (127.0.0.1, localhost, or a LAN
+//      IP), which is correct since Reverb listens on 0.0.0.0 there too.
+//   2. Split hosting (e.g. Railway) — Reverb runs as a genuinely
+//      SEPARATE service with its own distinct public domain, different
+//      from the web app's domain. Here window.location.hostname is
+//      actively wrong (it's the web app's own domain, which doesn't
+//      speak the Reverb protocol) — the real, baked-in VITE_REVERB_HOST
+//      must be used as-is.
+const buildTimeHost = import.meta.env.VITE_REVERB_HOST;
+const isSameHostPlaceholder = !buildTimeHost || buildTimeHost === 'localhost' || buildTimeHost === '127.0.0.1';
+const wsHost = isSameHostPlaceholder ? window.location.hostname : buildTimeHost;
 
 window.Echo = new Echo({
     broadcaster: 'reverb',
