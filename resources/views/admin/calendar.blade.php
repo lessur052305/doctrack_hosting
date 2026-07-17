@@ -17,7 +17,7 @@
             <form method="POST" action="{{ route('admin.calendar.settings.update') }}" class="space-y-3">
                 @csrf
                 @method('PUT')
-                <div class="grid grid-cols-2 gap-3">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                         <label class="block text-xs font-medium text-surface-700 mb-1">Start Time</label>
                         <input type="time" name="work_start_time" value="{{ substr($settings->work_start_time, 0, 5) }}" required class="w-full rounded-lg border-surface-300 text-sm px-3 py-2">
@@ -29,7 +29,7 @@
                 </div>
                 <div>
                     <label class="block text-xs font-medium text-surface-700 mb-2">Working Days</label>
-                    <div class="grid grid-cols-4 gap-2 text-xs">
+                    <div class="grid grid-cols-4 sm:grid-cols-7 gap-2 text-xs">
                         @foreach($dayLabels as $i => $label)
                             <label class="flex items-center gap-1.5">
                                 <input type="checkbox" name="working_days[]" value="{{ $i }}" {{ in_array($i, $workingDays) ? 'checked' : '' }}>
@@ -52,7 +52,8 @@
                 <a href="{{ route('admin.calendar', ['month' => $month->copy()->addMonth()->format('Y-m')]) }}" class="text-sm text-primary-700 hover:underline font-medium">Next &rarr;</a>
             </div>
 
-            <table class="w-full text-xs table-fixed">
+            <div class="overflow-x-auto">
+            <table class="w-full min-w-[560px] text-xs table-fixed">
                 <thead class="bg-surface-50 text-surface-500 uppercase tracking-wide">
                     <tr>
                         @foreach($dayLabels as $label)
@@ -96,6 +97,7 @@
                     @endwhile
                 </tbody>
             </table>
+            </div>
         </div>
     </div>
 </div>

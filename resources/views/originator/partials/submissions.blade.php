@@ -9,7 +9,8 @@
     WebSocket push and a poll response don't share the same JSON shape).
 --}}
 <span data-total-count="{{ $documents->total() }}" class="hidden"></span>
-<table class="w-full text-sm">
+<div class="overflow-x-auto">
+<table class="w-full min-w-[640px] text-sm">
     <thead class="bg-surface-50 text-surface-500 text-xs uppercase tracking-wide">
         <tr>
             <th class="text-left px-6 py-3 font-medium">Document</th>
@@ -68,6 +69,7 @@
         </tr>
     </tbody>
 </table>
+</div>
 
 @if($documents->hasPages())
     <div class="px-6 py-4 border-t border-surface-200">{{ $documents->links() }}</div>

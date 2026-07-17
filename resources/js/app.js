@@ -32,6 +32,48 @@ document.addEventListener('DOMContentLoaded', () => {
         setInterval(tick, 30000);
     }
 
+    // Off-canvas sidebar (hamburger menu) — shared by every role's
+    // dashboard since they all extend this one layout. Below the `lg`
+    // breakpoint (and on a desktop window resized narrower than that) the
+    // sidebar starts translated off-screen; this wires the hamburger
+    // button, the in-drawer close button, the backdrop, Escape, and a link
+    // click inside the drawer to toggle it open/closed.
+    const sidebar = document.getElementById('sidebar');
+    const sidebarBackdrop = document.getElementById('sidebar-backdrop');
+    const sidebarToggle = document.getElementById('sidebar-toggle');
+    const sidebarClose = document.getElementById('sidebar-close');
+    if (sidebar && sidebarBackdrop && sidebarToggle) {
+        const openSidebar = () => {
+            sidebar.classList.remove('-translate-x-full');
+            sidebar.setAttribute('aria-hidden', 'false');
+            sidebarBackdrop.classList.remove('hidden');
+            sidebarToggle.setAttribute('aria-expanded', 'true');
+            document.body.classList.add('overflow-hidden');
+        };
+        const closeSidebar = () => {
+            sidebar.classList.add('-translate-x-full');
+            sidebar.setAttribute('aria-hidden', 'true');
+            sidebarBackdrop.classList.add('hidden');
+            sidebarToggle.setAttribute('aria-expanded', 'false');
+            document.body.classList.remove('overflow-hidden');
+        };
+
+        sidebarToggle.addEventListener('click', openSidebar);
+        sidebarClose?.addEventListener('click', closeSidebar);
+        sidebarBackdrop.addEventListener('click', closeSidebar);
+        sidebar.querySelectorAll('a').forEach((link) => link.addEventListener('click', closeSidebar));
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') closeSidebar();
+        });
+        // A desktop window resized back up past `lg` shows the persistent
+        // sidebar again via CSS alone (lg:translate-x-0) — this just makes
+        // sure the backdrop/scroll-lock don't stay stuck on if it was left
+        // open while narrow.
+        window.addEventListener('resize', () => {
+            if (window.innerWidth >= 1024) closeSidebar();
+        });
+    }
+
     // Notification bell — live unread count/list, present on every page.
     // Instant via Reverb (see startLiveChannel below); the slow poll is
     // just a safety net in case the WebSocket connection is down. Swaps

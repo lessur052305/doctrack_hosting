@@ -72,7 +72,8 @@
         </div>
     </form>
 
-    <table class="w-full text-sm">
+    <div class="overflow-x-auto">
+    <table class="w-full min-w-[720px] text-sm">
         <thead class="bg-surface-50 text-surface-500 text-xs uppercase tracking-wide">
             <tr>
                 <th class="text-left px-6 py-3 font-medium">Timestamp</th>
@@ -115,6 +116,7 @@
             </tr>
         </tbody>
     </table>
+    </div>
     <div class="px-6 py-4 border-t border-surface-200">{{ $logs->links() }}</div>
 </div>
 

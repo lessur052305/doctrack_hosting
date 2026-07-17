@@ -17,7 +17,12 @@
     $currentIndex = $isRejected ? 1 : ($found === false ? 0 : $found);
 @endphp
 
-<div class="flex items-center w-full">
+{{-- overflow-x-auto is the fallback for very narrow phones — the three
+     whitespace-nowrap step labels don't shrink below their text width, so
+     rather than let them force the whole page to scroll horizontally, only
+     this strip scrolls if it ever doesn't fit. --}}
+<div class="overflow-x-auto">
+<div class="flex items-center w-full min-w-max sm:min-w-0">
     @foreach($order as $i => $key)
         @php
             $isComplete = $i < $currentIndex;
@@ -43,6 +48,7 @@
             @endif
         </div>
     @endforeach
+</div>
 </div>
 
 @if($isRejected)

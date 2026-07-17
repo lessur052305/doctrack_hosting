@@ -6,7 +6,7 @@
 <div class="space-y-6">
     <div class="bg-white rounded-xl shadow-card border border-surface-200 p-4">
         <form method="GET" class="flex flex-wrap items-center gap-3">
-            <div class="relative flex-1 min-w-[200px]">
+            <div class="relative flex-1 min-w-[140px]">
                 <svg class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-surface-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z"/>
                 </svg>

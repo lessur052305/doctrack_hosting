@@ -19,7 +19,7 @@
             {{-- Search / filter bar --}}
             <div class="bg-white rounded-xl shadow-card border border-surface-200 p-5">
                 <form method="GET" class="flex flex-wrap gap-3 items-end">
-                    <div class="flex-1 min-w-[180px]">
+                    <div class="flex-1 min-w-[140px]">
                         <label class="block text-xs font-medium text-surface-700 mb-1">Keyword</label>
                         <input type="text" id="archive-keyword" name="keyword" value="{{ request('keyword') }}" placeholder="Title or content…" autocomplete="off"
                             class="w-full rounded-lg border-surface-300 text-sm px-3 py-2 focus:border-primary-500 focus:ring-primary-500">
@@ -72,7 +72,8 @@
                     </div>
                     <span class="text-xs text-surface-400">{{ $documents->total() }} total</span>
                 </div>
-                <table class="w-full text-sm">
+                <div class="overflow-x-auto">
+                <table class="w-full min-w-[640px] text-sm">
                     <thead class="bg-surface-50 text-surface-500 text-xs uppercase tracking-wide">
                         <tr>
                             <th class="text-left px-6 py-3 font-medium">Document</th>
@@ -108,6 +109,7 @@
                         </tr>
                     </tbody>
                 </table>
+                </div>
                 @if($documents->hasPages())
                     <div class="px-6 py-4 border-t border-surface-200">{{ $documents->links() }}</div>
                 @endif

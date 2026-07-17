@@ -72,7 +72,8 @@
 
     <div class="lg:col-span-2">
         <div class="bg-white rounded-xl shadow-card border border-surface-200 overflow-hidden">
-            <table class="w-full text-sm">
+            <div class="overflow-x-auto">
+            <table class="w-full min-w-[720px] text-sm">
                 <thead class="bg-surface-50 text-surface-500 text-xs uppercase tracking-wide">
                     <tr>
                         <th class="text-left px-6 py-3 font-medium">Account ID</th>
@@ -138,6 +139,7 @@
                     @endforeach
                 </tbody>
             </table>
+            </div>
             <p class="px-6 py-2 text-xs text-surface-400 border-t border-surface-200 bg-surface-50">
                 An approver's category and specific stage assignments can be changed anytime via "Manage Category & Stages" — this only affects future document routing, never assignments they already hold. Originators are never category-restricted.
             </p>

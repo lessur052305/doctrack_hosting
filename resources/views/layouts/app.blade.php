@@ -11,13 +11,26 @@
 <div class="min-h-full flex">
 
     {{-- ============ SIDEBAR ============ --}}
-    <aside class="hidden lg:flex lg:flex-col lg:w-64 lg:fixed lg:inset-y-0 bg-primary-900 text-primary-100">
-        <div class="flex items-center gap-2 px-6 h-16 border-b border-primary-800">
-            <div class="w-8 h-8 rounded-lg bg-primary-500 flex items-center justify-center font-bold text-white">D</div>
-            <span class="font-semibold text-white tracking-tight">DocTrack</span>
+    {{-- Fixed at every breakpoint so it never affects document flow; below
+         `lg` it starts translated off-screen (a true off-canvas drawer) and
+         is toggled by the hamburger button in the header, closing the gap
+         where the old `hidden lg:flex` version simply vanished with no way
+         to reopen it once the viewport (or a resized desktop window) dropped
+         under 1024px. --}}
+    <aside id="sidebar" class="fixed inset-y-0 left-0 z-40 w-64 flex flex-col bg-primary-900 text-primary-100 -translate-x-full transition-transform duration-300 ease-in-out lg:translate-x-0" aria-hidden="true">
+        <div class="flex items-center justify-between gap-2 px-6 h-16 border-b border-primary-800">
+            <div class="flex items-center gap-2">
+                <div class="w-8 h-8 rounded-lg bg-primary-500 flex items-center justify-center font-bold text-white">D</div>
+                <span class="font-semibold text-white tracking-tight">DocTrack</span>
+            </div>
+            <button id="sidebar-close" type="button" class="lg:hidden p-1 rounded-lg text-primary-300 hover:text-white hover:bg-primary-800" aria-label="Close menu">
+                <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+            </button>
         </div>
 
-        <nav class="flex-1 px-3 py-6 space-y-1 text-sm">
+        <nav class="flex-1 overflow-y-auto px-3 py-6 space-y-1 text-sm">
             @auth
                 @if(auth()->user()->isAdmin())
                     @include('layouts.nav-admin')
@@ -52,11 +65,26 @@
         @endauth
     </aside>
 
+    {{-- Off-canvas backdrop, mobile/tablet only — click anywhere on it to
+         close the drawer, same as clicking the X inside it. --}}
+    <div id="sidebar-backdrop" class="hidden fixed inset-0 z-30 bg-surface-900/50 lg:hidden"></div>
+
     {{-- ============ MAIN COLUMN ============ --}}
-    <div class="flex-1 lg:pl-64 flex flex-col min-h-screen">
+    {{-- min-w-0: this is a flex item of the row above, so without it, any
+         page that renders something wide (e.g. a table needing a min-width
+         to stay legible) would refuse to shrink below that content's width
+         — stretching this whole column, and with it the page, into
+         horizontal scroll instead of letting the wide content scroll
+         internally on its own. --}}
+    <div class="min-w-0 flex-1 lg:pl-64 flex flex-col min-h-screen">
 
         {{-- Top bar --}}
         <header class="sticky top-0 z-10 bg-white/80 backdrop-blur border-b border-surface-200 h-16 flex items-center px-4 sm:px-8">
+            <button id="sidebar-toggle" type="button" class="lg:hidden -ml-1 mr-3 p-2 rounded-lg text-surface-500 hover:bg-surface-100 hover:text-surface-900" aria-label="Open menu" aria-expanded="false" aria-controls="sidebar">
+                <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16"/>
+                </svg>
+            </button>
             <h1 class="text-lg font-semibold text-surface-900">@yield('page-title', 'Dashboard')</h1>
             <div class="ml-auto flex items-center gap-4">
                 @auth

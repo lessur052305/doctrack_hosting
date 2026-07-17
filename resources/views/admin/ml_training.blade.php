@@ -53,11 +53,11 @@
                         @endif
 
                         @if($remaining > 0)
-                            <form method="POST" action="{{ route('admin.ml.training.stage', $category) }}" enctype="multipart/form-data" class="flex items-center gap-2">
+                            <form method="POST" action="{{ route('admin.ml.training.stage', $category) }}" enctype="multipart/form-data" class="flex flex-wrap items-center gap-2">
                                 @csrf
                                 <input type="file" name="files[]" multiple required
                                     accept=".pdf,.txt,.docx"
-                                    class="flex-1 min-w-0 text-xs text-surface-600 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100">
+                                    class="flex-1 min-w-[160px] text-xs text-surface-600 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100">
                                 <button type="submit"
                                     class="flex-shrink-0 text-xs font-medium bg-primary-700 hover:bg-primary-800 text-white px-3 py-2 rounded-lg">
                                     Add these files (up to {{ $remaining }})

@@ -8,7 +8,7 @@
     alerts + ML model side by side) as one swap target — it rarely
     changes, but re-rendering it each cycle is harmless.
 --}}
-<div class="grid grid-cols-2 lg:grid-cols-5 gap-4">
+<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
     @foreach([
         ['Total Documents', $stats['total_documents'], 'text-surface-900'],
         ['In Progress', $stats['pending'], 'text-processing-700'],
