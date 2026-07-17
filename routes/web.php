@@ -18,7 +18,28 @@ use Illuminate\Support\Facades\Route;
 | "strict RBAC middleware" requirement.
 */
 
-Route::get('/', fn () => redirect()->route('login'));
+// Role-aware, not just "always send to /login" — Laravel's stock 'guest'
+// middleware (see RedirectIfAuthenticated::defaultRedirectUri()) sends an
+// already-authenticated visitor here as its last-resort fallback, since
+// this app has no route literally named 'dashboard' or 'home' (only the
+// role-prefixed originator.dashboard / approver.dashboard / admin.dashboard).
+// If '/' always redirected to /login unconditionally, an authenticated
+// user hitting /login would bounce: guest middleware -> '/' -> /login ->
+// guest middleware -> '/' -> ... forever (NS_ERROR_REDIRECT_LOOP).
+Route::get('/', function () {
+    if (!auth()->check()) {
+        return redirect()->route('login');
+    }
+
+    $user = auth()->user();
+
+    return redirect()->route(match (true) {
+        $user->isAdmin() => 'admin.dashboard',
+        $user->isApprover() => 'approver.dashboard',
+        $user->isOriginator() => 'originator.dashboard',
+        default => 'login',
+    });
+});
 
 Route::middleware('guest')->group(function () {
     Route::get('/login', [AuthController::class, 'showLogin'])->name('login');
