@@ -1,7 +1,6 @@
 <?php
 
 use Illuminate\Support\Str;
-use Pdo\Mysql;
 
 return [
 
@@ -79,8 +78,12 @@ return [
             'prefix_indexes' => true,
             'strict' => true,
             'engine' => null,
+            // PDO::MYSQL_ATTR_SSL_CA (not the newer Pdo\Mysql::ATTR_SSL_CA
+            // alias) deliberately — the namespaced class only exists on PHP
+            // 8.4+, but this app targets PHP 8.2+ (see composer.json's
+            // config.platform.php pin). Same underlying constant either way.
             'options' => extension_loaded('pdo_mysql') ? array_filter([
-                Mysql::ATTR_SSL_CA => env('MYSQL_ATTR_SSL_CA'),
+                PDO::MYSQL_ATTR_SSL_CA => env('MYSQL_ATTR_SSL_CA'),
             ]) : [],
         ],
 
