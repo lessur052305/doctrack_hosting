@@ -26,6 +26,7 @@
     },
     "_comment_svm": "php-ai/php-ml provides the SVM (SVC) + TF-IDF classifier used by App\\Services\\ClassificationService, matching the thesis. It uses php-ml's bundled libsvm (no PECL svm extension needed).",
     "_comment_extraction_packages": "smalot/pdfparser (pure PHP, always works) and thiagoalessio/tesseract_ocr (PHP wrapper) power TextExtractionService's hybrid pipeline (Scope 1.4). The Tesseract wrapper shells out to a system 'tesseract-ocr' binary for OCR of images/scanned PDFs — either a real system install (apt-get install tesseract-ocr) or, if that's not available (e.g. no root), the self-contained fallback copy already committed at storage/tesseract-bin, which TextExtractionService detects and uses automatically (see README section 2.3). TextExtractionService degrades gracefully (falls through to a validation_errors message) only if neither is present.",
+    "_comment_platform_pin": "config.platform.php is pinned to 8.2.0 (matching the 'require.php' floor above) so composer update always resolves dependencies as if running on PHP 8.2, regardless of which PHP a contributor's own machine actually has installed. Without this, running composer update on a newer local PHP (e.g. 8.4) silently locks in transitive packages that require that newer PHP too, which then fails to install on any PHP 8.2/8.3 host (like Railway's build, or a grading panelist's machine) even though composer.json still claims ^8.2 support.",
     "autoload": {
         "psr-4": {
             "App\\": "app/",
@@ -59,6 +60,9 @@
             "advisories": {
                 "block": false
             }
+        },
+        "platform": {
+            "php": "8.2.0"
         }
     },
     "minimum-stability": "stable",
