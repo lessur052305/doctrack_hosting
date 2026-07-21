@@ -1,6 +1,10 @@
-PURCHASE REQUISITION
-Requisition No: PR-2026-0307
-Department: General Services
-Item Description: Industrial floor cleaning detergent and mop supplies for the janitorial staff
-Quantity: 30 gallons
-Budget: PHP 15,000.00
+Purchase Requisition Form
+Requisition No PR-2026-2176
+
+This request is filed by the Operations Division on June 21, 2026.
+
+Item description: heavy-duty extension cords and surge protectors.
+Quantity requested: 15 units.
+Budget allocated: PHP 9,000.00.
+
+The department head has reviewed and endorsed this requisition for approval and release of funds.

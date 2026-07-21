@@ -10,6 +10,9 @@ return [
     'fixed_short_due_sla_minutes' => 15,
     'max_approver_sla_minutes' => 360, // 6-hour cap (Tier 2)
 
+    // Hours an Admin has to act after escalation before auto-approval fires.
+    'admin_grace_hours' => 12,
+
     // Default operational window, seeded into sla_settings on first access.
     'default_working_days' => [1, 2, 3, 4, 5, 6], // Mon-Sat (Carbon: 0=Sun..6=Sat)
     'default_work_start' => '09:00',

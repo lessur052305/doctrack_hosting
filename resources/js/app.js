@@ -1,13 +1,58 @@
 import './echo';
 
-// Fade-in on load for a subtle, professional page-transition feel.
-document.addEventListener('DOMContentLoaded', () => {
-    document.body.style.opacity = 0;
-    requestAnimationFrame(() => {
-        document.body.style.transition = 'opacity 150ms ease';
-        document.body.style.opacity = 1;
+// Browsers that support the View Transitions API also honor the
+// @view-transition CSS rule (see app.css) and handle the entire old-page
+// -> new-page crossfade natively on every navigation — no JS needed, and
+// nothing here should fight it. The manual opacity fade below is only a
+// fallback for browsers that don't support it yet, so every place it's
+// used is gated on this same check.
+const supportsViewTransitions = 'startViewTransition' in document;
+
+// Fade-in on load for a subtle, professional page-transition feel —
+// fallback only; browsers with native View Transitions already crossfade
+// the incoming page on their own, so doing this too would just layer a
+// second, redundant fade on top of it.
+if (!supportsViewTransitions) {
+    document.addEventListener('DOMContentLoaded', () => {
+        document.body.style.opacity = 0;
+        requestAnimationFrame(() => {
+            document.body.style.transition = 'opacity 150ms ease';
+            document.body.style.opacity = 1;
+        });
     });
 
+    // Fade the current page out the instant an internal link is clicked,
+    // so leaving a page feels like an intentional transition rather than
+    // the browser abruptly blanking out mid-navigation. Only for plain,
+    // same-origin link clicks — modified clicks (new tab, download,
+    // external links, in-page anchors) navigate immediately as normal.
+    document.addEventListener('click', (e) => {
+        if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+
+        const link = e.target.closest('a[href]');
+        if (!link || link.target === '_blank' || link.hasAttribute('download')) return;
+
+        let url;
+        try {
+            url = new URL(link.href, window.location.href);
+        } catch {
+            return;
+        }
+        if (url.origin !== window.location.origin) return;
+        // Same-page anchor (e.g. "#section") — no navigation happens, so
+        // there's nothing to fade for.
+        if (url.pathname === window.location.pathname && url.search === window.location.search && url.hash) return;
+
+        e.preventDefault();
+        document.body.style.transition = 'opacity 150ms ease';
+        document.body.style.opacity = 0;
+        setTimeout(() => {
+            window.location.href = link.href;
+        }, 150);
+    });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
     // Approver dashboard SLA countdown ticker.
     const countdownEls = document.querySelectorAll('[data-countdown]');
     if (countdownEls.length) {
@@ -32,46 +77,33 @@ document.addEventListener('DOMContentLoaded', () => {
         setInterval(tick, 30000);
     }
 
-    // Off-canvas sidebar (hamburger menu) — shared by every role's
-    // dashboard since they all extend this one layout. Below the `lg`
-    // breakpoint (and on a desktop window resized narrower than that) the
-    // sidebar starts translated off-screen; this wires the hamburger
-    // button, the in-drawer close button, the backdrop, Escape, and a link
-    // click inside the drawer to toggle it open/closed.
+    // Collapsible sidebar (hamburger menu) — shared by every role's
+    // dashboard since they all extend this one layout. It's a plain flex
+    // sibling of the main column (see layouts/app.blade.php), collapsed by
+    // toggling its width between w-64 and w-0 — the main column reflows on
+    // its own since they're flex siblings, no separate class to sync on a
+    // second element. Same toggle, same button, identical behavior at
+    // every screen width — no breakpoint-dependent branching here.
     const sidebar = document.getElementById('sidebar');
-    const sidebarBackdrop = document.getElementById('sidebar-backdrop');
     const sidebarToggle = document.getElementById('sidebar-toggle');
     const sidebarClose = document.getElementById('sidebar-close');
-    if (sidebar && sidebarBackdrop && sidebarToggle) {
+    if (sidebar && sidebarToggle) {
+        const isOpen = () => sidebar.classList.contains('w-64');
+
         const openSidebar = () => {
-            sidebar.classList.remove('-translate-x-full');
-            sidebar.setAttribute('aria-hidden', 'false');
-            sidebarBackdrop.classList.remove('hidden');
+            sidebar.classList.remove('w-0');
+            sidebar.classList.add('w-64');
             sidebarToggle.setAttribute('aria-expanded', 'true');
-            document.body.classList.add('overflow-hidden');
         };
         const closeSidebar = () => {
-            sidebar.classList.add('-translate-x-full');
-            sidebar.setAttribute('aria-hidden', 'true');
-            sidebarBackdrop.classList.add('hidden');
+            sidebar.classList.remove('w-64');
+            sidebar.classList.add('w-0');
             sidebarToggle.setAttribute('aria-expanded', 'false');
-            document.body.classList.remove('overflow-hidden');
         };
+        const toggleSidebar = () => (isOpen() ? closeSidebar() : openSidebar());
 
-        sidebarToggle.addEventListener('click', openSidebar);
+        sidebarToggle.addEventListener('click', toggleSidebar);
         sidebarClose?.addEventListener('click', closeSidebar);
-        sidebarBackdrop.addEventListener('click', closeSidebar);
-        sidebar.querySelectorAll('a').forEach((link) => link.addEventListener('click', closeSidebar));
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') closeSidebar();
-        });
-        // A desktop window resized back up past `lg` shows the persistent
-        // sidebar again via CSS alone (lg:translate-x-0) — this just makes
-        // sure the backdrop/scroll-lock don't stay stuck on if it was left
-        // open while narrow.
-        window.addEventListener('resize', () => {
-            if (window.innerWidth >= 1024) closeSidebar();
-        });
     }
 
     // Notification bell — live unread count/list, present on every page.

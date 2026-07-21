@@ -1,0 +1,12 @@
+JOB ORDER
+
+Job Order No.: JO-2026-1063
+Date Requested: June 10, 2026
+Department: Engineering Department
+Requested By: Ferdinand Aquino
+Priority: Urgent
+
+Description of Work:
+repair of a door lock in the server room that has become difficult to turn.
+
+Please coordinate with the requesting department to schedule the work at the earliest convenient time. Kindly notify the front desk upon completion so the request can be closed out in the tracking log.

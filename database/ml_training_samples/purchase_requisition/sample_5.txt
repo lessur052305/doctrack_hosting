@@ -1,6 +1,10 @@
-PURCHASE REQUISITION
-Requisition No: PR-2026-0305
-Department: Security and Safety
-Item Description: First aid kits fully stocked per DOLE requirements, for placement in each department
-Quantity: 8 units
-Budget: PHP 9,600.00
+REQUEST FOR PURCHASE
+
+Requisition No.: PR-2026-2154
+Department: Security Office
+
+Item description and quantity: additional indoor security cameras for the warehouse entrance, 4 units requested.
+Budget: PHP 32,000.00.
+Date filed: June 19, 2026.
+
+This was requested to address a gap identified during the department's recent inventory review, and prompt processing would be appreciated given current stock levels.

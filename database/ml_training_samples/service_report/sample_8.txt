@@ -1,6 +1,8 @@
-SERVICE REPORT
-Service Report No: SR-2026-0408
-Technician: Leonora Castillo
-Date of Service: February 26, 2026
-Findings:
-Elevator serving the main office building underwent its scheduled annual inspection. Door sensors, emergency brake system, and cable tension were all tested and found within acceptable safety parameters. Certification sticker was updated and posted inside the cabin as required.
+SERVICE COMPLETION REPORT
+
+Service report no.: SR-2026-3221
+Date of service rendered: June 27, 2026
+Technician on duty: Miguel Torres
+
+Summary of work: maintenance of the pantry water dispenser units.
+Findings and recommendations: Units were descaled and filters replaced; no leaks or performance issues observed after servicing.

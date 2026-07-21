@@ -1,6 +1,8 @@
 @php
-    $link = fn($route) => 'flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ' .
-        (request()->routeIs($route.'*') ? 'bg-primary-800 text-white' : 'text-primary-200 hover:bg-primary-800/60 hover:text-white');
+    $link = fn($route) => 'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 ' .
+        (request()->routeIs($route.'*')
+            ? 'bg-white/10 text-white shadow-inner ring-1 ring-white/10'
+            : 'text-primary-200/85 hover:bg-white/5 hover:text-white');
 @endphp
 
 <a href="{{ route('originator.dashboard') }}" class="{{ $link('originator.dashboard') }}">

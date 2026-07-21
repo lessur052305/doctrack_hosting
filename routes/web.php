@@ -126,6 +126,7 @@ Route::middleware('auth')->group(function () {
         Route::get('/sla-queue', [AdminController::class, 'slaQueue'])->name('sla.queue');
         Route::post('/sla-queue/{assignment}/override', [AdminController::class, 'override'])->name('sla.override');
         Route::post('/sla-queue/override-batch', [AdminController::class, 'overrideBatch'])->name('sla.overrideBatch');
+        Route::post('/sla-queue/document/{document}/review', [AdminController::class, 'reviewAutoApproval'])->name('sla.review');
 
         Route::get('/workflow-config', [AdminController::class, 'workflowConfig'])->name('workflow.config');
         Route::post('/workflow-config', [AdminController::class, 'storeStage'])->name('workflow.store');

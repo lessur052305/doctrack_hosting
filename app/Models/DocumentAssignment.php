@@ -79,7 +79,8 @@ class DocumentAssignment extends Model
     protected $fillable = [
         'document_id', 'user_id', 'stage_id', 'due_date', 'priority_rank',
         'individual_status', 'comments', 'sla_expires_at', 'admin_override_at',
-        'admin_override_by', 'escalated_to_admin', 'auto_approved', 'acted_at',
+        'admin_override_by', 'escalated_to_admin', 'escalated_at', 'auto_approved', 'acted_at',
+        'admin_reviewed_at', 'admin_reviewed_by', 'admin_review_note', 'admin_review_outcome',
     ];
 
     protected $casts = [
@@ -88,7 +89,9 @@ class DocumentAssignment extends Model
         'admin_override_at' => 'datetime',
         'acted_at' => 'datetime',
         'escalated_to_admin' => 'boolean',
+        'escalated_at' => 'datetime',
         'auto_approved' => 'boolean',
+        'admin_reviewed_at' => 'datetime',
     ];
 
     public function document()
@@ -116,6 +119,11 @@ class DocumentAssignment extends Model
         return $this->belongsTo(User::class, 'admin_override_by', 'user_id');
     }
 
+    public function reviewedBy()
+    {
+        return $this->belongsTo(User::class, 'admin_reviewed_by', 'user_id');
+    }
+
     /** Seconds remaining before SLA breach — used for the countdown UI. */
     public function getSecondsRemainingAttribute(): ?int
     {
@@ -126,6 +134,20 @@ class DocumentAssignment extends Model
         // ($absolute=false) form; round explicitly rather than let PHP's
         // implicit float->int narrowing throw a deprecation warning.
         return (int) round(now()->diffInSeconds($this->sla_expires_at, false));
+    }
+
+    /**
+     * When the system will auto-approve this assignment if no Admin acts —
+     * escalated_at + config('sla.admin_grace_hours'). Null once the window
+     * no longer applies (already resolved, or never escalated).
+     */
+    public function adminGraceExpiresAt(): ?\Carbon\Carbon
+    {
+        if (!$this->escalated_at || $this->individual_status !== 'pending') {
+            return null;
+        }
+
+        return $this->escalated_at->copy()->addHours(config('sla.admin_grace_hours', 12));
     }
 
     /**

@@ -1,7 +1,8 @@
-JOB ORDER
-Job Order No: JO-2026-0205
-Date Requested: February 2, 2026
-Requested By: Carmela Santos, HR Officer
-Department: Human Resources
-Description of Work:
-Set up the new employee orientation room, including arranging furniture, testing the projector and sound system, and ensuring all training materials are printed and available. Orientation for twelve new hires is scheduled for the following Monday morning.
+INTERNAL JOB ORDER REQUEST
+Reference: Job Order No JO-2026-1098
+
+Engineering Department is requesting maintenance support.
+Requested by: Bianca Fernandez
+Date requested: June 15, 2026
+
+Description of work needed: general cleaning and dust removal from the server room racks and cooling vents. This has been reported more than once and the department would appreciate prompt attention given its impact on daily operations.

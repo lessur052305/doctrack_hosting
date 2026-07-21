@@ -1,6 +1,11 @@
 SERVICE REPORT
-Service Report No: SR-2026-0406
-Technician: Corazon Espinosa
-Date of Service: February 12, 2026
-Findings:
-Security camera system in the parking area was found with two non-functioning units near the east entrance. Both cameras had failed power supplies, which were replaced. Full coverage was confirmed restored via the monitoring station, with all sixteen cameras now recording properly.
+
+Service Report No.: SR-2026-3195
+Date of Service: June 25, 2026
+Technician: Roberto Cruz
+
+Work Performed: replacement of HVAC air filters throughout the 4th floor.
+
+Findings: All filters were replaced as scheduled; airflow noticeably improved in the units that had visibly dirty filters prior to service.
+
+The area has been left in working condition and the requesting department was informed of the outcome upon completion.

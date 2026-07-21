@@ -1,0 +1,8 @@
+SERVICE COMPLETION REPORT
+
+Service report no.: SR-2026-3026
+Date of service rendered: June 12, 2026
+Technician on duty: Cristina Manalo
+
+Summary of work: troubleshooting of intermittent network connectivity in the accounting department.
+Findings and recommendations: A faulty network switch port was identified as the cause; traffic was rerouted to a working port and the affected switch has been flagged for replacement.

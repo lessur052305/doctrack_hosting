@@ -64,6 +64,36 @@ class ClassificationService
     }
 
     /**
+     * How similar two documents' vocabulary is, as a 0.0-1.0 fraction —
+     * used to warn an admin staging training samples that a new upload
+     * looks like a near-duplicate of one already staged in that category
+     * (see AdminController::stageTrainingSamples()).
+     *
+     * Deliberately simple word-set overlap (Jaccard similarity on the same
+     * preprocessed tokens train()/classify() already use), not a full
+     * TF-IDF + cosine comparison — this only needs to catch "these two
+     * documents are basically copies of each other," not produce a
+     * precise similarity score, so it doesn't need to fit a vectorizer at
+     * all. Two genuinely different same-category documents (different
+     * department, item, dates) naturally share some domain vocabulary —
+     * that overlap is expected and fine, not something to flag.
+     */
+    public function wordOverlapSimilarity(string $textA, string $textB): float
+    {
+        $wordsA = array_unique(explode(' ', $this->preprocess($textA)));
+        $wordsB = array_unique(explode(' ', $this->preprocess($textB)));
+
+        $union = array_unique(array_merge($wordsA, $wordsB));
+        if (empty($union)) {
+            return 0.0;
+        }
+
+        $intersection = array_intersect($wordsA, $wordsB);
+
+        return count($intersection) / count($union);
+    }
+
+    /**
      * Train (or retrain) the SVM classifier from labeled sample documents.
      *
      * @param  array<string, array<int, string>>  $samplesByCategory
@@ -135,7 +165,12 @@ class ClassificationService
         return MlModelRepository::create([
             'model_name' => 'Support Vector Machine (SVM) + TF-IDF',
             'version' => 'v' . now()->format('Ymd.His'),
-            'accuracy_score' => $this->estimateTrainingAccuracy($samples, $labels, $svm),
+            // Cross-validated, not resubstitution — see
+            // estimateAccuracyViaCrossValidation()'s docblock for why this
+            // matters. The FINAL model above is still trained on every
+            // staged sample; only this accuracy estimate uses temporary
+            // held-out folds, discarded once the score is computed.
+            'accuracy_score' => $this->estimateAccuracyViaCrossValidation($samplesByCategory),
             'model_file_path' => $svmPath,
             'training_sample_count' => count($samples),
             'is_active' => true,
@@ -208,19 +243,95 @@ class ClassificationService
         return 85.0; // neutral default when probability estimates are off
     }
 
-    /** In-sample accuracy shown on the admin ML dashboard (Table 3.6.3 style). */
-    private function estimateTrainingAccuracy(array $samples, array $labels, SVC $svm): float
+    /**
+     * Honest accuracy estimate shown on the admin ML dashboard, via
+     * stratified k-fold cross-validation — NOT the resubstitution accuracy
+     * this used to compute (asking the model to re-predict the exact
+     * samples it was just trained on, which only measures memorization and
+     * swings wildly between training runs even at the same sample count).
+     *
+     * For each fold: hold that fold's documents out completely, fit a
+     * throwaway vectorizer + TF-IDF + SVM on everything else, and predict
+     * the held-out fold — documents that specific model has genuinely never
+     * seen. Averaging across folds, where every sample gets held out
+     * exactly once, uses the whole staged corpus for testing without ever
+     * testing a model on data it trained on.
+     *
+     * "Stratified" = each fold gets a proportional slice from every
+     * category (not a plain random split), which matters here because the
+     * staged corpus is small (as few as 5 samples in a category) — a
+     * non-stratified split risks a fold with zero examples of some
+     * category, which SVC can't train or score against.
+     *
+     * This never touches the final production model returned by train(),
+     * which is still fit on the complete staged corpus for the best real
+     * classifier — folds are a temporary, throwaway split that exists only
+     * long enough to produce this one honest number.
+     */
+    private function estimateAccuracyViaCrossValidation(array $samplesByCategory): float
     {
-        if (empty($samples)) {
-            return 0.0;
-        }
-        $predictions = $svm->predict($samples);
-        $correct = 0;
-        foreach ($predictions as $i => $p) {
-            if ($p === $labels[$i]) {
-                $correct++;
+        $smallestCategory = min(array_map('count', $samplesByCategory));
+        // 5 folds when there's enough data for it; never more folds than
+        // the smallest category has samples, and never fewer than 2 (a
+        // single fold can't hold anything out).
+        $folds = max(2, min(5, $smallestCategory));
+
+        $foldSamples = array_fill(0, $folds, []);
+        $foldLabels = array_fill(0, $folds, []);
+
+        foreach ($samplesByCategory as $category => $docs) {
+            $docs = array_values($docs);
+            shuffle($docs);
+            foreach ($docs as $i => $doc) {
+                $f = $i % $folds;
+                $foldSamples[$f][] = $doc;
+                $foldLabels[$f][] = $category;
             }
         }
-        return round(($correct / count($labels)) * 100, 2);
+
+        $totalCorrect = 0;
+        $totalScored = 0;
+
+        for ($testFold = 0; $testFold < $folds; $testFold++) {
+            $trainSamples = [];
+            $trainLabels = [];
+            foreach ($foldSamples as $f => $docs) {
+                if ($f === $testFold) {
+                    continue;
+                }
+                $trainSamples = array_merge($trainSamples, array_map([$this, 'preprocess'], $docs));
+                $trainLabels = array_merge($trainLabels, $foldLabels[$f]);
+            }
+
+            $testSamples = array_map([$this, 'preprocess'], $foldSamples[$testFold]);
+            $testLabels = $foldLabels[$testFold];
+
+            if (empty($testSamples) || count(array_unique($trainLabels)) < 2) {
+                continue; // degenerate fold (can happen at the small end) — skip rather than crash
+            }
+
+            $vectorizer = new TokenCountVectorizer(new WhitespaceTokenizer());
+            $vectorizer->fit($trainSamples);
+            $vectorizer->transform($trainSamples);
+            $vectorizer->transform($testSamples); // same fitted vocabulary, never refit on test data
+
+            $tfIdf = new TfIdfTransformer();
+            $tfIdf->fit($trainSamples);
+            $tfIdf->transform($trainSamples);
+            $tfIdf->transform($testSamples); // same fitted IDF weights
+
+            $foldSvm = new SVC(Kernel::LINEAR, 1.0, 3, null, 0.0, 0.001, 100, true, false);
+            $foldSvm->train($trainSamples, $trainLabels);
+
+            $predictions = $foldSvm->predict($testSamples);
+            foreach ($predictions as $i => $p) {
+                $totalScored++;
+                if ($p === $testLabels[$i]) {
+                    $totalCorrect++;
+                }
+            }
+        }
+
+        return $totalScored > 0 ? round(($totalCorrect / $totalScored) * 100, 2) : 0.0;
     }
 }

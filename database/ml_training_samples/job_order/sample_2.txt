@@ -1,7 +1,8 @@
-JOB ORDER
-Job Order No: JO-2026-0202
-Date Requested: January 12, 2026
-Requested By: Ramon Cruz, Facilities Manager
-Department: Building Maintenance
-Description of Work:
-Repair the leaking pipe fitting in the second floor restroom and replace the corroded shut-off valve. Inspect nearby fixtures for additional water damage. Coordinate with the plumbing contractor for parts sourcing. Work should be completed outside regular office hours to avoid disrupting staff.
+INTERNAL JOB ORDER REQUEST
+Reference: Job Order No JO-2026-1077
+
+Finance Department is requesting maintenance support.
+Requested by: Ricardo Villanueva
+Date requested: June 12, 2026
+
+Description of work needed: servicing of the backup generator to ensure it starts properly during the scheduled monthly test. This has been reported more than once and the department would appreciate prompt attention given its impact on daily operations.

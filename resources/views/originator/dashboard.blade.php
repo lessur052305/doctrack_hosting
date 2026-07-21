@@ -8,16 +8,18 @@
     {{-- Drag-and-drop ingestion card --}}
     <div class="lg:col-span-1">
         <div class="bg-white rounded-xl shadow-card border border-surface-200 p-6">
-            <h2 class="text-sm font-semibold text-surface-900 mb-1">New Submission</h2>
+            <h2 class="text-sm font-semibold text-surface-900 tracking-tight mb-1">New Submission</h2>
             <p class="text-xs text-surface-500 mb-4">The system will classify, validate, and route your document(s) automatically. Select more than one file to submit them together as a single grouped approval request.</p>
 
             <form method="POST" action="{{ route('originator.documents.store') }}" enctype="multipart/form-data" id="upload-form">
                 @csrf
                 <label for="file-input" id="dropzone"
-                    class="flex flex-col items-center justify-center gap-2 border-2 border-dashed border-surface-300 rounded-xl py-10 px-4 text-center cursor-pointer transition-colors hover:border-primary-400 hover:bg-primary-50/50">
-                    <svg class="w-9 h-9 text-primary-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
-                    </svg>
+                    class="flex flex-col items-center justify-center gap-2 border-2 border-dashed border-surface-300 rounded-xl py-10 px-4 text-center cursor-pointer transition-all hover:border-primary-400 hover:bg-primary-50/50">
+                    <span class="w-12 h-12 rounded-full bg-primary-50 flex items-center justify-center">
+                        <svg class="w-6 h-6 text-primary-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                        </svg>
+                    </span>
                     <span class="text-sm font-medium text-surface-700">Drag & drop your document(s) here</span>
                     <span class="text-xs text-surface-400">or click to browse — PDF, DOCX, TXT, PNG, JPG (max 20MB each, up to 20 files)</span>
                     <span id="file-name" class="text-xs font-medium text-primary-700 mt-1"></span>
@@ -32,7 +34,7 @@
                 </div>
 
                 <button type="submit"
-                    class="mt-4 w-full bg-primary-700 hover:bg-primary-800 text-white text-sm font-medium py-2.5 rounded-lg transition-colors">
+                    class="mt-4 w-full bg-gradient-to-b from-primary-600 to-primary-700 hover:from-primary-700 hover:to-primary-800 text-white text-sm font-medium py-2.5 rounded-lg shadow-sm transition-all">
                     Submit Document(s)
                 </button>
             </form>
@@ -43,8 +45,8 @@
     <div class="lg:col-span-2">
         <div class="bg-white rounded-xl shadow-card border border-surface-200 overflow-hidden">
             <div class="px-6 py-4 border-b border-surface-200 flex items-center justify-between">
-                <h2 class="text-sm font-semibold text-surface-900">Your Submissions</h2>
-                <span id="submissions-total" class="text-xs text-surface-400">{{ $documents->total() }} total</span>
+                <h2 class="text-sm font-semibold text-surface-900 tracking-tight">Your Submissions</h2>
+                <span id="submissions-total" class="text-xs text-surface-400 tabular-nums">{{ $documents->total() }} total</span>
             </div>
 
             <form method="GET" class="px-6 py-4 border-b border-surface-200 space-y-3">
@@ -69,7 +71,7 @@
                             <option value="{{ $c }}" {{ request('category') === $c ? 'selected' : '' }}>{{ $c }}</option>
                         @endforeach
                     </select>
-                    <button class="text-xs font-medium bg-primary-700 hover:bg-primary-800 text-white px-4 py-2 rounded-lg">Filter</button>
+                    <button class="text-xs font-medium bg-primary-700 hover:bg-primary-800 text-white px-4 py-2 rounded-lg shadow-sm transition-colors">Filter</button>
                     @if(request('document') || request('status') || request('category'))
                         <a href="{{ route('originator.dashboard') }}" class="text-xs font-medium text-surface-500 hover:underline">Clear</a>
                     @endif

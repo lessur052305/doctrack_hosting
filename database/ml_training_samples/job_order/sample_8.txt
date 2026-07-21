@@ -1,7 +1,8 @@
-JOB ORDER
-Job Order No: JO-2026-0208
-Date Requested: February 23, 2026
-Requested By: Julius Bautista, Maintenance Lead
-Department: Facilities and Grounds
-Description of Work:
-Repaint the exterior perimeter fence along the north side of the compound, which has visible rust and peeling paint. Sand down affected areas, apply rust-inhibiting primer, and finish with two coats of the company's standard gray exterior paint.
+INTERNAL JOB ORDER REQUEST
+Reference: Job Order No JO-2026-1119
+
+Warehouse & Logistics is requesting maintenance support.
+Requested by: Dominic Pascual
+Date requested: June 18, 2026
+
+Description of work needed: installation of a new water dispenser unit on the 4th floor pantry. This has been reported more than once and the department would appreciate prompt attention given its impact on daily operations.

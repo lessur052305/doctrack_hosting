@@ -1,0 +1,8 @@
+INTERNAL JOB ORDER REQUEST
+Reference: Job Order No JO-2026-1014
+
+Warehouse & Logistics is requesting maintenance support.
+Requested by: Maria Reyes
+Date requested: June 3, 2026
+
+Description of work needed: installation of additional network cabling and a switch in the newly renovated cubicle area to support six new workstations. This has been reported more than once and the department would appreciate prompt attention given its impact on daily operations.

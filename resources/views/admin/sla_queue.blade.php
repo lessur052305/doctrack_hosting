@@ -68,6 +68,9 @@
                                 <p class="text-xs text-surface-500">
                                     Approver: {{ $activeAssignment->approver->full_name ?? 'Unassigned' }} &middot;
                                     Expired <span data-live-time="{{ $activeAssignment->sla_expires_at->timestamp }}">{{ $activeAssignment->sla_expires_at->diffForHumans() }}</span>
+                                    @if($activeAssignment->adminGraceExpiresAt())
+                                        &middot; <span data-live-time="{{ $activeAssignment->adminGraceExpiresAt()->timestamp }}" data-live-urgent-under="7200" class="font-medium">{{ $activeAssignment->adminGraceExpiresAt()->diffForHumans() }}</span> until system auto-approval
+                                    @endif
                                 </p>
                             </div>
 
@@ -99,6 +102,67 @@
 
     @if($assignments->hasPages())
         <div>{{ $assignments->links() }}</div>
+    @endif
+
+    @if($reviewContainers->isNotEmpty())
+        <div class="pt-4">
+            <h2 class="text-sm font-semibold text-surface-900 mb-1">Auto-Approved — Awaiting Review</h2>
+            <p class="text-xs text-surface-500 mb-4">
+                These documents had one or more stages auto-approved by the system after no one acted in time. Confirm if everything looks fine, or dispute if you find a problem — disputing flags the whole document and asks the originator to resubmit; it does not reverse the approval(s).
+            </p>
+
+            <div class="space-y-4">
+                @foreach($reviewContainers as $container)
+                    @php $doc = $container->document; @endphp
+                    <div class="rounded-xl border border-processing-500/20 bg-white shadow-card overflow-hidden">
+                        <div class="p-6">
+                            <h3 class="text-sm font-semibold text-surface-900 mb-1">{{ $doc->title }}</h3>
+                            <p class="text-xs text-surface-500 mb-3">
+                                Category: {{ $doc->ml_category }} &middot;
+                                Uploaded {{ $doc->upload_date?->format('M j, Y g:i A') ?? '—' }} &middot;
+                                Due {{ $doc->due_date?->format('M j, Y g:i A') ?? '—' }} &middot;
+                                <button type="button"
+                                    onclick="openDocumentViewer('{{ route('documents.file', $doc) }}', '{{ $doc->mime_type }}', '{{ addslashes($doc->original_filename ?? $doc->title) }}')"
+                                    class="text-primary-700 hover:underline font-medium">View original file</button>
+                            </p>
+
+                            <div class="mb-4">
+                                <x-workflow-stage-list :document="$doc" />
+                            </div>
+
+                            <ul class="mb-4 divide-y divide-surface-100 border border-surface-100 rounded-lg overflow-hidden">
+                                @foreach($container->assignments as $reviewAssignment)
+                                    <li class="px-4 py-2.5 bg-surface-50/50">
+                                        <p class="text-xs font-medium text-surface-800">{{ $reviewAssignment->stage->stage_name }}</p>
+                                        <p class="text-xs text-surface-500">
+                                            Was assigned to: {{ $reviewAssignment->approver->full_name ?? 'Unassigned' }} &middot;
+                                            SLA breached <span data-live-time="{{ optional($reviewAssignment->sla_expires_at)->timestamp }}">{{ optional($reviewAssignment->sla_expires_at)->diffForHumans() }}</span> &middot;
+                                            Auto-approved <span data-live-time="{{ optional($reviewAssignment->acted_at)->timestamp }}">{{ optional($reviewAssignment->acted_at)->diffForHumans() }}</span>
+                                        </p>
+                                    </li>
+                                @endforeach
+                            </ul>
+
+                            <form method="POST" action="{{ route('admin.sla.review', $doc) }}" class="space-y-3">
+                                @csrf
+                                <textarea name="note" rows="2" placeholder="Note (required if disputing)…"
+                                    class="w-full rounded-lg border-surface-300 text-xs focus:border-primary-500 focus:ring-primary-500 px-4 py-3"></textarea>
+                                <div class="flex justify-end gap-3">
+                                    <button type="submit" name="outcome" value="confirmed"
+                                        class="bg-approved-500 hover:bg-approved-700 text-white text-xs font-semibold px-6 py-2.5 rounded-lg transition-colors">
+                                        Confirm
+                                    </button>
+                                    <button type="submit" name="outcome" value="disputed"
+                                        class="bg-rejected-500 hover:bg-rejected-700 text-white text-xs font-semibold px-6 py-2.5 rounded-lg transition-colors">
+                                        Dispute
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                @endforeach
+            </div>
+        </div>
     @endif
 </div>
 @endsection

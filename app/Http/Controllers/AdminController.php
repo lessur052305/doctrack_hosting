@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Mail\AutoApprovalDisputedMail;
 use App\Models\AuditLog;
 use App\Models\DocumentAssignment;
 use App\Models\DocumentRepository;
@@ -21,6 +22,7 @@ use App\Services\WorkflowService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Validation\Rule;
 
 class AdminController extends Controller
@@ -56,16 +58,18 @@ class AdminController extends Controller
             ->orderBy('sla_expires_at')
             ->get();
 
-        return [$stats, $slaAlerts];
+        $reviewCount = DocumentAssignment::where('auto_approved', true)->whereNull('admin_reviewed_at')->count();
+
+        return [$stats, $slaAlerts, $reviewCount];
     }
 
     /** Admin control-center overview. */
     public function dashboard()
     {
-        [$stats, $slaAlerts] = $this->overviewData();
+        [$stats, $slaAlerts, $reviewCount] = $this->overviewData();
         $activeModel = MlModelRepository::active();
 
-        return view('admin.dashboard', compact('stats', 'slaAlerts', 'activeModel'));
+        return view('admin.dashboard', compact('stats', 'slaAlerts', 'reviewCount', 'activeModel'));
     }
 
     /**
@@ -80,10 +84,10 @@ class AdminController extends Controller
      */
     public function overviewRefresh()
     {
-        [$stats, $slaAlerts] = $this->overviewData();
+        [$stats, $slaAlerts, $reviewCount] = $this->overviewData();
         $activeModel = MlModelRepository::active();
 
-        return view('admin.partials.overview', compact('stats', 'slaAlerts', 'activeModel'));
+        return view('admin.partials.overview', compact('stats', 'slaAlerts', 'reviewCount', 'activeModel'));
     }
 
     /**
@@ -94,9 +98,9 @@ class AdminController extends Controller
      */
     public function overviewPoll()
     {
-        [$stats, $slaAlerts] = $this->overviewData();
+        [$stats, $slaAlerts, $reviewCount] = $this->overviewData();
 
-        return response()->json(['stats' => $stats, 'sla_alert_count' => $slaAlerts->count()]);
+        return response()->json(['stats' => $stats, 'sla_alert_count' => $slaAlerts->count(), 'review_count' => $reviewCount]);
     }
 
     // ---------------------------------------------------------------
@@ -244,7 +248,21 @@ class AdminController extends Controller
     // ---------------------------------------------------------------
 
     private const TRAINING_MIN_PER_CATEGORY = 5;
-    private const TRAINING_MAX_PER_CATEGORY = 10;
+    // Raised from 10: staged samples now persist across training runs (see
+    // trainModel() below) so an admin can build up a larger, more diverse
+    // set over several upload sessions before training — 10 was a ceiling
+    // that made sense when every training run started from zero again, but
+    // would otherwise cap the whole accumulated corpus at 10 forever.
+    private const TRAINING_MAX_PER_CATEGORY = 20;
+    // Above this word-overlap fraction, a newly staged sample is flagged as
+    // a likely near-duplicate of one already staged in the same category
+    // (see stageTrainingSamples()). Chosen with headroom above what
+    // genuinely different same-category documents naturally share — real,
+    // distinct business documents in one category (different department,
+    // item, dates) were observed sharing up to ~80% of their vocabulary
+    // just from required boilerplate + domain terms; 0.85 flags true
+    // near-copies without punishing legitimate variety.
+    private const NEAR_DUPLICATE_THRESHOLD = 0.85;
 
     public function mlTraining()
     {
@@ -260,8 +278,10 @@ class AdminController extends Controller
         // switching devices; any admin can now pick up where another left
         // off. See the ml_staging_samples migration.
         $stagedSamples = MlStagingSample::with('stagedBy')->orderBy('created_at')->get()->groupBy('category');
+        $minPerCategory = self::TRAINING_MIN_PER_CATEGORY;
+        $maxPerCategory = self::TRAINING_MAX_PER_CATEGORY;
 
-        return view('admin.ml_training', compact('categories', 'activeModel', 'history', 'stagedSamples'));
+        return view('admin.ml_training', compact('categories', 'activeModel', 'history', 'stagedSamples', 'minPerCategory', 'maxPerCategory'));
     }
 
     /**
@@ -289,18 +309,46 @@ class AdminController extends Controller
             'files.*' => ['required', 'file', 'mimes:pdf,txt,docx', 'max:10240'],
         ]);
 
+        // Compared against as each new file is staged, growing to include
+        // files from THIS same batch too — so uploading two near-identical
+        // files in one request catches the second against the first, not
+        // just against whatever was already staged before this request.
+        $existingSamples = MlStagingSample::where('category', $category)->get(['original_filename', 'extracted_text']);
+        $duplicateWarnings = [];
+
         foreach ($validated['files'] as $file) {
-            MlStagingSample::create([
+            $text = $this->extractor->extract($file)['text'];
+
+            foreach ($existingSamples as $existing) {
+                $similarity = $this->classifier->wordOverlapSimilarity($text, $existing->extracted_text);
+                if ($similarity >= self::NEAR_DUPLICATE_THRESHOLD) {
+                    $duplicateWarnings[] = sprintf(
+                        '"%s" looks like a near-duplicate of already-staged "%s" (%d%% word overlap) — consider a more varied real example instead.',
+                        $file->getClientOriginalName(),
+                        $existing->original_filename,
+                        round($similarity * 100)
+                    );
+                    break; // one warning per new file is enough, no need to list every match
+                }
+            }
+
+            $existingSamples->push(MlStagingSample::create([
                 'category' => $category,
                 'original_filename' => $file->getClientOriginalName(),
-                'extracted_text' => $this->extractor->extract($file)['text'],
+                'extracted_text' => $text,
                 'staged_by' => $request->user()->user_id,
-            ]);
+            ]));
         }
 
         $totalStaged = MlStagingSample::where('category', $category)->count();
 
-        return back()->with('status', count($validated['files']) . " sample(s) added for '{$category}' ({$totalStaged} total staged).");
+        $response = back()->with('status', count($validated['files']) . " sample(s) added for '{$category}' ({$totalStaged} total staged).");
+
+        if ($duplicateWarnings) {
+            $response->with('warning', $duplicateWarnings);
+        }
+
+        return $response;
     }
 
     public function clearTrainingStaging(Request $request, string $category)
@@ -338,9 +386,15 @@ class AdminController extends Controller
         AuditLog::record($request->user()->user_id, null, 'ml_train',
             "Trained model #{$model->model_id} ({$model->version}) on {$model->training_sample_count} samples across " . count($categories) . ' categories. Estimated accuracy: ' . $model->accuracy_score . '%.');
 
-        MlStagingSample::truncate();
+        // Staged samples deliberately survive training now (no more
+        // truncate() here) — an admin can keep adding samples across
+        // multiple sessions and have the NEXT training run combine
+        // everything staged so far into one larger corpus, rather than
+        // every run starting from zero again. Use "Clear" on the ML
+        // Training page to explicitly wipe a category's staging if a fresh
+        // start is ever actually wanted.
 
-        return back()->with('status', "Model {$model->version} trained successfully (est. accuracy {$model->accuracy_score}%).");
+        return back()->with('status', "Model {$model->version} trained successfully on {$model->training_sample_count} samples (est. accuracy {$model->accuracy_score}%). Staged samples are kept — add more anytime and retrain to combine them.");
     }
 
     // ---------------------------------------------------------------
@@ -391,7 +445,95 @@ class AdminController extends Controller
             ['path' => $request->url(), 'query' => $request->query()]
         );
 
-        return view('admin.sla_queue', compact('assignments'));
+        // Grouped by document, same reasoning as $containers above: a
+        // document can have MORE than one auto-approved stage awaiting
+        // review at once (e.g. Budget Check and Final Approval both fired),
+        // and a flat per-stage list made that look like unrelated rows.
+        $reviewAssignments = DocumentAssignment::where('auto_approved', true)
+            ->whereNull('admin_reviewed_at')
+            ->with(['document', 'stage', 'approver'])
+            ->get();
+
+        $reviewContainers = $reviewAssignments
+            ->groupBy('document_id')
+            ->map(fn ($stageAssignments) => (object) [
+                'document' => $stageAssignments->first()->document,
+                'assignments' => $stageAssignments->sortBy(fn ($a) => $a->stage->sequence_order)->values(),
+            ])
+            ->sortBy(fn ($c) => $c->assignments->first()->acted_at)
+            ->values();
+
+        return view('admin.sla_queue', compact('assignments', 'reviewContainers'));
+    }
+
+    /**
+     * Section 5 follow-up: review every stage the SYSTEM auto-approved on
+     * ONE document, all at once — an admin reviews the document as a
+     * whole, not stage-by-stage (a document can have more than one
+     * auto-approved stage awaiting review, e.g. Budget Check AND Final
+     * Approval both firing). Confirming just leaves a note on each.
+     * Disputing does NOT reverse the approval(s) — there is no "reopen"
+     * path in WorkflowService::completeStage(), and unwinding an
+     * already-finalized document (possibly already notified/archived) is
+     * unsafe — instead it sets disputed_at once (global_status is left
+     * as-is, so the document's approval history stays intact) and asks the
+     * originator to resubmit a corrected version.
+     */
+    public function reviewAutoApproval(Request $request, DocumentRepository $document)
+    {
+        $pending = DocumentAssignment::where('document_id', $document->document_id)
+            ->where('auto_approved', true)
+            ->whereNull('admin_reviewed_at')
+            ->with('stage')
+            ->get();
+
+        abort_if($pending->isEmpty(), 404);
+
+        $validated = $request->validate([
+            'outcome' => ['required', 'in:confirmed,disputed'],
+            'note' => ['required_if:outcome,disputed', 'nullable', 'string', 'max:1000'],
+        ]);
+
+        $admin = $request->user();
+        $note = $validated['note'] ?? null;
+        $stageNames = $pending->pluck('stage.stage_name')->all();
+
+        foreach ($pending as $assignment) {
+            $assignment->admin_reviewed_at = now();
+            $assignment->admin_reviewed_by = $admin->user_id;
+            $assignment->admin_review_note = $note;
+            $assignment->admin_review_outcome = $validated['outcome'];
+            $assignment->save();
+        }
+
+        $stageList = implode(', ', $stageNames);
+
+        if ($validated['outcome'] === 'confirmed') {
+            AuditLog::record($admin->user_id, $document->document_id, 'admin_review',
+                "Confirmed auto-approved stage(s) '{$stageList}'." . ($note ? " Note: \"{$note}\"" : ''));
+
+            return back()->with('status', 'Marked as reviewed.');
+        }
+
+        $document->disputed_at = now();
+        $document->save();
+
+        AuditLog::record($admin->user_id, $document->document_id, 'admin_dispute',
+            "Disputed auto-approved stage(s) '{$stageList}': \"{$note}\"");
+
+        NotificationRecord::send($document->originator_id, $document->document_id,
+            "Your document '{$document->title}' was auto-approved by the system, but an Admin has disputed it: \"{$note}\". Please resubmit a corrected version.", 'high');
+
+        if ($document->originator->email) {
+            Mail::to($document->originator->email)->queue(new AutoApprovalDisputedMail($document, $stageNames, $note));
+        }
+
+        foreach (User::where('role', 'admin')->where('is_active', true)->where('user_id', '!=', $admin->user_id)->get() as $other) {
+            NotificationRecord::send($other->user_id, $document->document_id,
+                "{$admin->full_name} disputed the system's auto-approval of '{$document->title}': \"{$note}\".", 'high');
+        }
+
+        return back()->with('status', 'Disputed — the originator has been notified to resubmit.');
     }
 
     public function override(Request $request, DocumentAssignment $assignment)
@@ -755,9 +897,64 @@ class AdminController extends Controller
         $totalCount = (clone $query)->count();
         $avgOverdue = (clone $query)->avg('duration_overdue');
 
+        // Full roster for the "Top Approver" card's expanded view — EVERY
+        // approver, not just the ones with breaches, so a clean record is
+        // visible too, not just a leaderboard of offenders. breach_count
+        // respects the same filters as the rest of this report (so
+        // narrowing the date range/category above narrows this too);
+        // assignment_count is unfiltered by date (a lifetime total) so
+        // "0 breaches" can be read against "0 of 0 assignments" (never
+        // given work yet) vs "0 of 50" (a genuinely clean record).
+        $approverRoster = User::where('role', 'approver')
+            ->withCount([
+                'slaViolations as breach_count' => function ($q) use ($request) {
+                    if ($request->filled('document')) {
+                        $term = $request->string('document');
+                        $q->whereHas('document', fn ($dq) => $dq->where('title', 'like', "%{$term}%"));
+                    }
+                    if ($request->filled('category')) {
+                        $category = $request->string('category');
+                        $q->whereHas('document', fn ($dq) => $dq->where('ml_category', $category));
+                    }
+                    if ($request->filled('date_from')) {
+                        $q->whereDate('violation_timestamp', '>=', $request->date('date_from'));
+                    }
+                    if ($request->filled('date_to')) {
+                        $q->whereDate('violation_timestamp', '<=', $request->date('date_to'));
+                    }
+                },
+                'assignmentsAsApprover as assignment_count' => function ($q) use ($request) {
+                    if ($request->filled('category')) {
+                        $category = $request->string('category');
+                        $q->whereHas('document', fn ($dq) => $dq->where('ml_category', $category));
+                    }
+                },
+            ])
+            ->orderByDesc('breach_count')
+            ->orderBy('full_name')
+            ->get();
+
+        // Per-approver breakdown by category, for the roster's nested
+        // reveal. Not redundant with assigned_category: approvers can be
+        // reassigned to a different category over time (see
+        // AdminController::updateApproverStages()), but a SlaViolation
+        // records the category the DOCUMENT was in at breach time, not the
+        // approver's current assignment — so someone reassigned mid-tenure
+        // can legitimately have breach history split across categories
+        // that the roster's single lumped total would otherwise hide.
+        $byApproverCategory = (clone $query)
+            ->join('document_repository', 'sla_violations.document_id', '=', 'document_repository.document_id')
+            ->selectRaw('sla_violations.approver_id, document_repository.ml_category, count(*) as total')
+            ->groupBy('sla_violations.approver_id', 'document_repository.ml_category')
+            ->orderByDesc('total')
+            ->get()
+            ->groupBy('approver_id');
+
         return view('admin.sla_violations', [
             'violations' => $violations,
             'byApprover' => $byApprover,
+            'approverRoster' => $approverRoster,
+            'byApproverCategory' => $byApproverCategory,
             'byStage' => $byStage,
             'totalCount' => $totalCount,
             'avgOverdue' => round($avgOverdue ?? 0),

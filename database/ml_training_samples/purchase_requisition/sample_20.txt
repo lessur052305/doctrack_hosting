@@ -1,0 +1,12 @@
+PURCHASE REQUISITION
+
+Requisition No.: PR-2026-2099
+Department: IT Department
+Date: June 14, 2026
+Requested by: Bianca Fernandez
+
+Item Description: replacement projector bulbs for the training room units
+Quantity: 4 units
+Estimated Budget: PHP 16,000.00
+
+Justification: This purchase is needed to support ongoing department operations and should be sourced from an accredited supplier where available.

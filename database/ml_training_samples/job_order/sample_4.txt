@@ -1,7 +1,8 @@
-JOB ORDER
-Job Order No: JO-2026-0204
-Date Requested: January 25, 2026
-Requested By: Danilo Reyes, Electrical Foreman
-Department: Electrical and Mechanical
-Description of Work:
-Troubleshoot the recurring circuit breaker trips affecting the third floor lighting panel. Inspect wiring for shorts, test the load balance across circuits, and replace any damaged breakers. Provide a written summary of findings and recommended preventive measures.
+Company Job Order Form
+
+This Job Order No. JO-2026-1091 is submitted for approval.
+
+Requested by: Edgar Ramos, on behalf of Procurement Office.
+Date requested: June 14, 2026.
+
+Description of work: setup and calibration of a new projector in the training room ahead of next week's orientation. The requesting department asks that this be scheduled without disrupting regular working hours if possible, and that any parts needed be sourced from an approved supplier.

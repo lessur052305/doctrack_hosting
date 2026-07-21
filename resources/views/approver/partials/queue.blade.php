@@ -9,15 +9,17 @@
     @php
         $docCount = $container->documents->count();
     @endphp
-    <div class="review-container rounded-xl border {{ $container->is_batch ? 'border-primary-200 bg-primary-50/30' : 'border-surface-200 bg-white' }} shadow-card overflow-hidden" data-document-titles="{{ strtolower($container->documents->map(fn ($stageAssignments) => $stageAssignments->first()->document->title)->implode('|')) }}">
+    <div class="review-container rounded-xl border {{ $container->is_batch ? 'border-primary-200 bg-primary-50/30' : 'border-surface-200 bg-white' }} shadow-card hover:shadow-card-hover transition-shadow overflow-hidden" data-document-titles="{{ strtolower($container->documents->map(fn ($stageAssignments) => $stageAssignments->first()->document->title)->implode('|')) }}">
 
         {{-- Batch header — only shown when 2+ documents were submitted together --}}
         @if($container->is_batch)
             <div class="px-6 py-3 bg-primary-100/60 border-b border-primary-200 flex flex-wrap items-center justify-between gap-2">
                 <div class="flex items-center gap-2">
-                    <svg class="w-4 h-4 text-primary-700" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-                    </svg>
+                    <span class="w-6 h-6 rounded-md bg-primary-200/70 flex items-center justify-center flex-shrink-0">
+                        <svg class="w-3.5 h-3.5 text-primary-700" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                        </svg>
+                    </span>
                     <span class="text-xs font-semibold text-primary-800">Submitted Document/s - {{ $docCount }}</span>
                     <span class="text-xs text-surface-500">by {{ $container->originator->full_name }}</span>
                 </div>
@@ -80,7 +82,7 @@
                             ? ['Expired', 'bg-rejected-100 text-rejected-800 ring-rejected-500/40']
                             : ($priorityMap[$activeAssignment->priority_rank] ?? $priorityMap[2]);
                     @endphp
-                    <div class="flex flex-col sm:flex-row sm:items-center gap-4 rounded-lg border {{ $activeAssignment->escalated_to_admin ? 'border-rejected-200 bg-rejected-50/40' : 'border-primary-200 bg-primary-50/40' }} p-4">
+                    <div class="flex flex-col sm:flex-row sm:items-center gap-4 rounded-xl border {{ $activeAssignment->escalated_to_admin ? 'border-rejected-200 bg-rejected-50/40' : 'border-primary-200 bg-primary-50/40' }} p-4 shadow-sm">
                         <div class="flex-1 min-w-0">
                             <div class="flex items-center gap-2 mb-1">
                                 <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ring-1 ring-inset {{ $pClass }}">{{ $pLabel }}</span>
@@ -128,11 +130,11 @@
                                     class="w-full rounded-lg border-surface-300 text-xs focus:border-primary-500 focus:ring-primary-500 px-3 py-2"></textarea>
                                 <div class="flex gap-2">
                                     <button type="submit" name="decision" value="approved"
-                                        class="flex-1 bg-approved-500 hover:bg-approved-700 text-white text-xs font-semibold py-2 rounded-lg transition-colors">
+                                        class="flex-1 bg-gradient-to-b from-approved-500 to-approved-600 hover:from-approved-600 hover:to-approved-700 text-white text-xs font-semibold py-2 rounded-lg shadow-sm transition-all">
                                         Approve
                                     </button>
                                     <button type="submit" name="decision" value="rejected"
-                                        class="flex-1 bg-rejected-500 hover:bg-rejected-700 text-white text-xs font-semibold py-2 rounded-lg transition-colors">
+                                        class="flex-1 bg-gradient-to-b from-rejected-500 to-rejected-600 hover:from-rejected-600 hover:to-rejected-700 text-white text-xs font-semibold py-2 rounded-lg shadow-sm transition-all">
                                         Reject
                                     </button>
                                 </div>

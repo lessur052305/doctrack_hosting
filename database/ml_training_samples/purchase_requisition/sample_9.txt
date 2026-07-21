@@ -1,6 +1,12 @@
 PURCHASE REQUISITION
-Requisition No: PR-2026-0309
-Department: Electrical and Mechanical
-Item Description: Digital multimeters and insulated hand tool sets for the electrical maintenance team
-Quantity: 5 sets
-Budget: PHP 22,500.00
+
+Requisition No.: PR-2026-2198
+Department: IT Department
+Date: June 23, 2026
+Requested by: Allen Rose
+
+Item Description: a commercial-grade coffee maker for the pantry
+Quantity: 1 unit
+Estimated Budget: PHP 14,000.00
+
+Justification: This purchase is needed to support ongoing department operations and should be sourced from an accredited supplier where available.

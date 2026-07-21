@@ -12,15 +12,21 @@ class DocumentRepository extends Model
 
     /**
      * Broadcasts DocumentStatusChanged over Reverb whenever global_status
-     * actually changes, from wherever it changes — a single hook here
-     * instead of manually firing the event at every WorkflowService call
-     * site that touches this column, so a future new call site can't
-     * silently forget to push the update live.
+     * OR disputed_at actually changes, from wherever it changes — a single
+     * hook here instead of manually firing the event at every call site
+     * that touches either column, so a future new call site can't silently
+     * forget to push the update live. disputed_at is included alongside
+     * global_status because AdminController::reviewAutoApproval()'s
+     * dispute path deliberately never touches global_status (there's no
+     * "reopen" path to reverse an auto-approval — see that method's
+     * docblock), so without this the originator would only see a dispute
+     * via the ~5-10s polling fallback instead of instantly like every
+     * other status change.
      */
     protected static function booted(): void
     {
         static::updated(function (self $document) {
-            if ($document->wasChanged('global_status')) {
+            if ($document->wasChanged('global_status') || $document->wasChanged('disputed_at')) {
                 event(new DocumentStatusChanged($document));
             }
         });
@@ -30,7 +36,7 @@ class DocumentRepository extends Model
         'originator_id', 'batch_id', 'model_id', 'title', 'file_path', 'original_filename',
         'mime_type', 'ocr_text', 'used_ocr_fallback', 'ml_category', 'ml_confidence',
         'is_validated', 'validation_errors', 'due_date', 'global_status',
-        'previous_version_id', 'version_number', 'is_legacy_import',
+        'previous_version_id', 'version_number', 'is_legacy_import', 'disputed_at',
     ];
 
     protected $casts = [
@@ -40,10 +46,17 @@ class DocumentRepository extends Model
         'is_legacy_import' => 'boolean',
         'due_date' => 'datetime',
         'upload_date' => 'datetime',
+        'disputed_at' => 'datetime',
     ];
 
     // Every state a document can be in — mirrors Section 5 state machine.
     public const STATES = ['processing', 'classified_validated', 'approved', 'auto_approved', 'rejected'];
+
+    /** What <x-status-badge> should show — 'disputed' overrides the underlying global_status without replacing it. */
+    public function getDisplayStatusAttribute(): string
+    {
+        return $this->disputed_at ? 'disputed' : $this->global_status;
+    }
 
     public function originator()
     {

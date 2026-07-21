@@ -2,13 +2,73 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Smooth cross-page navigation — every click on an internal link is a
+   genuine full page load from Laravel (this isn't a single-page app), but
+   modern browsers can natively crossfade between the old and new document
+   instead of hard-cutting, purely via this CSS rule — no JS involved. In
+   browsers that don't support it yet, navigation just falls back to a
+   normal instant page load (this rule is silently ignored, nothing
+   breaks); resources/js/app.js adds a manual fade-out for that case. */
+@view-transition {
+    navigation: auto;
+}
+
+/* Keep the crossfade snappy and consistent with the rest of the app's
+   ~150-200ms transitions, rather than the browser's slower ~250ms default. */
+::view-transition-old(root),
+::view-transition-new(root) {
+    animation-duration: 180ms;
+    animation-timing-function: ease;
+}
+
 @layer base {
     input, select, textarea {
-        @apply shadow-sm;
+        @apply shadow-sm transition-shadow duration-150;
+    }
+
+    input:focus, select:focus, textarea:focus {
+        @apply ring-2 ring-primary-500/40 border-primary-400;
+    }
+
+    a, button {
+        @apply transition-colors duration-150;
+    }
+
+    /* Numeric columns (counts, timestamps, currency) line up cleanly when
+       digits share a fixed width instead of proportional spacing. */
+    table {
+        font-variant-numeric: tabular-nums;
+    }
+
+    /* Slim, unobtrusive scrollbar for the sidebar and any internal scroll
+       regions — the default browser scrollbar reads heavy against the
+       sidebar's dark background. */
+    ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+    }
+    ::-webkit-scrollbar-track {
+        background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+        @apply bg-surface-300 rounded-full;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+        @apply bg-surface-400;
     }
 }
 
 /* Live SLA countdown micro-interaction (paired with app.js ticker) */
 [data-countdown] {
     transition: color 300ms ease;
+}
+
+/* Subtle lift on hoverable cards/rows — paired with the card-hover shadow
+   token, used sparingly on rows/cards meant to feel clickable. */
+.hover-lift {
+    transition: box-shadow 200ms ease, transform 200ms ease;
+}
+.hover-lift:hover {
+    @apply shadow-card-hover;
+    transform: translateY(-1px);
 }

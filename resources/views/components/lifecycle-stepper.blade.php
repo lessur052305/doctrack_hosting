@@ -29,11 +29,11 @@
             $isCurrent  = $i === $currentIndex;
         @endphp
         <div class="flex items-center {{ $i < count($order) - 1 ? 'flex-1' : '' }}">
-            <div class="flex flex-col items-center gap-1">
-                <div class="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ring-2
-                    @if($isComplete) bg-approved-500 text-white ring-approved-500
-                    @elseif($isCurrent && $isRejected) bg-rejected-500 text-white ring-rejected-500
-                    @elseif($isCurrent) bg-processing-500 text-white ring-processing-500
+            <div class="flex flex-col items-center gap-1.5">
+                <div class="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ring-2 transition-shadow
+                    @if($isComplete) bg-gradient-to-br from-approved-500 to-approved-600 text-white ring-approved-500 shadow-sm shadow-approved-500/30
+                    @elseif($isCurrent && $isRejected) bg-gradient-to-br from-rejected-500 to-rejected-600 text-white ring-rejected-500 shadow-sm shadow-rejected-500/30
+                    @elseif($isCurrent) bg-gradient-to-br from-processing-500 to-processing-600 text-white ring-processing-500 shadow-sm shadow-processing-500/30
                     @else bg-surface-100 text-surface-400 ring-surface-200 @endif">
                     @if($isComplete)
                         <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
@@ -41,10 +41,10 @@
                         {{ $i + 1 }}
                     @endif
                 </div>
-                <span class="text-[11px] font-medium text-surface-500 whitespace-nowrap">{{ $steps[$key] }}</span>
+                <span class="text-[11px] font-medium text-surface-500 whitespace-nowrap tracking-wide">{{ $steps[$key] }}</span>
             </div>
             @if($i < count($order) - 1)
-                <div class="flex-1 h-0.5 mx-2 {{ $i < $currentIndex ? 'bg-approved-500' : 'bg-surface-200' }}"></div>
+                <div class="flex-1 h-0.5 mx-2 rounded-full {{ $i < $currentIndex ? 'bg-approved-500' : 'bg-surface-200' }}"></div>
             @endif
         </div>
     @endforeach

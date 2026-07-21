@@ -1,6 +1,12 @@
 PURCHASE REQUISITION
-Requisition No: PR-2026-0303
-Department: Warehouse Operations
-Item Description: Industrial pallet wrapping film, 500mm width, for outbound shipment packaging
-Quantity: 40 rolls
-Budget: PHP 12,800.00
+
+Requisition No.: PR-2026-2132
+Department: IT Department
+Date: June 17, 2026
+Requested by: Dominic Pascual
+
+Item Description: wireless ergonomic keyboards and mice for the accounting team
+Quantity: 9 sets
+Estimated Budget: PHP 22,500.00
+
+Justification: This purchase is needed to support ongoing department operations and should be sourced from an accredited supplier where available.

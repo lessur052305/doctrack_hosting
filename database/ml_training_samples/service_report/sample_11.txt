@@ -1,0 +1,8 @@
+Field Service Report
+Service Report No SR-2026-3013
+
+Technician assigned: Ricardo Villanueva
+Date of service: June 11, 2026
+
+This report covers preventive maintenance of the split-type air conditioning units on the 3rd floor.
+Findings: All units were cleaned and refrigerant levels checked; one unit had a slightly clogged filter which was cleaned on site. No further issues found. No additional issues were reported by staff on site during the visit.

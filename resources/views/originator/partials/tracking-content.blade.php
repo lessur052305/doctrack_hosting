@@ -52,7 +52,7 @@
                     class="text-primary-700 hover:underline font-medium">View original file</button>
             </p>
         </div>
-        <x-status-badge :status="$document->global_status" />
+        <x-status-badge :status="$document->display_status" />
     </div>
 
     <x-lifecycle-stepper :document="$document" />

@@ -1,0 +1,10 @@
+Purchase Requisition Form
+Requisition No PR-2026-2044
+
+This request is filed by the Operations Division on June 9, 2026.
+
+Item description: A4 size bond paper, 80gsm, for general office printing.
+Quantity requested: 50 reams.
+Budget allocated: PHP 12,500.00.
+
+The department head has reviewed and endorsed this requisition for approval and release of funds.

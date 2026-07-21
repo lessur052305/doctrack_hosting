@@ -60,17 +60,17 @@
             $isForcedHighlight = $highlightStageId !== null && $stage->stage_id === $highlightStageId;
             $isMyActive = ($isMine && $stage->stage_id === $myActiveStageId) || $isForcedHighlight;
         @endphp
-        <div class="flex items-center gap-3 rounded-lg border p-3
-            @if($isMyActive) border-primary-500 bg-primary-50 ring-1 ring-inset ring-primary-500/40
+        <div class="flex items-center gap-3 rounded-xl border p-3 transition-colors
+            @if($isMyActive) border-primary-500 bg-primary-50 ring-1 ring-inset ring-primary-500/40 shadow-sm
             @elseif($isMine) border-primary-200 bg-primary-50/40
             @elseif($state === 'pending') border-processing-500/30 bg-processing-50/40
             @else border-surface-200 @endif">
-            <div class="w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold flex-shrink-0
-                @if(in_array($state, ['approved', 'auto_approved'])) bg-approved-500 text-white
-                @elseif($state === 'rejected') bg-rejected-500 text-white
-                @elseif($isMyActive) bg-primary-600 text-white
-                @elseif($state === 'pending') bg-processing-500 text-white
-                @else bg-surface-200 text-surface-400 @endif">
+            <div class="w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold flex-shrink-0 shadow-sm
+                @if(in_array($state, ['approved', 'auto_approved'])) bg-gradient-to-br from-approved-500 to-approved-600 text-white
+                @elseif($state === 'rejected') bg-gradient-to-br from-rejected-500 to-rejected-600 text-white
+                @elseif($isMyActive) bg-gradient-to-br from-primary-500 to-primary-700 text-white
+                @elseif($state === 'pending') bg-gradient-to-br from-processing-500 to-processing-600 text-white
+                @else bg-surface-200 text-surface-400 shadow-none @endif">
                 @if(in_array($state, ['approved', 'auto_approved']))
                     <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
                 @elseif($state === 'rejected')
@@ -95,9 +95,15 @@
                         Not yet reached
                     @elseif($state === 'pending')
                         Awaiting decision{{ $assignment->approver ? ' · ' . $assignment->approver->full_name : '' }}
+                    @elseif($assignment->auto_approved)
+                        Auto-approved by the system
                     @else
-                        {{ $state === 'auto_approved' ? 'Auto-approved' : ucfirst($state) }}{{ $assignment->approver ? ' by ' . $assignment->approver->full_name : '' }}
-                        @if($assignment->acted_at) &middot; {{ $assignment->acted_at->diffForHumans() }} @endif
+                        {{ ucfirst($state) }}{{ $assignment->approver ? ' by ' . $assignment->approver->full_name : '' }}
+                        {{-- data-live-time hooks into the same global ticker that already
+                             keeps SLA countdowns updating every second (see the script in
+                             layouts/app.blade.php) — so "X ago" keeps counting up on its own,
+                             no refresh or live-poll swap needed just to see the number change. --}}
+                        @if($assignment->acted_at) &middot; <span data-live-time="{{ $assignment->acted_at->timestamp }}">{{ $assignment->acted_at->diffForHumans() }}</span> @endif
                     @endif
                 </p>
                 @if($assignment && $assignment->comments)

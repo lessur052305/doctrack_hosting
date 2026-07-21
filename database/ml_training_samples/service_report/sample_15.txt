@@ -1,0 +1,8 @@
+Field Service Report
+Service Report No SR-2026-3052
+
+Technician assigned: Bianca Fernandez
+Date of service: June 14, 2026
+
+This report covers annual maintenance of the passenger elevator serving floors 1 to 5.
+Findings: All safety mechanisms tested normal; minor adjustment made to the door sensor alignment. Elevator is cleared for continued use. No additional issues were reported by staff on site during the visit.

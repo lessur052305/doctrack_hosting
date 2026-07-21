@@ -1,6 +1,12 @@
 PURCHASE REQUISITION
-Requisition No: PR-2026-0306
-Department: Facilities and Grounds
-Item Description: Replacement fluorescent light fixtures for the main production floor, energy-efficient LED type
-Quantity: 25 units
-Budget: PHP 31,250.00
+
+Requisition No.: PR-2026-2165
+Department: IT Department
+Date: June 20, 2026
+Requested by: Teresa Navarro
+
+Item Description: uninterruptible power supply (UPS) units for the server rack
+Quantity: 3 units
+Estimated Budget: PHP 45,000.00
+
+Justification: This purchase is needed to support ongoing department operations and should be sourced from an accredited supplier where available.

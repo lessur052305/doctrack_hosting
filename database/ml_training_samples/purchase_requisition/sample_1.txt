@@ -1,6 +1,10 @@
-PURCHASE REQUISITION
-Requisition No: PR-2026-0301
-Department: Accounting Department
-Item Description: Heavy-duty paper shredder for confidential document disposal, model capable of shredding 20 sheets per pass
-Quantity: 1 unit
-Budget: PHP 18,500.00
+Purchase Requisition Form
+Requisition No PR-2026-2110
+
+This request is filed by the Operations Division on June 15, 2026.
+
+Item description: restocking supplies for the office first aid kits.
+Quantity requested: 10 kits.
+Budget allocated: PHP 8,000.00.
+
+The department head has reviewed and endorsed this requisition for approval and release of funds.

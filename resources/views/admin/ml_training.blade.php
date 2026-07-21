@@ -5,17 +5,31 @@
 @section('content')
 <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
+    @if(session('warning'))
+        <div class="lg:col-span-3 rounded-xl bg-processing-50 border border-processing-500/25 text-processing-700 px-4 py-3 text-sm shadow-sm">
+            <div class="flex items-center gap-2.5 font-medium mb-1">
+                <svg class="w-5 h-5 flex-shrink-0 text-processing-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>
+                Possible near-duplicate samples
+            </div>
+            <ul class="list-disc list-inside space-y-0.5 pl-1">
+                @foreach((array) session('warning') as $warning)
+                    <li>{{ $warning }}</li>
+                @endforeach
+            </ul>
+        </div>
+    @endif
+
     <div class="lg:col-span-2">
         <div class="bg-white rounded-xl shadow-card border border-surface-200 p-6">
             <h2 class="text-sm font-semibold text-surface-900 mb-1">Train / Retrain Classifier</h2>
             <p class="text-xs text-surface-500 mb-6">
-                <strong>Step 1:</strong> for each category below, pick 5–10 sample files, then click that category's own "Add" button — do this once per category.
+                <strong>Step 1:</strong> for each category below, pick {{ $minPerCategory }}–{{ $maxPerCategory }} sample files, then click that category's own "Add" button — do this once per category.
                 <strong>Step 2:</strong> once every category shows a green "staged" count, click "Train Model" at the bottom. Selecting files alone does not stage them — you must click each category's "Add" button first.
-                Staged samples are shared across every admin account and stay in place until trained or cleared — no need to finish in one sitting.
+                Staged samples are shared across every admin account and are kept even after training, so you can add more later and retrain on the combined set — no need to finish in one sitting, and no need to start over next time.
             </p>
 
             @php
-                $incomplete = collect($categories)->filter(fn ($c) => ($stagedSamples->get($c, collect()))->count() < 5)->values();
+                $incomplete = collect($categories)->filter(fn ($c) => ($stagedSamples->get($c, collect()))->count() < $minPerCategory)->values();
             @endphp
 
             <div class="space-y-6">
@@ -23,15 +37,15 @@
                     @php
                         $samplesInCategory = $stagedSamples->get($category, collect());
                         $count = $samplesInCategory->count();
-                        $remaining = 10 - $count;
+                        $remaining = $maxPerCategory - $count;
                     @endphp
-                    <div class="border rounded-lg p-4 {{ $count >= 5 ? 'border-approved-300 bg-approved-50/30' : 'border-surface-200' }}">
+                    <div class="border rounded-lg p-4 {{ $count >= $minPerCategory ? 'border-approved-300 bg-approved-50/30' : 'border-surface-200' }}">
                         <div class="flex items-center justify-between mb-2">
                             <label class="text-sm font-medium text-surface-800">
-                                {{ $count >= 5 ? '✓' : '' }} {{ $category }}
+                                {{ $count >= $minPerCategory ? '✓' : '' }} {{ $category }}
                             </label>
-                            <span class="text-xs {{ $count >= 5 ? 'text-approved-700 font-medium' : 'text-surface-400' }}">
-                                {{ $count }} of 10 staged{{ $count < 5 ? ' — need at least 5' : '' }}
+                            <span class="text-xs {{ $count >= $minPerCategory ? 'text-approved-700 font-medium' : 'text-surface-400' }}">
+                                {{ $count }} of {{ $maxPerCategory }} staged{{ $count < $minPerCategory ? " — need at least {$minPerCategory}" : '' }}
                             </span>
                         </div>
 

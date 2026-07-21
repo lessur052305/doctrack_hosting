@@ -1,0 +1,10 @@
+Purchase Requisition Form
+Requisition No PR-2026-2011
+
+This request is filed by the Operations Division on June 6, 2026.
+
+Item description: 5 units of business laptops (Core i5, 16GB RAM, 512GB SSD).
+Quantity requested: 5 units.
+Budget allocated: PHP 175,000.00.
+
+The department head has reviewed and endorsed this requisition for approval and release of funds.

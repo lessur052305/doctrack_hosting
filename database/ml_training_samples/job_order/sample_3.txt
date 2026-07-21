@@ -1,7 +1,12 @@
 JOB ORDER
-Job Order No: JO-2026-0203
-Date Requested: January 18, 2026
-Requested By: Grace Manalo, IT Supervisor
-Department: Information Technology
+
+Job Order No.: JO-2026-1084
+Date Requested: June 13, 2026
+Department: Warehouse & Logistics
+Requested By: Cristina Manalo
+Priority: Routine
+
 Description of Work:
-Install and configure three new desktop workstations in the accounting department, including operating system setup, antivirus deployment, and network printer mapping. Migrate existing user files from the old machines and decommission the outdated units for disposal.
+installation of a CCTV camera at the rear entrance to cover a blind spot identified during the last security audit.
+
+Please coordinate with the requesting department to schedule the work at the earliest convenient time. Kindly notify the front desk upon completion so the request can be closed out in the tracking log.

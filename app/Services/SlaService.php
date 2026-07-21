@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Jobs\AutoApproveAssignmentJob;
 use App\Mail\DocumentDecisionMail;
 use App\Mail\SlaEscalationMail;
 use App\Models\AuditLog;
@@ -34,9 +35,6 @@ use Illuminate\Support\Facades\Mail;
  */
 class SlaService
 {
-    /** Hours an Admin has to act after escalation before auto-approval fires. */
-    private const ADMIN_GRACE_HOURS = 12;
-
     public function __construct(private WorkflowService $workflow)
     {
     }
@@ -60,12 +58,21 @@ class SlaService
     public function escalate(DocumentAssignment $assignment): void
     {
         DB::transaction(function () use ($assignment) {
+            $escalatedAt = now();
             $assignment->escalated_to_admin = true;
+            $assignment->escalated_at = $escalatedAt;
             $assignment->save();
 
             AuditLog::record(null, $assignment->document_id, 'sla_escalation',
                 "Approver assignment #{$assignment->assignment_id} (stage '{$assignment->stage->stage_name}') " .
                 'exceeded its SLA window and was flagged for Admin escalation.');
+
+            // Event-driven auto-approval (mirrors EscalateAssignmentJob): fires
+            // exactly when the Admin grace window lapses, instead of waiting
+            // for the next 5-minute sla:check poll. sla:check stays wired into
+            // the scheduler as a backstop only (see bootstrap/app.php).
+            $graceExpiresAt = $escalatedAt->copy()->addHours(config('sla.admin_grace_hours', 12));
+            AutoApproveAssignmentJob::dispatch($assignment->assignment_id, $graceExpiresAt)->delay($graceExpiresAt);
 
             // abs()+round(): Carbon 3's diffInMinutes() returns a signed
             // float even with the default $absolute param, so the sign and
@@ -101,7 +108,7 @@ class SlaService
     private function autoApproveUnresolved(): int
     {
         $count = 0;
-        $graceCutoff = now()->subHours(self::ADMIN_GRACE_HOURS);
+        $graceCutoff = now()->subHours(config('sla.admin_grace_hours', 12));
 
         DocumentAssignment::query()
             ->where('individual_status', 'pending')
@@ -112,39 +119,49 @@ class SlaService
             ->get()
             ->unique('document_id')
             ->each(function (DocumentAssignment $assignment) use (&$count) {
-                DB::transaction(function () use ($assignment) {
-                    $document = $assignment->document;
-
-                    AuditLog::record(null, $document->document_id, 'auto_approve',
-                        "System auto-approved stage '{$assignment->stage->stage_name}' after Admin grace window elapsed with no response.");
-
-                    NotificationRecord::send($document->originator_id, $document->document_id,
-                        "Your document '{$document->title}' had a stage auto-approved by the system after an unresolved SLA breach.", 'high');
-
-                    foreach (User::whereIn('role', ['admin', 'approver'])->where('is_active', true)->get() as $u) {
-                        NotificationRecord::send($u->user_id, $document->document_id,
-                            "HIGH PRIORITY: '{$document->title}' had a stage auto-approved by the system without human sign-off. Please review.",
-                            'high');
-                    }
-
-                    // individual_status and auto_approved must be set here —
-                    // completeStage() only finalizes the DOCUMENT's
-                    // global_status; it never touches the assignment's own
-                    // status (that's the caller's job, same as decide() and
-                    // adminOverride() already do). Without this, the
-                    // assignment stays 'pending' forever and would get
-                    // caught — and re-notified on — every subsequent sweep.
-                    $assignment->individual_status = 'approved';
-                    $assignment->auto_approved = true;
-                    $assignment->acted_at = now();
-                    $assignment->save();
-
-                    $this->workflow->completeStage($assignment, 'approved', true);
-                });
+                $this->autoApproveOne($assignment);
                 $count++;
             });
 
         return $count;
+    }
+
+    /**
+     * Shared by the sla:check polling backstop and AutoApproveAssignmentJob
+     * (event-driven, fires exactly when the grace window lapses) — same
+     * outcome either way, just triggered differently.
+     */
+    public function autoApproveOne(DocumentAssignment $assignment): void
+    {
+        DB::transaction(function () use ($assignment) {
+            $document = $assignment->document;
+
+            AuditLog::record(null, $document->document_id, 'auto_approve',
+                "System auto-approved stage '{$assignment->stage->stage_name}' after Admin grace window elapsed with no response.");
+
+            NotificationRecord::send($document->originator_id, $document->document_id,
+                "Your document '{$document->title}' had a stage auto-approved by the system after an unresolved SLA breach.", 'high');
+
+            foreach (User::whereIn('role', ['admin', 'approver'])->where('is_active', true)->get() as $u) {
+                NotificationRecord::send($u->user_id, $document->document_id,
+                    "HIGH PRIORITY: '{$document->title}' had a stage auto-approved by the system without human sign-off. Please review.",
+                    'high');
+            }
+
+            // individual_status and auto_approved must be set here —
+            // completeStage() only finalizes the DOCUMENT's
+            // global_status; it never touches the assignment's own
+            // status (that's the caller's job, same as decide() and
+            // adminOverride() already do). Without this, the
+            // assignment stays 'pending' forever and would get
+            // caught — and re-notified on — every subsequent sweep.
+            $assignment->individual_status = 'approved';
+            $assignment->auto_approved = true;
+            $assignment->acted_at = now();
+            $assignment->save();
+
+            $this->workflow->completeStage($assignment, 'approved', true);
+        });
     }
 
     /**

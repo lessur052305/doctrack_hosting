@@ -1,7 +1,8 @@
-JOB ORDER
-Job Order No: JO-2026-0210
-Date Requested: March 10, 2026
-Requested By: Edgardo Lim, Generator Technician Coordinator
-Department: Power and Utilities
-Description of Work:
-Perform the quarterly preventive maintenance on the backup diesel generator, including oil and filter change, battery load test, and a full load bank test to confirm it can carry the building during a power outage. Document all readings in the maintenance log.
+Company Job Order Form
+
+This Job Order No. JO-2026-1133 is submitted for approval.
+
+Requested by: Alvin Castillo, on behalf of Engineering Department.
+Date requested: June 20, 2026.
+
+Description of work: assembly and installation of cubicle partitions for three new hires starting next month. The requesting department asks that this be scheduled without disrupting regular working hours if possible, and that any parts needed be sourced from an approved supplier.

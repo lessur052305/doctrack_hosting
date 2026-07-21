@@ -1,6 +1,8 @@
-SERVICE REPORT
-Service Report No: SR-2026-0401
-Technician: Ferdinand Ocampo
-Date of Service: January 8, 2026
-Findings:
-Air conditioning unit in the server room was found leaking refrigerant at the compressor connection. Refrigerant was recharged and the fitting resealed. Unit is now maintaining target temperature of 20 degrees Celsius consistently. Recommend monthly inspection going forward due to the criticality of the space.
+Field Service Report
+Service Report No SR-2026-3130
+
+Technician assigned: Teresa Navarro
+Date of service: June 20, 2026
+
+This report covers maintenance check of the primary application server.
+Findings: Server temperatures and disk health are within normal parameters; storage usage is at 78 percent and should be monitored going forward. No additional issues were reported by staff on site during the visit.

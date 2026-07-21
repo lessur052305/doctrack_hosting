@@ -18,6 +18,15 @@ already declares every PHP dependency this project actually uses.
   `pdo_mysql`, `tokenizer`, `xml`, `ctype`, `fileinfo`. All of these ship by default with
   XAMPP/Laragon on Windows and with `php8.2-*`/`php8.3-*` packages on Ubuntu/Debian — this
   is only worth checking if `composer install` fails with a "requires ext-xxx" error.
+- **`ext-pcntl`** — required (`composer.json` declares it), needed by `php artisan
+  reverb:start` for signal handling (§2.5). Ships by default on Linux/macOS PHP builds.
+  **Not available on native Windows PHP at all** (it's POSIX-only — there's no build of
+  it for Windows, ever). If you're on plain XAMPP/Laragon (no WSL), `composer install`
+  will fail on this requirement. Two options: (a) install PHP inside **WSL2** instead
+  (recommended — §2's systemd services need a Unix-like environment anyway, see the note
+  there), or (b) run `composer install --ignore-platform-req=ext-pcntl` — safe on
+  Windows specifically, since Reverb's signal-handling code path that needs pcntl is
+  skipped entirely on Windows; you just won't get graceful shutdown on Ctrl+C.
 - **MySQL 8.x** (or MariaDB) — not bundled with this repo. XAMPP/Laragon include one;
   otherwise `sudo apt install mysql-server` on Linux or the official MySQL installer.
 - **Node.js 18+** and npm — needed only for step 3 (compiling the Tailwind/Vite frontend).
@@ -149,6 +158,12 @@ degrades a feature instead of erroring loudly, so this section exists specifical
 fresh deployment doesn't quietly lose functionality. Reusable install files for all four
 live in [`deploy/`](deploy/).
 
+**Needs a Unix-like environment.** §2.1/2.5's install scripts install `systemd --user`
+services, and §2.2's cron entry needs `crontab`  — neither exists on native Windows.
+Linux and macOS work directly; on Windows, use **WSL2** (install PHP/MySQL/Node inside
+it, not on the Windows side) rather than trying to replicate systemd/cron with
+Task Scheduler or NSSM — nothing in this repo has been written or tested against those.
+
 ### 2.1 The persistent queue worker (real-time SLA escalation)
 
 SLA breach detection is **event-driven**, not polling: when a document is routed,
@@ -256,6 +271,36 @@ Also needs `BROADCAST_CONNECTION=reverb` in `.env` (already set if you copied
 back to `startLivePoll()` (same file), a much slower 45-75s safety-net poll, mirroring
 the same "instant primary + slow safety-net" pattern already used for SLA escalation
 (§2.1). Verify anytime with: `systemctl --user status docuwise-reverb.service`
+
+### 2.6 Email notifications
+
+Several actions send an email alongside their in-app notification —
+`app/Mail/SlaEscalationMail.php` (a breach reaches an Admin), `DocumentAssignedMail.php`
+(a stage is routed to an approver), `DocumentDecisionMail.php` (a document is
+approved/rejected, including Admin overrides), and `AutoApprovalDisputedMail.php` (an
+Admin disputes a system auto-approval). All four are queued (`ShouldQueue`), so they're
+delivered by the same queue worker from §2.1 — no separate service needed.
+
+**Works out of the box, no setup required**: neither `.env` nor `.env.example` sets
+`MAIL_MAILER`, so it falls back to Laravel's own default, `log` — every email gets
+written to `storage/logs/laravel.log` instead of actually being sent. This is enough to
+verify the feature works (open the log file after triggering one of the actions above)
+without needing a real mail account for a demo/dev setup.
+
+**To actually send real email** (e.g. a production deployment), add real SMTP
+credentials to `.env`:
+```
+MAIL_MAILER=smtp
+MAIL_HOST=smtp.your-provider.com
+MAIL_PORT=587
+MAIL_USERNAME=your-username
+MAIL_PASSWORD=your-password
+MAIL_ENCRYPTION=tls
+MAIL_FROM_ADDRESS="noreply@yourdomain.com"
+MAIL_FROM_NAME="${APP_NAME}"
+```
+Any SMTP provider works (Gmail, Mailgun, SES, your own mail server) — this is plain
+Laravel mail configuration, nothing DocTrack-specific.
 
 ---
 

@@ -60,6 +60,70 @@
             </div>
         </form>
 
+        <details class="border-b border-surface-200 group [&_summary::-webkit-details-marker]:hidden">
+            <summary class="px-6 py-3 cursor-pointer select-none text-xs font-medium text-primary-700 hover:bg-surface-50 flex items-center gap-1.5">
+                <svg class="w-3.5 h-3.5 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+                View All Approvers &amp; Breach Counts
+            </summary>
+
+            <div class="px-6 py-4 bg-surface-50/50 border-t border-surface-200">
+                <input type="text" id="approver-roster-search" placeholder="Search approver…" autocomplete="off"
+                    class="w-full max-w-sm rounded-lg border-surface-300 text-xs mb-3 px-3 py-2 focus:border-primary-500 focus:ring-primary-500">
+
+                <ul id="approver-roster-list" class="max-h-80 overflow-y-auto divide-y divide-surface-100 bg-white rounded-lg border border-surface-200">
+                    @forelse($approverRoster as $approver)
+                        <li data-approver-name="{{ strtolower($approver->full_name) }}">
+                            <details class="group">
+                                <summary class="list-none [&::-webkit-details-marker]:hidden cursor-pointer flex items-center justify-between gap-3 px-4 py-2.5 text-xs hover:bg-surface-50/60">
+                                    <div class="flex items-center gap-2 min-w-0">
+                                        <svg class="w-3 h-3 text-surface-400 shrink-0 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+                                        <div class="min-w-0">
+                                            <p class="font-medium text-surface-800 truncate">{{ $approver->full_name }}</p>
+                                            <p class="text-surface-400">{{ $approver->assigned_category ?? '—' }}</p>
+                                        </div>
+                                    </div>
+                                    <div class="text-right shrink-0">
+                                        <p class="font-semibold {{ $approver->breach_count > 0 ? 'text-rejected-700' : 'text-approved-700' }}">{{ $approver->breach_count }} breach{{ $approver->breach_count === 1 ? '' : 'es' }}</p>
+                                        <p class="text-surface-400">of {{ $approver->assignment_count }} assigned</p>
+                                    </div>
+                                </summary>
+                                <div class="px-4 pb-3 pl-9 bg-surface-50/50 border-t border-surface-100">
+                                    @php $categoryBreakdown = $byApproverCategory->get($approver->user_id, collect()); @endphp
+                                    @forelse($categoryBreakdown as $row)
+                                        <p class="text-[11px] text-surface-600 flex items-center justify-between py-1 border-b border-surface-100 last:border-0">
+                                            <span>{{ $row->ml_category }}</span>
+                                            <span class="font-semibold text-rejected-700">{{ $row->total }} breach{{ $row->total === 1 ? '' : 'es' }}</span>
+                                        </p>
+                                    @empty
+                                        <p class="text-[11px] text-surface-400 py-1">No breaches recorded.</p>
+                                    @endforelse
+                                </div>
+                            </details>
+                        </li>
+                    @empty
+                        <li class="px-4 py-4 text-center text-surface-400">No approvers found.</li>
+                    @endforelse
+                </ul>
+                <p id="approver-roster-empty" class="hidden py-4 text-center text-xs text-surface-400">No approver matches your search.</p>
+            </div>
+
+            <script>
+                document.getElementById('approver-roster-search')?.addEventListener('input', function (e) {
+                    const term = e.target.value.trim().toLowerCase();
+                    const rows = document.querySelectorAll('#approver-roster-list [data-approver-name]');
+                    let visibleCount = 0;
+
+                    rows.forEach((row) => {
+                        const matches = row.dataset.approverName.includes(term);
+                        row.classList.toggle('hidden', !matches);
+                        if (matches) visibleCount++;
+                    });
+
+                    document.getElementById('approver-roster-empty').classList.toggle('hidden', visibleCount !== 0);
+                });
+            </script>
+        </details>
+
         @php
             // Nest by document — a document can rack up several breaches
             // (one per stage, or repeat breaches over time), which
@@ -105,7 +169,7 @@
                                      violation here is a historical log entry, so the document
                                      may well already be resolved since. This is the single most
                                      useful signal for triage: still needs attention vs. handled. --}}
-                                <x-status-badge :status="$doc->global_status" />
+                                <x-status-badge :status="$doc->display_status" />
                             @endif
                             <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rejected-50 text-rejected-700 ring-1 ring-inset ring-rejected-500/20">
                                 {{ $count }} breach{{ $count === 1 ? '' : 'es' }}

@@ -55,9 +55,14 @@ return Application::configure(basePath: dirname(__DIR__))
         // fired). 5 minutes is plenty for a safety net that isn't the
         // primary mechanism anymore.
         $schedule->command('workflow:check-parallel-slas')->everyFiveMinutes()->withoutOverlapping();
-        // 2) auto-approve anything still unresolved past the Admin grace
-        // window (hours-long by design — see SlaService::ADMIN_GRACE_HOURS)
-        // — no need for minute-level precision here.
+        // 2) auto-approval past the Admin grace window (config
+        // 'sla.admin_grace_hours') is likewise now primarily event-driven —
+        // AutoApproveAssignmentJob is dispatched from SlaService::escalate()
+        // with a delay set to exactly when that window lapses. This command
+        // stays as the same kind of backstop as (1) above, in case a job is
+        // ever lost, plus it transparently covers any assignment escalated
+        // before this job existed (no escalated_at, so no job was ever
+        // dispatched for it).
         $schedule->command('sla:check')->everyFiveMinutes()->withoutOverlapping();
         // Note: queue draining is no longer scheduled here — a persistent
         // `php artisan queue:work` process (systemd user service) runs

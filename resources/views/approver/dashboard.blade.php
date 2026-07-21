@@ -20,7 +20,7 @@
                     <option value="{{ $p }}" {{ request('priority') === $p ? 'selected' : '' }}>{{ $p }}</option>
                 @endforeach
             </select>
-            <button class="text-xs font-medium bg-primary-700 hover:bg-primary-800 text-white px-4 py-2 rounded-lg">Filter</button>
+            <button class="text-xs font-medium bg-primary-700 hover:bg-primary-800 text-white px-4 py-2 rounded-lg shadow-sm transition-colors">Filter</button>
             @if(request('document') || request('priority'))
                 <a href="{{ route('approver.dashboard') }}" class="text-xs font-medium text-surface-500 hover:underline">Clear</a>
             @endif
@@ -34,8 +34,9 @@
          instant WebSocket push or the slow fallback poll) whose payloads
          don't share the same shape, so there isn't always a reliable count
          to report. --}}
-    <div id="live-update-toast" class="hidden text-xs text-approved-700 font-medium transition-opacity duration-700">
-        ✓ Queue updated
+    <div id="live-update-toast" class="hidden text-xs text-approved-700 font-medium transition-opacity duration-700 flex items-center gap-1.5">
+        <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+        Queue updated
     </div>
 
     <div id="review-queue" class="space-y-6" data-user-id="{{ auth()->id() }}" data-poll-url="{{ route('approver.assignments.poll') }}" data-refresh-url="{{ route('approver.assignments.refresh') }}" data-initial-count="{{ $initialPendingCount }}">

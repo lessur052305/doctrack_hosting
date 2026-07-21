@@ -1,6 +1,8 @@
-SERVICE REPORT
-Service Report No: SR-2026-0410
-Technician: Precious Alcantara
-Date of Service: March 12, 2026
-Findings:
-HVAC system serving the executive offices was reported as blowing warm air instead of cool. Diagnosis found a failed capacitor on the compressor unit, which was replaced. System was tested for two hours afterward and maintained a stable 22 degree Celsius output with no further issues.
+Field Service Report
+Service Report No SR-2026-3247
+
+Technician assigned: Ferdinand Aquino
+Date of service: June 29, 2026
+
+This report covers check of the fire extinguishers located across the ground floor.
+Findings: All units are within inspection date and properly pressurized; tags were updated to reflect the current inspection date. No additional issues were reported by staff on site during the visit.

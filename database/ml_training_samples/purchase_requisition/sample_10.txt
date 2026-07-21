@@ -1,6 +1,10 @@
-PURCHASE REQUISITION
-Requisition No: PR-2026-0310
-Department: Power and Utilities
-Item Description: Diesel fuel for the backup generator reserve tank ahead of the rainy season
-Quantity: 500 liters
-Budget: PHP 45,000.00
+Purchase Requisition Form
+Requisition No PR-2026-2209
+
+This request is filed by the Operations Division on June 24, 2026.
+
+Item description: bottled water dispenser units for the 3rd and 4th floor pantries.
+Quantity requested: 2 units.
+Budget allocated: PHP 11,000.00.
+
+The department head has reviewed and endorsed this requisition for approval and release of funds.

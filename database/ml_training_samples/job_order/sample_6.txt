@@ -1,7 +1,12 @@
 JOB ORDER
-Job Order No: JO-2026-0206
-Date Requested: February 9, 2026
-Requested By: Bienvenido Torres, Warehouse Supervisor
-Department: Warehouse Operations
+
+Job Order No.: JO-2026-1105
+Date Requested: June 16, 2026
+Department: IT Department
+Requested By: Nestor Garcia
+Priority: High Priority
+
 Description of Work:
-Repair the malfunctioning overhead door at loading bay three, which is failing to close fully and poses a security risk overnight. Inspect the motor, chain, and track alignment. Grease all moving parts and test the safety sensor before returning the bay to service.
+repaving of a small section of the parking lot near the loading bay that has developed potholes.
+
+Please coordinate with the requesting department to schedule the work at the earliest convenient time. Kindly notify the front desk upon completion so the request can be closed out in the tracking log.

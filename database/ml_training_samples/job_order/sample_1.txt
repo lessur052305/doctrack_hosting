@@ -1,7 +1,8 @@
-JOB ORDER
-Job Order No: JO-2026-0201
-Date Requested: January 5, 2026
-Requested By: Nestor Villanueva, Fleet Supervisor
-Department: Transport and Vehicle Maintenance
-Description of Work:
-Perform scheduled servicing on the company delivery truck with plate number XPT-4471. Change the engine oil, replace worn brake pads, inspect the suspension system, and rotate all four tires. Check the coolant and transmission fluid levels. Vehicle must be roadworthy before the next scheduled delivery route on Monday.
+Company Job Order Form
+
+This Job Order No. JO-2026-1070 is submitted for approval.
+
+Requested by: Jasmine Ocampo, on behalf of IT Department.
+Date requested: June 11, 2026.
+
+Description of work: replacement of a cracked window pane in the reception area facing the parking lot. The requesting department asks that this be scheduled without disrupting regular working hours if possible, and that any parts needed be sourced from an approved supplier.

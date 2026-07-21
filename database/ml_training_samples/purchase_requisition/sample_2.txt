@@ -1,6 +1,10 @@
-PURCHASE REQUISITION
-Requisition No: PR-2026-0302
-Department: Information Technology
-Item Description: 24-inch LED monitors for the new workstation setup in the customer service area
-Quantity: 6 units
-Budget: PHP 42,000.00
+REQUEST FOR PURCHASE
+
+Requisition No.: PR-2026-2121
+Department: Security Office
+
+Item description and quantity: industrial cleaning supplies for the janitorial staff, 1 lot requested.
+Budget: PHP 15,000.00.
+Date filed: June 16, 2026.
+
+This was requested to address a gap identified during the department's recent inventory review, and prompt processing would be appreciated given current stock levels.

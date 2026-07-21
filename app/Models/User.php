@@ -61,6 +61,11 @@ class User extends Authenticatable
         return $this->hasMany(DocumentAssignment::class, 'user_id', 'user_id');
     }
 
+    public function slaViolations()
+    {
+        return $this->hasMany(SlaViolation::class, 'approver_id', 'user_id');
+    }
+
     /**
      * Optional restriction to specific workflow stages within this
      * approver's assigned_category (Admin dynamic workflow assignment).
