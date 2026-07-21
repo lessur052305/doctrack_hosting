@@ -46,6 +46,22 @@ VITE_REVERB_APP_KEY="${REVERB_APP_KEY}"
 VITE_REVERB_HOST="${REVERB_HOST}"
 VITE_REVERB_PORT="${REVERB_PORT}"
 VITE_REVERB_SCHEME="${REVERB_SCHEME}"
+
+# --- Email (see main README.md §2.6) ---
+# Without this, emails (SLA breach alerts, decision notices, dispute
+# notices) silently write to a log file instead of actually being sent —
+# fine for testing, not for a real public deployment. Any SMTP provider
+# works (Gmail, Mailgun, SES, your own server).
+MAIL_MAILER=smtp
+MAIL_HOST=smtp.your-provider.com
+MAIL_PORT=587
+MAIL_USERNAME=your-username
+MAIL_PASSWORD=your-password
+MAIL_ENCRYPTION=tls
+MAIL_FROM_ADDRESS="noreply@yourdomain.com"
+MAIL_FROM_NAME="${APP_NAME}"
+
+BACKUP_KEEP=14
 ```
 
 **Two things that trip people up here:**
@@ -71,13 +87,43 @@ php artisan migrate --force
 
 `--force` is required because `APP_ENV=production` otherwise refuses to run migrations without it. Re-run this any time you deploy new migrations.
 
+## Seeding accounts and training the classifier
+
+Migrating alone gets you empty tables — two more one-time steps, same shell:
+
+```bash
+php artisan db:seed --force     # creates admin/originator/approver demo accounts + workflow stages
+```
+See main `README.md` → "Demo accounts" for the logins this creates. **Change these
+passwords** before treating this as a real public deployment, not just a demo.
+
+Then **train the ML classifier** — without a trained model, `ClassificationService::classify()`
+returns `Unclassified` for every upload, which fails validation, so nothing ever routes to
+an approver (silently stuck, not an error). This step needs the web UI, not the shell: log
+in as `admin` → **ML Training** → for each category, select that category's sample folder
+from `database/ml_training_samples/` and click its own "Add" button, then **Train Model**
+once all three show enough staged. See main `README.md` §1 step 11 and §5 for details.
+
+## Verifying PHP extensions actually installed
+
+`composer.json` declares `ext-pcntl`, `ext-zip`, and `ext-fileinfo` as hard requirements —
+Railway's Railpack build reads these from `composer.json` and should install them
+automatically, but it's worth a one-time check in the **web** service's build logs (or its
+Shell: `php -m | grep -E "pcntl|zip|fileinfo"`) after the first deploy. Missing `ext-zip`
+specifically causes every `.docx` upload to silently skip real text extraction and fall
+through to OCR instead; missing `ext-fileinfo` can cause legitimate PDF/TXT uploads to fail
+the `ReliableMimeType` validation check while image uploads (png/jpg) still tend to pass,
+since their signatures are recognized by more fallback paths — if uploads work for one file
+type but not others, check this first.
+
 ## Order of operations for first deploy
 
 1. Add a MySQL database to the Railway project (Railway → New → Database → MySQL).
-2. Create the `web` service (already done) — confirm it builds successfully now that `composer.json`/`composer.lock` are fixed.
-3. Generate `APP_KEY` locally, set all the env vars above on `web`.
+2. Create the `web` service (already done) — confirm it builds successfully now that `composer.json`/`composer.lock` are fixed, and check its build log for `ext-pcntl`/`ext-zip`/`ext-fileinfo` actually being installed (see above).
+3. Generate `APP_KEY` locally, set all the env vars above on `web`, including real SMTP credentials for `MAIL_*`.
 4. Give `web` a public domain, set `APP_URL` to it.
 5. Run `php artisan migrate --force` via the web service's shell.
-6. Create the `reverb` service, give **it** a public domain, set `REVERB_HOST` to that domain everywhere, redeploy `web` so the build picks up the correct `VITE_REVERB_*` values.
-7. Create `queue-worker` and `scheduler` services with the env vars shared from the same group.
-8. Log in as the seeded admin (see main `README.md` → "Demo accounts") and confirm a document upload shows up live without a manual refresh — that confirms Reverb is actually wired correctly end to end.
+6. Run `php artisan db:seed --force` via the same shell, then log in as `admin` and train the ML classifier (see "Seeding accounts and training the classifier" above) — skip either step and the app looks deployed but silently can't classify/route any document.
+7. Create the `reverb` service, give **it** a public domain, set `REVERB_HOST` to that domain everywhere, redeploy `web` so the build picks up the correct `VITE_REVERB_*` values.
+8. Create `queue-worker` and `scheduler` services with the env vars shared from the same group.
+9. Log in as the seeded admin (see main `README.md` → "Demo accounts") and confirm a document upload shows up live without a manual refresh — that confirms Reverb is actually wired correctly end to end. Then upload one file of each type (.pdf, .docx, .txt, .png) as an originator and confirm every one of them gets classified rather than just the image — that confirms the extension fix above actually took effect.
