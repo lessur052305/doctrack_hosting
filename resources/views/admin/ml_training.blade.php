@@ -19,13 +19,19 @@
         </div>
     @endif
 
+    <div id="ml-review-panels" class="contents"
+        data-refresh-url="{{ route('admin.ml.review.refresh') }}"
+        data-poll-url="{{ route('admin.ml.review.poll') }}">
+        @include('admin.partials.ml_review_panels')
+    </div>
+
     <div class="lg:col-span-2">
         <div class="bg-white rounded-xl shadow-card border border-surface-200 p-6">
             <h2 class="text-sm font-semibold text-surface-900 mb-1">Train / Retrain Classifier</h2>
             <p class="text-xs text-surface-500 mb-6">
-                <strong>Step 1:</strong> for each category below, pick {{ $minPerCategory }}–{{ $maxPerCategory }} sample files, then click that category's own "Add" button — do this once per category.
+                <strong>Step 1:</strong> for each category below, pick at least {{ $minPerCategory }} sample files, then click that category's own "Add" button — do this once per category.
                 <strong>Step 2:</strong> once every category shows a green "staged" count, click "Train Model" at the bottom. Selecting files alone does not stage them — you must click each category's "Add" button first.
-                Staged samples are shared across every admin account and are kept even after training, so you can add more later and retrain on the combined set — no need to finish in one sitting, and no need to start over next time.
+                Staged samples are shared across every admin account, have no upper limit, and are kept even after training, so the corpus keeps growing every time you add more — no need to finish in one sitting, and no need to start over next time.
             </p>
 
             @php
@@ -37,7 +43,6 @@
                     @php
                         $samplesInCategory = $stagedSamples->get($category, collect());
                         $count = $samplesInCategory->count();
-                        $remaining = $maxPerCategory - $count;
                     @endphp
                     <div class="border rounded-lg p-4 {{ $count >= $minPerCategory ? 'border-approved-300 bg-approved-50/30' : 'border-surface-200' }}">
                         <div class="flex items-center justify-between mb-2">
@@ -45,39 +50,55 @@
                                 {{ $count >= $minPerCategory ? '✓' : '' }} {{ $category }}
                             </label>
                             <span class="text-xs {{ $count >= $minPerCategory ? 'text-approved-700 font-medium' : 'text-surface-400' }}">
-                                {{ $count }} of {{ $maxPerCategory }} staged{{ $count < $minPerCategory ? " — need at least {$minPerCategory}" : '' }}
+                                {{ $count }} staged{{ $count < $minPerCategory ? " — need at least {$minPerCategory}" : '' }}
                             </span>
                         </div>
 
                         @if($samplesInCategory->isNotEmpty())
-                            <ul class="mb-3 divide-y divide-surface-100 border border-surface-100 rounded-lg overflow-hidden">
-                                @foreach($samplesInCategory as $sample)
-                                    <li class="flex items-center justify-between px-3 py-1.5 text-xs bg-surface-50/50">
-                                        <span class="text-surface-600 truncate">
-                                            {{ $sample->original_filename }}
-                                            <span class="text-surface-400">— staged by {{ $sample->stagedBy->full_name ?? 'a former admin account' }}</span>
-                                        </span>
-                                        <form method="POST" action="{{ route('admin.ml.training.sample.destroy', $sample) }}">
-                                            @csrf @method('DELETE')
-                                            <button type="submit" class="text-rejected-600 hover:underline flex-shrink-0 ml-2">Remove</button>
-                                        </form>
-                                    </li>
-                                @endforeach
-                            </ul>
+                            {{-- Collapsed by default — a category with dozens of staged
+                                 samples (no lifetime cap anymore, see above) would otherwise
+                                 force a long scroll past its own list just to reach the NEXT
+                                 category's upload form below it. Plain <details>, not
+                                 data-popover: this is "expand to inspect a list," not a
+                                 transient menu, so it shouldn't auto-close on an outside
+                                 click (see the click-outside handler's own comment in
+                                 app.js for that exact distinction). --}}
+                            <details class="mb-3 border border-surface-100 rounded-lg overflow-hidden">
+                                <summary class="cursor-pointer select-none px-3 py-1.5 text-xs font-medium text-surface-600 bg-surface-50/50 hover:bg-surface-100">
+                                    {{ $count }} staged sample{{ $count === 1 ? '' : 's' }} — click to view/remove
+                                </summary>
+                                <ul class="divide-y divide-surface-100 border-t border-surface-100">
+                                    @foreach($samplesInCategory as $sample)
+                                        <li class="flex items-center justify-between px-3 py-1.5 text-xs bg-surface-50/50">
+                                            <span class="text-surface-600 truncate">
+                                                {{ $sample->original_filename }}
+                                                <span class="text-surface-400">— staged by {{ $sample->stagedBy->full_name ?? 'a former admin account' }}</span>
+                                                @if($sample->trainedInModel)
+                                                    <span class="text-approved-700 font-medium">&middot; ✓ included in {{ $sample->trainedInModel->version }}</span>
+                                                @else
+                                                    <span class="text-processing-700 font-medium">&middot; not yet included in the active model</span>
+                                                @endif
+                                            </span>
+                                            <form method="POST" action="{{ route('admin.ml.training.sample.destroy', $sample) }}">
+                                                @csrf @method('DELETE')
+                                                <button type="submit" class="text-rejected-600 hover:underline flex-shrink-0 ml-2">Remove</button>
+                                            </form>
+                                        </li>
+                                    @endforeach
+                                </ul>
+                            </details>
                         @endif
 
-                        @if($remaining > 0)
-                            <form method="POST" action="{{ route('admin.ml.training.stage', $category) }}" enctype="multipart/form-data" class="flex flex-wrap items-center gap-2">
-                                @csrf
-                                <input type="file" name="files[]" multiple required
-                                    accept=".pdf,.txt,.docx"
-                                    class="flex-1 min-w-[160px] text-xs text-surface-600 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100">
-                                <button type="submit"
-                                    class="flex-shrink-0 text-xs font-medium bg-primary-700 hover:bg-primary-800 text-white px-3 py-2 rounded-lg">
-                                    Add these files (up to {{ $remaining }})
-                                </button>
-                            </form>
-                        @endif
+                        <form method="POST" action="{{ route('admin.ml.training.stage', $category) }}" enctype="multipart/form-data" class="flex flex-wrap items-center gap-2">
+                            @csrf
+                            <input type="file" name="files[]" multiple required
+                                accept=".pdf,.txt,.docx"
+                                class="flex-1 min-w-[160px] text-xs text-surface-600 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100">
+                            <button type="submit"
+                                class="flex-shrink-0 text-xs font-medium bg-primary-700 hover:bg-primary-800 text-white px-3 py-2 rounded-lg">
+                                Add these files (up to {{ $batchUploadLimit }} per upload)
+                            </button>
+                        </form>
 
                         @if($count > 0)
                             <form method="POST" action="{{ route('admin.ml.training.stage.clear', $category) }}" class="mt-2">
@@ -137,4 +158,23 @@
         </div>
     </div>
 </div>
+
+<script>
+    // Same live-update pattern as the admin dashboard's overview widget
+    // (see admin/dashboard.blade.php) — a new low-confidence upload, or
+    // another admin confirming/rejecting one, shows up here instantly via
+    // Reverb instead of waiting for a manual reload.
+    document.addEventListener('DOMContentLoaded', function () {
+        const panelsEl = document.getElementById('ml-review-panels');
+        if (!panelsEl) return;
+
+        const opts = {
+            refreshUrl: panelsEl.dataset.refreshUrl,
+            target: panelsEl,
+        };
+
+        startLiveChannel('admin-dashboard', '.document.status-changed', opts);
+        startLivePoll({ ...opts, pollUrl: panelsEl.dataset.pollUrl });
+    });
+</script>
 @endsection

@@ -48,6 +48,7 @@ class ArchiveController extends Controller
         // scoped to their own submissions regardless of category.
         if ($user->isApprover() && !$user->assigned_category) {
             return view('archive.index', [
+                'showFolders' => false,
                 'documents' => DocumentRepository::whereRaw('1 = 0')->paginate(12),
                 'categories' => [],
                 'restrictedCategory' => null,
@@ -56,6 +57,62 @@ class ArchiveController extends Controller
             ]);
         }
 
+        // Approvers only ever have ONE category (their assigned_category),
+        // so a folder-picker screen would just be one folder to click
+        // through for no reason — they always go straight to the results
+        // view, same as before this feature existed. Admin/Originator see
+        // a folder grid first (Feature: browse by category), UNLESS
+        // they've already got a search/filter active — that's what "search
+        // everything from the folder screen" (below) transitions into.
+        $hasActiveFilters = $request->filled('category') || $request->filled('keyword')
+            || $request->filled('date_from') || $request->filled('date_to');
+        $showFolders = !$user->isApprover() && !$hasActiveFilters;
+
+        if ($showFolders) {
+            return view('archive.index', [
+                'showFolders' => true,
+                'folders' => $this->folderStats($user),
+                'categories' => ValidationService::knownCategories(),
+                'restrictedCategory' => null,
+                'noCategoryAssigned' => false,
+                'isOwnSubmissionsView' => !$user->isAdmin(),
+            ]);
+        }
+
+        [$documents, $isOwnSubmissionsView] = $this->searchResults($request, $user);
+
+        return view('archive.index', [
+            'showFolders' => false,
+            'documents' => $documents,
+            'categories' => ValidationService::knownCategories(),
+            'restrictedCategory' => $user->isApprover() ? $user->assigned_category : null,
+            'noCategoryAssigned' => false,
+            'isOwnSubmissionsView' => $isOwnSubmissionsView,
+        ]);
+    }
+
+    /**
+     * Live search (Feature: instant results as you type) — same query as
+     * index()'s results branch, via the shared searchResults() below, but
+     * returns just the results-table fragment for the front-end to swap
+     * in, instead of the whole page.
+     */
+    public function refresh(Request $request)
+    {
+        $user = $request->user();
+
+        abort_if($user->isApprover() && !$user->assigned_category, 404);
+
+        [$documents, $isOwnSubmissionsView] = $this->searchResults($request, $user);
+
+        return view('archive.partials.results', compact('documents', 'isOwnSubmissionsView'));
+    }
+
+    /**
+     * @return array{0: \Illuminate\Contracts\Pagination\LengthAwarePaginator, 1: bool}
+     */
+    private function searchResults(Request $request, $user): array
+    {
         $query = DocumentRepository::query()
             ->whereIn('global_status', ['approved', 'auto_approved'])
             ->with('originator');
@@ -94,15 +151,43 @@ class ArchiveController extends Controller
             $query->whereDate('upload_date', '<=', $request->date('date_to'));
         }
 
-        $documents = $query->latest('upload_date')->paginate(12)->withQueryString();
+        match ($request->string('sort')->toString()) {
+            'oldest' => $query->oldest('upload_date'),
+            'originator' => $query->join('users', 'document_repository.originator_id', '=', 'users.user_id')
+                ->orderBy('users.full_name')
+                ->select('document_repository.*'),
+            default => $query->latest('upload_date'),
+        };
 
-        return view('archive.index', [
-            'documents' => $documents,
-            'categories' => ValidationService::knownCategories(),
-            'restrictedCategory' => $user->isApprover() ? $user->assigned_category : null,
-            'noCategoryAssigned' => false,
-            'isOwnSubmissionsView' => $isOwnSubmissionsView,
-        ]);
+        return [$query->paginate(12)->withQueryString(), $isOwnSubmissionsView];
+    }
+
+    /**
+     * One row per category for the folder-grid landing screen — total
+     * count plus a status breakdown (plain approved/auto-approved vs.
+     * disputed) so an Admin/Originator can see at a glance whether a
+     * category has anything flagged before even opening it. Scoped to
+     * "my own submissions only" for an Originator, same restriction the
+     * results view already applies — see index() above.
+     */
+    private function folderStats($user)
+    {
+        $base = DocumentRepository::query()->whereIn('global_status', ['approved', 'auto_approved']);
+
+        if (!$user->isAdmin()) {
+            $base->where('originator_id', $user->user_id);
+        }
+
+        return collect(ValidationService::knownCategories())->map(function ($category) use ($base) {
+            $categoryQuery = (clone $base)->where('ml_category', $category);
+
+            return (object) [
+                'category' => $category,
+                'total' => (clone $categoryQuery)->count(),
+                'disputed' => (clone $categoryQuery)->whereNotNull('disputed_at')->count(),
+                'auto_approved' => (clone $categoryQuery)->where('global_status', 'auto_approved')->whereNull('disputed_at')->count(),
+            ];
+        });
     }
 
     public function download(Request $request, DocumentRepository $document)

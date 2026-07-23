@@ -64,13 +64,23 @@ it('survives logout — staging is not tied to the browser session', function ()
     expect(MlStagingSample::where('category', 'Job Order')->count())->toBe(1);
 });
 
-it('rejects staging more than 20 samples for a single category', function () {
-    MlStagingSample::factory()->count(19)->create(['category' => 'Job Order']);
+it('rejects staging more than 20 files in a single upload request', function () {
+    $files = collect(range(1, 21))->map(fn ($i) => UploadedFile::fake()->createWithContent("{$i}.txt", "sample {$i}"))->all();
+
+    $this->actingAs(admin())
+        ->post(route('admin.ml.training.stage', 'Job Order'), ['files' => $files])
+        ->assertSessionHasErrors('files');
+});
+
+it('has no lifetime cap on staged samples per category — a category already past the old 20-sample ceiling can still accept more', function () {
+    MlStagingSample::factory()->count(25)->create(['category' => 'Job Order']);
 
     $this->actingAs(admin())
         ->post(route('admin.ml.training.stage', 'Job Order'), [
             'files' => [UploadedFile::fake()->createWithContent('a.txt', 'one'), UploadedFile::fake()->createWithContent('b.txt', 'two')],
-        ])->assertSessionHasErrors('files');
+        ])->assertSessionHasNoErrors();
+
+    expect(MlStagingSample::where('category', 'Job Order')->count())->toBe(27);
 });
 
 it('removes a single staged sample without clearing the rest of its category', function () {
@@ -137,6 +147,31 @@ it('combines samples from two separate staging sessions into one training run', 
 
     expect($secondModel->model_id)->not->toBe($firstModel->model_id)
         ->and($secondModel->training_sample_count)->toBe(30);
+});
+
+it('stamps every currently-staged sample with the trained model after a successful training run, and leaves later additions unstamped', function () {
+    $categories = ['Job Order', 'Purchase Requisition', 'Service Report'];
+    $user = admin();
+
+    foreach ($categories as $category) {
+        $files = collect(range(1, 5))->map(fn ($i) => UploadedFile::fake()->createWithContent("{$i}.txt", "{$category} sample {$i} " . str_repeat('lorem ipsum dolor sit amet ', 5)))->all();
+        $this->actingAs($user)->post(route('admin.ml.training.stage', $category), ['files' => $files]);
+    }
+
+    $this->actingAs($user)->post(route('admin.ml.train'))->assertRedirect();
+    $model = MlModelRepository::where('is_active', true)->sole();
+
+    expect(MlStagingSample::whereNull('trained_in_model_id')->count())->toBe(0);
+    expect(MlStagingSample::where('trained_in_model_id', $model->model_id)->count())->toBe(15);
+
+    // A sample added AFTER that training run shouldn't retroactively look
+    // like it already taught the active model something.
+    $this->actingAs($user)->post(route('admin.ml.training.stage', 'Job Order'), [
+        'files' => [UploadedFile::fake()->createWithContent('new.txt', 'a brand new job order sample added after training')],
+    ]);
+
+    $newSample = MlStagingSample::where('original_filename', 'new.txt')->firstOrFail();
+    expect($newSample->trained_in_model_id)->toBeNull();
 });
 
 it('blocks training when a category has fewer than 5 staged samples', function () {

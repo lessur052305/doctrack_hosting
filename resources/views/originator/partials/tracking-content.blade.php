@@ -40,7 +40,9 @@
             @endif
             <p class="text-xs text-surface-500 mt-1">
                 Category: <span class="font-medium text-surface-700">{{ $document->ml_category ?? 'Unclassified' }}</span>
-                @if($document->ml_confidence)
+                @if($document->ml_rechecked_at)
+                    &middot; <span class="text-surface-400">Recheck Confidence: {{ $document->ml_confidence }}% &rarr; {{ $document->ml_recheck_confidence }}%</span>
+                @elseif($document->ml_confidence)
                     &middot; Confidence: {{ $document->ml_confidence }}%
                 @endif
                 @if($document->used_ocr_fallback)

@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers;
 
+use App\Events\AccountDeactivated;
+use App\Events\DocumentStatusChanged;
 use App\Mail\AutoApprovalDisputedMail;
 use App\Models\AuditLog;
 use App\Models\DocumentAssignment;
@@ -107,11 +109,20 @@ class AdminController extends Controller
     // User account management (Section 3: Account ID <-> workflow role)
     // ---------------------------------------------------------------
 
-    public function users()
+    public function users(Request $request)
     {
-        $users = User::with(['createdBy', 'workflowStages'])->orderBy('role')->paginate(15);
+        $showInactive = $request->boolean('show_inactive');
+
+        $query = User::with(['createdBy', 'workflowStages'])->orderBy('role');
+        if (!$showInactive) {
+            $query->where('is_active', true);
+        }
+
+        $users = $query->paginate(15)->withQueryString();
+        $inactiveCount = User::where('is_active', false)->count();
         $stagesByCategory = WorkflowStage::where('is_archived', false)->orderBy('sequence_order')->get()->groupBy('document_category');
-        return view('admin.users', compact('users', 'stagesByCategory'));
+
+        return view('admin.users', compact('users', 'stagesByCategory', 'showInactive', 'inactiveCount'));
     }
 
     public function storeUser(Request $request)
@@ -232,15 +243,69 @@ class AdminController extends Controller
         return redirect()->route('admin.users')->with('status', "Stage assignments updated for {$user->full_name}.");
     }
 
+    /**
+     * Deactivation handoff (Feature): deactivating an approver who's
+     * holding pending work automatically hands each assignment to the same
+     * least-busy-eligible-approver a brand-new document would get routed
+     * to (see WorkflowService::findReplacementApprover()), or escalates it
+     * straight to Admin if nobody's eligible (see SlaService::
+     * escalateForReassignmentFailure()) — rather than leaving it stuck in a
+     * queue nobody can reach anymore. is_active is flipped BEFORE the
+     * reassignment loop runs, not after — otherwise the approver being
+     * deactivated could still show up as their own eligible replacement.
+     */
     public function toggleUser(Request $request, User $user)
     {
-        $user->is_active = !$user->is_active;
+        $validated = $request->validate(['reason' => ['nullable', 'string', 'max:500']]);
+        $reason = $validated['reason'] ?? null;
+        $wasActive = $user->is_active;
+
+        $user->is_active = !$wasActive;
         $user->save();
 
-        AuditLog::record($request->user()->user_id, null, 'user_toggle',
-            "Account #{$user->user_id} ({$user->username}) set to " . ($user->is_active ? 'active' : 'inactive') . '.');
+        // Push this the instant it happens, not just via the notification
+        // bell — a deactivated user sitting idle on a page should be logged
+        // out immediately rather than only finding out on their next click
+        // (see the 'account.deactivated' listener in app.js).
+        if ($wasActive && !$user->is_active) {
+            event(new AccountDeactivated($user->user_id));
+        }
 
-        return back()->with('status', 'Account status updated.');
+        $reassignedCount = 0;
+        $escalatedCount = 0;
+
+        if ($wasActive && $user->role === 'approver') {
+            $pendingAssignments = DocumentAssignment::where('user_id', $user->user_id)
+                ->where('individual_status', 'pending')
+                ->where('escalated_to_admin', false)
+                ->with(['document', 'stage'])
+                ->get();
+
+            foreach ($pendingAssignments as $assignment) {
+                $replacement = $this->workflow->findReplacementApprover($assignment);
+
+                if ($replacement) {
+                    $this->workflow->reassignAssignment($assignment, $replacement, $user, $reason);
+                    $reassignedCount++;
+                } else {
+                    $this->sla->escalateForReassignmentFailure($assignment);
+                    $escalatedCount++;
+                }
+            }
+        }
+
+        AuditLog::record($request->user()->user_id, null, 'user_toggle',
+            "Account #{$user->user_id} ({$user->username}) set to " . ($user->is_active ? 'active' : 'inactive') . '.' .
+            ($reason ? " Reason: \"{$reason}\"" : '') .
+            ($reassignedCount > 0 ? " {$reassignedCount} pending assignment(s) reassigned." : '') .
+            ($escalatedCount > 0 ? " {$escalatedCount} escalated to Admin (no eligible replacement)." : ''));
+
+        $status = 'Account status updated.';
+        if ($reassignedCount > 0 || $escalatedCount > 0) {
+            $status .= " {$reassignedCount} assignment(s) reassigned, {$escalatedCount} escalated to Admin.";
+        }
+
+        return back()->with('status', $status);
     }
 
     // ---------------------------------------------------------------
@@ -248,12 +313,15 @@ class AdminController extends Controller
     // ---------------------------------------------------------------
 
     private const TRAINING_MIN_PER_CATEGORY = 5;
-    // Raised from 10: staged samples now persist across training runs (see
-    // trainModel() below) so an admin can build up a larger, more diverse
-    // set over several upload sessions before training — 10 was a ceiling
-    // that made sense when every training run started from zero again, but
-    // would otherwise cap the whole accumulated corpus at 10 forever.
-    private const TRAINING_MAX_PER_CATEGORY = 20;
+    // Deliberately no lifetime-total ceiling per category — the corpus is
+    // meant to keep growing forever as an admin confirms more documents
+    // from the ML Review queue over the system's lifetime (see
+    // trainModel()'s trained_in_model_id stamping below for how "already
+    // taught the model something" is tracked instead of ever deleting a
+    // sample). This is purely a per-REQUEST batch limit — the original
+    // reason staging is split by category at all (see stageTrainingSamples()'s
+    // docblock) — not a total-staged cap.
+    private const TRAINING_BATCH_UPLOAD_LIMIT = 20;
     // Above this word-overlap fraction, a newly staged sample is flagged as
     // a likely near-duplicate of one already staged in the same category
     // (see stageTrainingSamples()). Chosen with headroom above what
@@ -263,6 +331,17 @@ class AdminController extends Controller
     // just from required boilerplate + domain terms; 0.85 flags true
     // near-copies without punishing legitimate variety.
     private const NEAR_DUPLICATE_THRESHOLD = 0.85;
+    // Deliberately much stricter than NEAR_DUPLICATE_THRESHOLD above — that
+    // one is tuned to be LOOSE (catch near-copies while still letting
+    // genuinely different same-category documents through, since those
+    // can legitimately share up to ~80% vocabulary). This one decides
+    // whether one review decision is allowed to resolve multiple pending
+    // documents together (see reviewFlaggedDocument()) — a much higher bar
+    // is needed there, since a false-positive match at this stage would
+    // silently confirm-and-route (or reject) a document the admin never
+    // actually looked at. Not 100%: OCR isn't perfectly deterministic even
+    // across two scans/formats of the literal same real document.
+    private const EXACT_DUPLICATE_THRESHOLD = 0.97;
 
     public function mlTraining()
     {
@@ -277,11 +356,381 @@ class AdminController extends Controller
         // and silently lost progress on logout, session expiry, or
         // switching devices; any admin can now pick up where another left
         // off. See the ml_staging_samples migration.
-        $stagedSamples = MlStagingSample::with('stagedBy')->orderBy('created_at')->get()->groupBy('category');
+        $stagedSamples = MlStagingSample::with(['stagedBy', 'trainedInModel'])->orderBy('created_at')->get()->groupBy('category');
         $minPerCategory = self::TRAINING_MIN_PER_CATEGORY;
-        $maxPerCategory = self::TRAINING_MAX_PER_CATEGORY;
+        $batchUploadLimit = self::TRAINING_BATCH_UPLOAD_LIMIT;
 
-        return view('admin.ml_training', compact('categories', 'activeModel', 'history', 'stagedSamples', 'minPerCategory', 'maxPerCategory'));
+        return view('admin.ml_training', array_merge(compact(
+            'categories', 'activeModel', 'history', 'stagedSamples', 'minPerCategory', 'batchUploadLimit'
+        ), $this->mlReviewQueueData()));
+    }
+
+    /**
+     * Fragment refresh for the Awaiting ML Review / Confirmed From Review
+     * panels — same live-channel/poll pattern already used elsewhere (e.g.
+     * ArchiveController::refresh(), AdminController::violationsRefresh()).
+     * A new low-confidence upload doesn't reach this page via any normal
+     * status change on an EXISTING row (see the manual event() calls in
+     * WorkflowService::process()/reviewFlaggedDocument() — DocumentRepository
+     * ::booted() only fires on an update, never a create), so without this
+     * an admin sitting on this page would only see a newly-held document
+     * after manually reloading.
+     */
+    public function mlReviewQueueRefresh()
+    {
+        return view('admin.partials.ml_review_panels', array_merge(
+            $this->mlReviewQueueData(),
+            ['categories' => ValidationService::knownCategories()]
+        ));
+    }
+
+    /** Lightweight JSON signal for the poll fallback — see overviewPoll()'s docblock for the same reasoning. */
+    public function mlReviewQueuePoll()
+    {
+        $data = $this->mlReviewQueueData();
+
+        // Includes grouped-away "similar" document ids too, not just each
+        // group's primary — a new upload that gets absorbed into an
+        // EXISTING group wouldn't otherwise change this signal at all
+        // (the primary ids stay the same), silently missing a live refresh.
+        $pendingIds = $data['reviewQueue']
+            ->flatMap(fn ($entry) => [
+                $entry->document->document_id,
+                ...$entry->similar->pluck('document_id'),
+                ...$entry->exactDuplicates->pluck('document_id'),
+            ])
+            ->all();
+
+        return response()->json([
+            'pending_ids' => $pendingIds,
+            'confirmed_ids' => $data['stagedFromReview']->pluck('document_id')->all(),
+        ]);
+    }
+
+    /** @return array{reviewQueue: \Illuminate\Support\Collection, priorityThreshold: int, stagedFromReview: \Illuminate\Support\Collection} */
+    private function mlReviewQueueData(): array
+    {
+        $priorityThreshold = config('ml.review_priority_threshold', 30);
+
+        return [
+            'reviewQueue' => $this->buildReviewQueueGroups($priorityThreshold),
+            'priorityThreshold' => $priorityThreshold,
+            // Documents already confirmed + routed from the review queue,
+            // so an admin can "Re-check" them once the model has been
+            // retrained on a sample they contributed — see recheckFlaggedDocument().
+            // Excludes ones dismissed via the "x" button (see
+            // dismissRecheckedDocument()) — a pure UI hide, not a data change.
+            'stagedFromReview' => DocumentRepository::where('ml_review_status', 'confirmed')
+                ->whereNull('ml_recheck_dismissed_at')
+                ->orderByDesc('updated_at')
+                ->limit(20)
+                ->get(),
+            // Compared against each row's confirmed_at_model_id so the
+            // view only offers "Re-check" once this has actually changed
+            // since confirmation — see recheckFlaggedDocument()'s gate.
+            'activeModelId' => MlModelRepository::active()?->model_id,
+        ];
+    }
+
+    /**
+     * Groups pending-review documents so near-identical uploads (the same
+     * template submitted by different people) collapse into one row
+     * instead of forcing the admin to review five copies of the same
+     * thing. Reuses the exact word-overlap check already used to warn
+     * about near-duplicate training samples (see stageTrainingSamples()) —
+     * same threshold, same reasoning: real distinct documents naturally
+     * share a lot of boilerplate, so this only catches true near-copies.
+     *
+     * @return \Illuminate\Support\Collection<int, object{document: DocumentRepository, similarCount: int}>
+     */
+    private function buildReviewQueueGroups(int $priorityThreshold): \Illuminate\Support\Collection
+    {
+        $pending = DocumentRepository::where('ml_review_status', 'pending')
+            ->orderBy('ml_confidence')
+            ->with('originator')
+            ->get();
+
+        $absorbed = [];
+        $groups = collect();
+
+        foreach ($pending as $doc) {
+            if (in_array($doc->document_id, $absorbed, true)) {
+                continue;
+            }
+
+            // Two different buckets for two different reasons:
+            //  - 'similar' (>= NEAR_DUPLICATE_THRESHOLD, < EXACT_DUPLICATE_THRESHOLD):
+            //    grouped purely for display, but still needs its OWN
+            //    reachable Confirm/Reject (see ml_review_panels.blade.php's
+            //    expandable list) — confirming/rejecting the primary has no
+            //    effect on these, and a document with no action of its own
+            //    would sit at ml_review_status='pending' forever.
+            //  - 'exactDuplicates' (>= EXACT_DUPLICATE_THRESHOLD): genuinely
+            //    the same document — reviewFlaggedDocument() resolves these
+            //    together with the primary in one decision, so they're
+            //    listed here only as a heads-up of what that click will
+            //    also affect, not as separately-actionable rows.
+            $similar = collect();
+            $exactDuplicates = collect();
+            foreach ($pending as $other) {
+                if ($other->document_id === $doc->document_id || in_array($other->document_id, $absorbed, true)) {
+                    continue;
+                }
+                $similarity = $this->classifier->wordOverlapSimilarity((string) $doc->ocr_text, (string) $other->ocr_text);
+                if ($similarity >= self::EXACT_DUPLICATE_THRESHOLD) {
+                    $absorbed[] = $other->document_id;
+                    $exactDuplicates->push($other);
+                } elseif ($similarity >= self::NEAR_DUPLICATE_THRESHOLD) {
+                    $absorbed[] = $other->document_id;
+                    $similar->push($other);
+                }
+            }
+
+            $groups->push((object) [
+                'document' => $doc,
+                'similar' => $similar,
+                'exactDuplicates' => $exactDuplicates,
+                'isPriority' => (float) $doc->ml_confidence < $priorityThreshold,
+            ]);
+        }
+
+        return $groups;
+    }
+
+    /**
+     * Admin confirms (optionally correcting) or rejects a low-confidence
+     * document held by WorkflowService::process() — held, not just flagged,
+     * because a wrong SVM guess that happens to pass its (wrong) category's
+     * validation would otherwise reach the wrong approvers with no clean
+     * way to undo an approval after the fact (see process()'s docblock).
+     *
+     * 'confirm' is the only path that actually routes the document into
+     * the workflow (WorkflowService::routeToWorkflow()) — it deliberately
+     * requires the admin's own category choice rather than trusting the
+     * SVM's uncertain guess as ground truth, since an unconfirmed
+     * low-confidence label is exactly the case where that guess is least
+     * trustworthy. Also always stages it into the same MlStagingSample pool
+     * trainModel() trains from — an admin confirming a category IS the
+     * confirmation that it's a good example to learn from, so there's no
+     * separate opt-in.
+     *
+     * 'reject' means the admin could not confirm ANY category fits (bad
+     * scan, garbage upload, genuinely ambiguous document) — sets
+     * global_status to 'rejected', which is deliberately the same terminal
+     * state a rejected-by-approver document reaches, so it reuses the
+     * originator's existing resubmit flow rather than needing a new one.
+     */
+    public function reviewFlaggedDocument(Request $request, DocumentRepository $document)
+    {
+        abort_unless($document->ml_review_status === 'pending', 404);
+
+        $validated = $request->validate([
+            'action' => ['required', 'in:confirm,reject'],
+            'category' => ['required_if:action,confirm', 'nullable', Rule::in(ValidationService::knownCategories())],
+        ]);
+
+        $admin = $request->user();
+
+        // Genuinely-identical siblings still pending review — one decision
+        // resolves all of them together, since repeating the same call for
+        // what is functionally the same document is pure busywork. Each
+        // one is still routed through the workflow individually (its own
+        // assignment, SLA window, audit trail, notification) — only the
+        // manual review step merges, not the actual processing.
+        $duplicates = $this->findExactDuplicateSiblings($document);
+
+        if ($validated['action'] === 'reject') {
+            $this->rejectReviewedDocument($document, $admin);
+            foreach ($duplicates as $duplicate) {
+                $this->rejectReviewedDocument($duplicate, $admin);
+            }
+
+            $status = "Rejected '{$document->title}'"
+                . ($duplicates->isNotEmpty() ? " and {$duplicates->count()} identical document(s) along with it" : '')
+                . ' — the originator(s) have been notified to resubmit.';
+
+            return back()->with('status', $status);
+        }
+
+        $category = $validated['category'];
+
+        // Only the primary gets staged as a training sample — staging
+        // every identical copy too would just trip the near-duplicate
+        // warning below against itself, for no benefit to the corpus.
+        $duplicateWarning = $this->confirmReviewedDocument($document, $category, $admin, stageForTraining: true);
+        foreach ($duplicates as $duplicate) {
+            $this->confirmReviewedDocument($duplicate, $category, $admin, stageForTraining: false);
+        }
+
+        $status = "Confirmed '{$document->title}' as '{$category}'"
+            . ($duplicates->isNotEmpty() ? " and routed {$duplicates->count()} identical document(s) along with it" : '')
+            . '.';
+        $response = back()->with('status', $status);
+
+        return $duplicateWarning ? $response->with('warning', [$duplicateWarning]) : $response;
+    }
+
+    /**
+     * Other still-pending documents whose text is a near-exact match of
+     * this one (see EXACT_DUPLICATE_THRESHOLD's docblock for why this is a
+     * much stricter bar than the display-grouping threshold). Used to let
+     * one review decision resolve a whole batch of identical uploads at
+     * once — deliberately recomputed fresh from the DB at review time
+     * rather than trusting any client-supplied list of ids, since an admin
+     * should only ever be able to bulk-resolve documents actually verified
+     * server-side to be duplicates of the one they're looking at.
+     */
+    private function findExactDuplicateSiblings(DocumentRepository $document): \Illuminate\Support\Collection
+    {
+        return DocumentRepository::where('ml_review_status', 'pending')
+            ->where('document_id', '!=', $document->document_id)
+            ->get()
+            ->filter(fn (DocumentRepository $other) => $this->classifier->wordOverlapSimilarity(
+                (string) $document->ocr_text,
+                (string) $other->ocr_text
+            ) >= self::EXACT_DUPLICATE_THRESHOLD)
+            ->values();
+    }
+
+    private function rejectReviewedDocument(DocumentRepository $document, User $admin): void
+    {
+        $document->ml_review_status = 'dismissed';
+        $document->global_status = 'rejected';
+        $document->save();
+
+        AuditLog::record($admin->user_id, $document->document_id, 'ml_review_reject',
+            "Rejected '{$document->title}' during ML review — no category could be confidently confirmed " .
+            "(originally classified as '{$document->ml_category}' at {$document->ml_confidence}%). Not routed for approval.");
+
+        NotificationRecord::send($document->originator_id, $document->document_id,
+            "Your document '{$document->title}' could not be confidently classified by an admin and was not routed for approval. " .
+            'Please review it and resubmit a corrected version.');
+    }
+
+    /** @return string|null A near-duplicate-in-training-staging warning, only when $stageForTraining. */
+    private function confirmReviewedDocument(DocumentRepository $document, string $category, User $admin, bool $stageForTraining): ?string
+    {
+        $duplicateWarning = null;
+
+        if ($stageForTraining) {
+            foreach (MlStagingSample::where('category', $category)->get(['original_filename', 'extracted_text']) as $existing) {
+                $similarity = $this->classifier->wordOverlapSimilarity((string) $document->ocr_text, $existing->extracted_text);
+                if ($similarity >= self::NEAR_DUPLICATE_THRESHOLD) {
+                    $duplicateWarning = sprintf(
+                        '"%s" looks like a near-duplicate of already-staged "%s" (%d%% word overlap) — staged anyway, but consider whether a more varied example would help more.',
+                        $document->title,
+                        $existing->original_filename,
+                        round($similarity * 100)
+                    );
+                    break;
+                }
+            }
+
+            MlStagingSample::create([
+                'category' => $category,
+                'original_filename' => $document->original_filename ?? $document->title,
+                'extracted_text' => (string) $document->ocr_text,
+                'staged_by' => $admin->user_id,
+            ]);
+        }
+
+        $originalCategory = $document->ml_category;
+        $originalConfidence = $document->ml_confidence;
+
+        $document->ml_category = $category;
+        $document->ml_review_status = 'confirmed';
+        // Snapshot of what's active right now — see recheckFlaggedDocument()'s
+        // gate: "Re-check" only becomes meaningful once the active model
+        // has actually changed since this moment.
+        $document->confirmed_at_model_id = MlModelRepository::active()?->model_id;
+        $document->save();
+
+        // Only now — the whole point of holding it — does this document
+        // actually reach any approver's dashboard.
+        $this->workflow->routeToWorkflow($document);
+
+        // ml_review_status changing isn't global_status/disputed_at, so
+        // DocumentRepository::booted() won't broadcast this on its own —
+        // fire it manually so this document drops off every OTHER admin's
+        // review queue live too, not just the acting admin's (who already
+        // sees it via this request's own page reload).
+        event(new DocumentStatusChanged($document));
+
+        AuditLog::record($admin->user_id, $document->document_id, 'ml_review_confirm',
+            "Confirmed '{$document->title}' as '{$category}' (originally classified as '{$originalCategory}' at {$originalConfidence}%) " .
+            'and routed it for approval.' . ($stageForTraining ? ' Added to training staging.' : ' Identical to another document already staged for training in this batch.'));
+
+        NotificationRecord::send($document->originator_id, $document->document_id,
+            "Your document '{$document->title}' was confirmed as '{$category}' by an admin and has been routed for approval.");
+
+        return $duplicateWarning;
+    }
+
+    /**
+     * Re-runs classification for a document already confirmed by the
+     * review queue, against whichever model is active right now —
+     * deliberately writes to ml_recheck_* rather than overwriting
+     * ml_category/ml_confidence, since those already drove this document's
+     * real workflow routing and shouldn't be silently rewritten after the
+     * fact. Lets an admin see, concretely, whether retraining on their
+     * correction actually improved how this document would score.
+     *
+     * Gated on the active model having actually changed since this
+     * document was confirmed (see confirmed_at_model_id, set in
+     * confirmReviewedDocument()) — without this, re-checking before any
+     * retrain just re-classifies against the exact same model, producing a
+     * meaningless no-op result (identical before/after) that still shows
+     * up on the originator's tracking page looking like something happened.
+     */
+    public function recheckFlaggedDocument(Request $request, DocumentRepository $document)
+    {
+        abort_unless($document->ml_review_status === 'confirmed', 404);
+
+        $activeModelId = MlModelRepository::active()?->model_id;
+        abort_unless($activeModelId !== null && $activeModelId !== $document->confirmed_at_model_id, 409,
+            'The model has not been retrained since this document was confirmed — nothing new to check yet.');
+
+        $result = $this->classifier->classify((string) $document->ocr_text);
+
+        $document->ml_recheck_category = $result['category'];
+        $document->ml_recheck_confidence = $result['confidence'];
+        $document->ml_rechecked_at = now();
+        $document->save();
+
+        // ml_recheck_* changing isn't global_status/disputed_at, so
+        // DocumentRepository::booted() won't broadcast this on its own —
+        // fire it manually, same reasoning as the confirm action, so every
+        // admin watching this page sees the new result live, not just
+        // whoever clicked "Re-check."
+        event(new DocumentStatusChanged($document));
+
+        AuditLog::record($request->user()->user_id, $document->document_id, 'ml_recheck',
+            "Re-checked '{$document->title}' against the current model: '{$result['category']}' at {$result['confidence']}% " .
+            "(originally '{$document->ml_category}' at {$document->ml_confidence}%).");
+
+        return back()->with('status', "Re-check: '{$result['category']}' at {$result['confidence']}% confidence.");
+    }
+
+    /**
+     * Dismisses a row from the "Confirmed From Review" panel once an admin
+     * has re-checked it and is done watching — a pure UI flag. Deliberately
+     * only allowed after a re-check has actually happened (ml_rechecked_at
+     * set): dismissing something before ever re-checking it wouldn't fit
+     * the intended stage → retrain → re-check → done flow, and the "x"
+     * button itself is only rendered once ml_rechecked_at is set (see
+     * ml_review_panels.blade.php) — this mirrors that same guard
+     * server-side rather than trusting the UI alone.
+     */
+    public function dismissRecheckedDocument(Request $request, DocumentRepository $document)
+    {
+        abort_unless($document->ml_review_status === 'confirmed' && $document->ml_rechecked_at !== null, 404);
+
+        $document->ml_recheck_dismissed_at = now();
+        $document->save();
+
+        event(new DocumentStatusChanged($document));
+
+        return back()->with('status', "Dismissed '{$document->title}' from the re-check list.");
     }
 
     /**
@@ -302,10 +751,8 @@ class AdminController extends Controller
     {
         abort_unless(in_array($category, ValidationService::knownCategories(), true), 404);
 
-        $alreadyStaged = MlStagingSample::where('category', $category)->count();
-
         $validated = $request->validate([
-            'files' => ['required', 'array', 'min:1', 'max:' . (self::TRAINING_MAX_PER_CATEGORY - $alreadyStaged)],
+            'files' => ['required', 'array', 'min:1', 'max:' . self::TRAINING_BATCH_UPLOAD_LIMIT],
             'files.*' => ['required', 'file', 'mimes:pdf,txt,docx', 'max:10240'],
         ]);
 
@@ -393,6 +840,13 @@ class AdminController extends Controller
         // every run starting from zero again. Use "Clear" on the ML
         // Training page to explicitly wipe a category's staging if a fresh
         // start is ever actually wanted.
+        //
+        // Every row gets swept into $samplesByCategory above regardless of
+        // category (no per-category filtering happens before train()), so
+        // stamping every currently-staged row here is accurate, not an
+        // approximation — lets the page show "already taught this model
+        // something" vs "still waiting for the next retrain" per sample.
+        MlStagingSample::query()->update(['trained_in_model_id' => $model->model_id]);
 
         return back()->with('status', "Model {$model->version} trained successfully on {$model->training_sample_count} samples (est. accuracy {$model->accuracy_score}%). Staged samples are kept — add more anytime and retrain to combine them.");
     }
@@ -868,6 +1322,46 @@ class AdminController extends Controller
 
     public function violationsReport(Request $request)
     {
+        $query = $this->violationsQuery($request);
+
+        // Same "folders first" pattern as the Archive (Feature: browse by
+        // category) — but unlike the Archive, the stat cards and the
+        // approver-roster control stay visible either way; only the
+        // filter form + results list are gated behind picking a category
+        // (or searching), since those are the pieces that don't mean
+        // anything until you've narrowed down to something.
+        $hasActiveFilters = $request->filled('category') || $request->filled('document')
+            || $request->filled('date_from') || $request->filled('date_to');
+        $showFolders = !$hasActiveFilters;
+
+        $violations = $showFolders ? null : (clone $query)
+            ->with(['document', 'approver', 'assignment.adminOverrideBy', 'assignment.approver'])
+            ->orderByDesc('violation_timestamp')->paginate(20)->withQueryString();
+
+        return view('admin.sla_violations', array_merge($this->violationStats($query, $request), [
+            'showFolders' => $showFolders,
+            'folders' => $showFolders ? $this->violationFolderStats() : null,
+            'violations' => $violations,
+            'categories' => ValidationService::knownCategories(),
+        ]));
+    }
+
+    /**
+     * Live search (Feature: instant results as you type) — identical
+     * query/pagination as violationsReport()'s results branch, via the
+     * shared helpers below, returning just the results fragment.
+     */
+    public function violationsRefresh(Request $request)
+    {
+        $violations = (clone $this->violationsQuery($request))
+            ->with(['document', 'approver', 'assignment.adminOverrideBy', 'assignment.approver'])
+            ->orderByDesc('violation_timestamp')->paginate(20)->withQueryString();
+
+        return view('admin.partials.violations_results', compact('violations'));
+    }
+
+    private function violationsQuery(Request $request)
+    {
         $query = SlaViolation::query();
 
         if ($request->filled('document')) {
@@ -885,14 +1379,44 @@ class AdminController extends Controller
             $query->whereDate('violation_timestamp', '<=', $request->date('date_to'));
         }
 
-        $violations = (clone $query)->with(['document', 'approver', 'assignment.adminOverrideBy', 'assignment.approver'])
-            ->orderByDesc('violation_timestamp')->paginate(20)->withQueryString();
+        return $query;
+    }
 
+    /** One row per category for the folder-grid landing screen. */
+    private function violationFolderStats()
+    {
+        return collect(ValidationService::knownCategories())->map(fn ($category) => (object) [
+            'category' => $category,
+            'total' => SlaViolation::whereHas('document', fn ($q) => $q->where('ml_category', $category))->count(),
+        ]);
+    }
+
+    /**
+     * Everything the stat cards + approver roster need — always computed
+     * regardless of $showFolders, since those stay visible on both screens.
+     */
+    private function violationStats($query, Request $request): array
+    {
         $byApprover = (clone $query)->selectRaw('approver_id, count(*) as total')
             ->groupBy('approver_id')->with('approver')->orderByDesc('total')->limit(5)->get();
 
         $byStage = (clone $query)->selectRaw('stage_name, count(*) as total')
             ->groupBy('stage_name')->orderByDesc('total')->limit(5)->get();
+
+        // Top Category — parallels Top Approver/Top Bottleneck Stage, and
+        // ties directly into the category-folder browsing above.
+        $byCategory = (clone $query)
+            ->join('document_repository', 'sla_violations.document_id', '=', 'document_repository.document_id')
+            ->selectRaw('document_repository.ml_category, count(*) as total')
+            ->groupBy('document_repository.ml_category')
+            ->orderByDesc('total')
+            ->first();
+
+        // Disputed — how many of these breaches were later flagged by an
+        // Admin as a bad auto-approval (see AdminController::
+        // reviewAutoApproval()). Otherwise only visible per-row as a badge,
+        // never as a total anywhere on this page.
+        $disputedCount = (clone $query)->whereHas('document', fn ($q) => $q->whereNotNull('disputed_at'))->count();
 
         $totalCount = (clone $query)->count();
         $avgOverdue = (clone $query)->avg('duration_overdue');
@@ -950,16 +1474,16 @@ class AdminController extends Controller
             ->get()
             ->groupBy('approver_id');
 
-        return view('admin.sla_violations', [
-            'violations' => $violations,
+        return [
             'byApprover' => $byApprover,
             'approverRoster' => $approverRoster,
             'byApproverCategory' => $byApproverCategory,
             'byStage' => $byStage,
+            'byCategory' => $byCategory,
+            'disputedCount' => $disputedCount,
             'totalCount' => $totalCount,
             'avgOverdue' => round($avgOverdue ?? 0),
-            'categories' => ValidationService::knownCategories(),
-        ]);
+        ];
     }
 
     // ---------------------------------------------------------------

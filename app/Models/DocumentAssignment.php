@@ -79,8 +79,9 @@ class DocumentAssignment extends Model
     protected $fillable = [
         'document_id', 'user_id', 'stage_id', 'due_date', 'priority_rank',
         'individual_status', 'comments', 'sla_expires_at', 'admin_override_at',
-        'admin_override_by', 'escalated_to_admin', 'escalated_at', 'auto_approved', 'acted_at',
+        'admin_override_by', 'escalated_to_admin', 'escalated_at', 'escalation_reason', 'auto_approved', 'acted_at',
         'admin_reviewed_at', 'admin_reviewed_by', 'admin_review_note', 'admin_review_outcome',
+        'reassigned_at', 'reassigned_from', 'reassignment_reason',
     ];
 
     protected $casts = [
@@ -92,6 +93,7 @@ class DocumentAssignment extends Model
         'escalated_at' => 'datetime',
         'auto_approved' => 'boolean',
         'admin_reviewed_at' => 'datetime',
+        'reassigned_at' => 'datetime',
     ];
 
     public function document()
@@ -122,6 +124,11 @@ class DocumentAssignment extends Model
     public function reviewedBy()
     {
         return $this->belongsTo(User::class, 'admin_reviewed_by', 'user_id');
+    }
+
+    public function reassignedFrom()
+    {
+        return $this->belongsTo(User::class, 'reassigned_from', 'user_id');
     }
 
     /** Seconds remaining before SLA breach — used for the countdown UI. */

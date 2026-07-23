@@ -62,7 +62,7 @@
                 </div>
 
                 <div>
-                    <label class="block text-xs font-medium text-surface-700 mb-1">Temporary Password</label>
+                    <label class="block text-xs font-medium text-surface-700 mb-1">Password</label>
                     <input type="password" name="password" required minlength="8" class="w-full rounded-lg border-surface-300 text-sm px-3 py-2 focus:border-primary-500 focus:ring-primary-500">
                 </div>
                 <button class="w-full bg-primary-700 hover:bg-primary-800 text-white text-sm font-medium py-2.5 rounded-lg transition-colors">Create Account</button>
@@ -72,6 +72,18 @@
 
     <div class="lg:col-span-2">
         <div class="bg-white rounded-xl shadow-card border border-surface-200 overflow-hidden">
+            <div class="px-6 py-3 border-b border-surface-200 flex items-center justify-between">
+                <span class="text-xs text-surface-400">
+                    @if(!$showInactive && $inactiveCount > 0)
+                        {{ $inactiveCount }} inactive account{{ $inactiveCount === 1 ? '' : 's' }} hidden
+                    @endif
+                </span>
+                @if($showInactive)
+                    <a href="{{ url()->current() }}" class="text-xs font-medium text-primary-700 hover:underline">Hide inactive accounts</a>
+                @elseif($inactiveCount > 0)
+                    <a href="{{ url()->current() }}?show_inactive=1" class="text-xs font-medium text-primary-700 hover:underline">Show inactive accounts</a>
+                @endif
+            </div>
             <div class="overflow-x-auto">
             <table class="w-full min-w-[720px] text-sm">
                 <thead class="bg-surface-50 text-surface-500 text-xs uppercase tracking-wide">
@@ -128,12 +140,40 @@
                                 @if($u->role === 'approver')
                                     <a href="{{ route('admin.users.stages.edit', $u) }}" class="text-xs font-medium text-primary-700 hover:underline">Manage Category & Stages</a>
                                 @endif
-                                <form method="POST" action="{{ route('admin.users.toggle', $u) }}" class="inline">
-                                    @csrf
-                                    <button class="text-xs font-medium text-primary-700 hover:underline">
-                                        {{ $u->is_active ? 'Deactivate' : 'Activate' }}
-                                    </button>
-                                </form>
+                                @if($u->is_active)
+                                    {{-- A centered modal (same pattern as x-document-viewer-modal),
+                                         not a popover anchored to this button — an absolutely-
+                                         positioned popover still gets clipped by the table's
+                                         overflow-x-auto scroll container (position:absolute escapes
+                                         normal document FLOW, not an ancestor's overflow clipping),
+                                         so it was overflowing/getting cut off regardless. fixed
+                                         inset-0 escapes that entirely by anchoring to the viewport,
+                                         not this row. Deactivating an approver with pending work
+                                         triggers an automatic handoff (see AdminController::
+                                         toggleUser()); this optional note just gives the new
+                                         approver context for why. --}}
+                                    <details data-popover class="inline-block align-middle text-left">
+                                        <summary class="text-xs font-medium text-rejected-600 hover:underline cursor-pointer list-none [&::-webkit-details-marker]:hidden">Deactivate</summary>
+                                        <div class="fixed inset-0 z-50 bg-surface-900/50 flex items-center justify-center p-4"
+                                            onclick="if(event.target === this) this.closest('details').open = false">
+                                            <form method="POST" action="{{ route('admin.users.toggle', $u) }}" class="flex flex-col w-full max-w-sm bg-white shadow-elevated border border-surface-200 rounded-xl p-5">
+                                                @csrf
+                                                <h3 class="text-sm font-semibold text-surface-900 mb-3">Deactivate {{ $u->full_name }}?</h3>
+                                                <label class="block text-[11px] font-medium text-surface-600 mb-1">Reason (optional)</label>
+                                                <textarea name="reason" rows="3" maxlength="500" placeholder="e.g. Resigned, role change…"
+                                                    class="block w-full rounded-lg border-surface-300 text-xs px-2 py-1.5 focus:border-primary-500 focus:ring-primary-500 mb-3"></textarea>
+                                                <button type="submit" class="block w-full bg-rejected-600 hover:bg-rejected-700 text-white text-xs font-medium py-2 rounded-lg transition-colors">
+                                                    Confirm Deactivation
+                                                </button>
+                                            </form>
+                                        </div>
+                                    </details>
+                                @else
+                                    <form method="POST" action="{{ route('admin.users.toggle', $u) }}" class="inline">
+                                        @csrf
+                                        <button class="text-xs font-medium text-primary-700 hover:underline">Activate</button>
+                                    </form>
+                                @endif
                             </td>
                         </tr>
                     @endforeach

@@ -30,10 +30,17 @@
 
             <div class="divide-y divide-surface-100">
                 @foreach($container->documents as $documentId => $stageAssignments)
-                    @php $doc = $stageAssignments->first()->document; @endphp
+                    @php
+                        $doc = $stageAssignments->first()->document;
+                        $activeAssignment = $stageAssignments->sortBy(fn ($a) => $a->stage->sequence_order)->first();
+                    @endphp
                     <div class="p-6">
                         <div class="flex items-center justify-between mb-2">
-                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-rejected-50 text-rejected-700 ring-1 ring-inset ring-rejected-500/20">SLA Breached</span>
+                            @if($activeAssignment->escalation_reason === 'no_eligible_approver')
+                                <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-processing-50 text-processing-700 ring-1 ring-inset ring-processing-500/20">No Approver Available</span>
+                            @else
+                                <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-rejected-50 text-rejected-700 ring-1 ring-inset ring-rejected-500/20">SLA Breached</span>
+                            @endif
                             @if(!$container->is_batch)
                                 <span class="text-xs font-medium text-rejected-700">Due {{ $container->due_date?->format('M j, Y g:i A') ?? '—' }}</span>
                             @endif
@@ -53,21 +60,27 @@
                              below; once it's resolved, the next breached stage (if any) surfaces
                              the same way on reload. --}}
                         <div class="mb-4">
-                            <x-workflow-stage-list :document="$doc" :highlight-stage-id="$stageAssignments->sortBy(fn ($a) => $a->stage->sequence_order)->first()->stage_id" />
+                            <x-workflow-stage-list :document="$doc" :highlight-stage-id="$activeAssignment->stage_id" />
                         </div>
 
-                        @php
-                            $activeAssignment = $stageAssignments->sortBy(fn ($a) => $a->stage->sequence_order)->first();
-                        @endphp
                         <div class="flex flex-col sm:flex-row sm:items-center gap-4 rounded-lg border border-rejected-500/30 bg-rejected-50/40 p-4">
                             <div class="flex-1 min-w-0">
                                 <div class="flex items-center gap-2 mb-1">
-                                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ring-1 ring-inset bg-rejected-50 text-rejected-700 ring-rejected-500/20">SLA Breached</span>
+                                    @if($activeAssignment->escalation_reason === 'no_eligible_approver')
+                                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ring-1 ring-inset bg-processing-50 text-processing-700 ring-processing-500/20">No Approver Available</span>
+                                    @else
+                                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ring-1 ring-inset bg-rejected-50 text-rejected-700 ring-rejected-500/20">SLA Breached</span>
+                                    @endif
                                     <span class="text-xs text-surface-500 font-medium">Stage: {{ $activeAssignment->stage->stage_name }}</span>
                                 </div>
                                 <p class="text-xs text-surface-500">
                                     Approver: {{ $activeAssignment->approver->full_name ?? 'Unassigned' }} &middot;
-                                    Expired <span data-live-time="{{ $activeAssignment->sla_expires_at->timestamp }}">{{ $activeAssignment->sla_expires_at->diffForHumans() }}</span>
+                                    @if($activeAssignment->escalation_reason === 'no_eligible_approver')
+                                        Escalated immediately — no eligible replacement after deactivation &middot;
+                                        Original deadline <span data-live-time="{{ $activeAssignment->sla_expires_at->timestamp }}">{{ $activeAssignment->sla_expires_at->diffForHumans() }}</span>
+                                    @else
+                                        Expired <span data-live-time="{{ $activeAssignment->sla_expires_at->timestamp }}">{{ $activeAssignment->sla_expires_at->diffForHumans() }}</span>
+                                    @endif
                                     @if($activeAssignment->adminGraceExpiresAt())
                                         &middot; <span data-live-time="{{ $activeAssignment->adminGraceExpiresAt()->timestamp }}" data-live-urgent-under="7200" class="font-medium">{{ $activeAssignment->adminGraceExpiresAt()->diffForHumans() }}</span> until system auto-approval
                                     @endif

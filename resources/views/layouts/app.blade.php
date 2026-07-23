@@ -11,28 +11,26 @@
     @vite(['resources/css/app.css', 'resources/js/app.js'])
 </head>
 <body class="h-full font-sans text-surface-800 antialiased">
-<div class="h-screen flex overflow-hidden">
+<div class="h-screen overflow-hidden">
 
     {{-- ============ SIDEBAR ============ --}}
-    {{-- A collapse-to-zero-width flex sibling, not a fixed overlay — the
-         hamburger button toggles its width between w-64 and w-0 (see
-         app.js), and the main column below reflows to fill the freed space
-         automatically since they're plain flex siblings. This is the same
-         toggle mechanism at every screen width: no breakpoint-dependent
-         "always visible on desktop, drawer-with-backdrop on mobile" split,
-         and no body-scroll-locking modal behavior — just a collapsible
-         panel, identically everywhere. overflow-hidden keeps its contents
-         from reflowing/wrapping visibly while the width animates.
-         h-screen on the outer wrapper (not min-h-full) plus overflow-hidden
-         here is what actually matters for long pages: without it, this
-         aside stretches to match a tall <main> (many documents to review,
-         say) instead of staying pinned to the viewport — pushing the
-         logout button in the footer below down with it, off-screen, so
-         reaching it means scrolling the entire page. The nav below already
-         has its own overflow-y-auto; this is what lets that actually do
-         its job instead of the whole sidebar just growing taller. --}}
-    <aside id="sidebar" class="flex-shrink-0 overflow-hidden w-64 h-full flex flex-col bg-gradient-to-b from-primary-900 to-primary-950 text-primary-100 transition-[width] duration-300 ease-in-out">
-        <div class="flex items-center justify-between gap-2 px-6 h-16 border-b border-white/10 w-64">
+    {{-- A fixed off-canvas drawer, not a flex sibling that reflows content —
+         the hamburger button toggles a `transform: translateX()` between
+         off-screen (-translate-x-full) and on-screen (translate-x-0), with
+         a backdrop that dims the page and closes the drawer on tap (see
+         app.js). This replaced an earlier width-collapsing flex-sibling
+         version that relied on `width` transitions + `overflow-hidden`
+         clipping to hide — spec-correct, but unreliable enough across
+         mobile browsers that it sometimes wouldn't visibly close at all.
+         A transform-based drawer is the standard, robust pattern for this
+         and behaves identically at every screen width — same mechanism
+         everywhere, just implemented in a way that's actually dependable on
+         phones, not only desktop. Starts CLOSED by default (a deliberate
+         change from the old default-open behavior) so opening the sidebar
+         is always an explicit action, not something already dimming/
+         blocking the page the moment you load it. --}}
+    <aside id="sidebar" class="fixed inset-y-0 left-0 z-40 w-64 h-full flex flex-col bg-gradient-to-b from-primary-900 to-primary-950 text-primary-100 transform -translate-x-full transition-transform duration-300 ease-in-out">
+        <div class="flex items-center justify-between gap-2 px-6 h-16 border-b border-white/10">
             <div class="flex items-center gap-2.5">
                 <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-primary-400 to-primary-600 flex items-center justify-center font-bold text-white shadow-sm ring-1 ring-white/20 flex-shrink-0">D</div>
                 <span class="font-semibold text-white tracking-tight text-[15px] whitespace-nowrap">DocTrack</span>
@@ -43,7 +41,7 @@
             </button>
         </div>
 
-        <nav class="flex-1 overflow-y-auto overflow-x-hidden px-3 py-6 space-y-1 text-sm w-64">
+        <nav class="flex-1 overflow-y-auto overflow-x-hidden px-3 py-6 space-y-1 text-sm">
             @auth
                 @if(auth()->user()->isAdmin())
                     @include('layouts.nav-admin')
@@ -56,7 +54,7 @@
         </nav>
 
         @auth
-        <div class="px-4 py-4 border-t border-white/10 w-64">
+        <div class="px-4 py-4 border-t border-white/10">
             <div class="flex items-center gap-3">
                 <div class="w-9 h-9 rounded-full bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center text-white text-sm font-semibold ring-1 ring-white/10 flex-shrink-0">
                     {{ strtoupper(substr(auth()->user()->full_name, 0, 1)) }}
@@ -78,22 +76,23 @@
         @endauth
     </aside>
 
+    {{-- Dims the page and closes the drawer on tap — only visible/clickable
+         while the sidebar is open (see app.js toggling opacity + pointer-events). --}}
+    <div id="sidebar-backdrop" class="fixed inset-0 bg-surface-900/50 z-30 opacity-0 pointer-events-none transition-opacity duration-300"></div>
+
     {{-- ============ MAIN COLUMN ============ --}}
-    {{-- min-w-0: this is a flex item of the row above, so without it, any
-         page that renders something wide (e.g. a table needing a min-width
-         to stay legible) would refuse to shrink below that content's width
-         — stretching this whole column, and with it the page, into
-         horizontal scroll instead of letting the wide content scroll
-         internally on its own. overflow-hidden here (paired with h-screen
-         on the outer wrapper) is what makes <main> below the ONLY thing
-         that scrolls when a page has a lot of content — this column itself
-         never grows past the viewport, so the header stays put and the
-         sidebar next to it never gets stretched taller than the screen. --}}
-    <div class="min-w-0 flex-1 flex flex-col h-full overflow-hidden">
+    {{-- No longer a flex sibling reacting to the sidebar's width — the
+         sidebar is fixed/out-of-flow now, so this is simply always full
+         width. overflow-hidden here (paired with h-screen on the outer
+         wrapper) is what makes <main> below the ONLY thing that scrolls
+         when a page has a lot of content — this column itself never grows
+         past the viewport, so the header stays put regardless of page
+         length. --}}
+    <div class="h-full flex flex-col overflow-hidden">
 
         {{-- Top bar --}}
         <header class="flex-shrink-0 z-10 bg-white/85 backdrop-blur-md border-b border-surface-200/80 shadow-[0_1px_0_0_rgb(15_23_42_/_0.02)] h-16 flex items-center px-4 sm:px-8">
-            <button id="sidebar-toggle" type="button" class="-ml-1 mr-3 p-2 rounded-lg text-surface-500 hover:bg-surface-100 hover:text-surface-900" aria-label="Toggle menu" aria-expanded="true" aria-controls="sidebar">
+            <button id="sidebar-toggle" type="button" class="-ml-1 mr-3 p-2 rounded-lg text-surface-500 hover:bg-surface-100 hover:text-surface-900" aria-label="Toggle menu" aria-expanded="false" aria-controls="sidebar">
                 <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16"/>
                 </svg>

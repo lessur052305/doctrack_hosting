@@ -1,0 +1,119 @@
+<?php
+
+use App\Models\DocumentRepository;
+use App\Models\User;
+
+function archivedDocument(User $originator, string $category, array $overrides = []): DocumentRepository
+{
+    return DocumentRepository::create(array_merge([
+        'originator_id' => $originator->user_id,
+        'title' => $overrides['title'] ?? "{$category}-" . uniqid() . '.txt',
+        'file_path' => 'documents/' . uniqid() . '.txt',
+        'mime_type' => 'text/plain',
+        'due_date' => now()->addDay(),
+        'upload_date' => now(),
+        'global_status' => 'approved',
+        'ml_category' => $category,
+    ], $overrides));
+}
+
+test('admin visiting the bare archive URL sees the folder grid, not the flat results table', function () {
+    $admin = User::factory()->admin()->create();
+    $originator = User::factory()->originator()->create();
+    archivedDocument($originator, 'Job Order');
+
+    $response = $this->actingAs($admin)->get(route('admin.archive'));
+
+    $response->assertOk();
+    $response->assertSee('Browse by Category');
+    $response->assertSee('Job Order');
+    $response->assertSee('Purchase Requisition');
+    $response->assertSee('Service Report');
+    $response->assertDontSee('Approved Documents'); // the results-view heading
+});
+
+test('clicking into a category folder shows the scoped results view', function () {
+    $admin = User::factory()->admin()->create();
+    $originator = User::factory()->originator()->create();
+    archivedDocument($originator, 'Job Order', ['title' => 'job-order-doc.txt']);
+    archivedDocument($originator, 'Service Report', ['title' => 'service-report-doc.txt']);
+
+    $response = $this->actingAs($admin)->get(route('admin.archive', ['category' => 'Job Order']));
+
+    $response->assertOk();
+    $response->assertSee('Approved Documents');
+    $response->assertSee('job-order-doc.txt');
+    $response->assertDontSee('service-report-doc.txt');
+});
+
+test('an approver never sees the folder grid, even with no filters — straight to their scoped results', function () {
+    $approver = User::factory()->approver('Job Order')->create();
+    $originator = User::factory()->originator()->create();
+    archivedDocument($originator, 'Job Order', ['title' => 'my-category-doc.txt']);
+
+    $response = $this->actingAs($approver)->get(route('approver.archive'));
+
+    $response->assertOk();
+    $response->assertSee('Approved Documents');
+    $response->assertSee('my-category-doc.txt');
+    $response->assertDontSee('Browse by Category');
+});
+
+test('an originator sees folder counts scoped to only their own submissions', function () {
+    $originator = User::factory()->originator()->create();
+    $otherOriginator = User::factory()->originator()->create();
+    archivedDocument($originator, 'Job Order');
+    archivedDocument($originator, 'Job Order');
+    archivedDocument($otherOriginator, 'Job Order'); // someone else's — must not count
+
+    $response = $this->actingAs($originator)->get(route('originator.archive'));
+
+    $response->assertOk();
+    $folders = $response->viewData('folders');
+    $jobOrderFolder = $folders->firstWhere('category', 'Job Order');
+
+    expect($jobOrderFolder->total)->toBe(2);
+});
+
+test('folder stats correctly break down disputed and auto-approved counts', function () {
+    $admin = User::factory()->admin()->create();
+    $originator = User::factory()->originator()->create();
+    archivedDocument($originator, 'Job Order', ['global_status' => 'approved']);
+    archivedDocument($originator, 'Job Order', ['global_status' => 'auto_approved']);
+    archivedDocument($originator, 'Job Order', ['global_status' => 'auto_approved', 'disputed_at' => now()]);
+
+    $response = $this->actingAs($admin)->get(route('admin.archive'));
+
+    $folders = $response->viewData('folders');
+    $jobOrderFolder = $folders->firstWhere('category', 'Job Order');
+
+    expect($jobOrderFolder->total)->toBe(3)
+        ->and($jobOrderFolder->disputed)->toBe(1)
+        ->and($jobOrderFolder->auto_approved)->toBe(1); // the disputed one is excluded from this count, it has its own
+});
+
+test('searching a keyword from the folder screen (no category) shows cross-category flat results', function () {
+    $admin = User::factory()->admin()->create();
+    $originator = User::factory()->originator()->create();
+    archivedDocument($originator, 'Job Order', ['title' => 'findme-uniquetoken.txt']);
+    archivedDocument($originator, 'Service Report', ['title' => 'unrelated.txt']);
+
+    $response = $this->actingAs($admin)->get(route('admin.archive', ['keyword' => 'findme-uniquetoken']));
+
+    $response->assertOk();
+    $response->assertSee('Approved Documents');
+    $response->assertSee('findme-uniquetoken.txt');
+    $response->assertDontSee('unrelated.txt');
+});
+
+test('sort=oldest orders results oldest first instead of the newest-first default', function () {
+    $admin = User::factory()->admin()->create();
+    $originator = User::factory()->originator()->create();
+    archivedDocument($originator, 'Job Order', ['title' => 'old-one.txt', 'upload_date' => now()->subDays(5)]);
+    archivedDocument($originator, 'Job Order', ['title' => 'new-one.txt', 'upload_date' => now()]);
+
+    $response = $this->actingAs($admin)->get(route('admin.archive', ['category' => 'Job Order', 'sort' => 'oldest']));
+
+    $documents = $response->viewData('documents');
+    expect($documents->first()->title)->toBe('old-one.txt');
+});

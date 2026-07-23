@@ -122,6 +122,11 @@ Route::middleware('auth')->group(function () {
         Route::post('/ml-training/stage/{category}', [AdminController::class, 'stageTrainingSamples'])->middleware('throttle:20,1')->name('ml.training.stage');
         Route::delete('/ml-training/stage/{category}', [AdminController::class, 'clearTrainingStaging'])->name('ml.training.stage.clear');
         Route::delete('/ml-training/samples/{sample}', [AdminController::class, 'destroyTrainingSample'])->name('ml.training.sample.destroy');
+        Route::post('/ml-training/review/{document}', [AdminController::class, 'reviewFlaggedDocument'])->name('ml.review');
+        Route::post('/ml-training/review/{document}/recheck', [AdminController::class, 'recheckFlaggedDocument'])->name('ml.review.recheck');
+        Route::post('/ml-training/review/{document}/dismiss', [AdminController::class, 'dismissRecheckedDocument'])->name('ml.review.dismiss');
+        Route::get('/ml-training/review/refresh', [AdminController::class, 'mlReviewQueueRefresh'])->name('ml.review.refresh');
+        Route::get('/ml-training/review/poll', [AdminController::class, 'mlReviewQueuePoll'])->name('ml.review.poll');
 
         Route::get('/sla-queue', [AdminController::class, 'slaQueue'])->name('sla.queue');
         Route::post('/sla-queue/{assignment}/override', [AdminController::class, 'override'])->name('sla.override');
@@ -144,6 +149,10 @@ Route::middleware('auth')->group(function () {
         Route::delete('/calendar/holidays/{holiday}', [AdminController::class, 'destroyHoliday'])->name('calendar.holidays.destroy');
 
         Route::get('/sla-violations', [AdminController::class, 'violationsReport'])->name('sla.violations');
+        // Live search (Feature: instant results as you type) — returns just
+        // the results fragment, same pattern as archive.refresh.
+        Route::get('/sla-violations/refresh', [AdminController::class, 'violationsRefresh'])
+            ->middleware('throttle:30,1')->name('sla.violations.refresh');
 
         Route::get('/audit-logs', [AdminController::class, 'auditLogs'])->name('audit.logs');
 
@@ -151,12 +160,22 @@ Route::middleware('auth')->group(function () {
         Route::post('/archive/legacy', [ArchiveController::class, 'storeLegacy'])->middleware('throttle:20,1')->name('archive.legacy');
     });
 
-    // Archive download is shared across all three roles; ArchiveController
-    // itself re-checks category ownership per-document for staff (Section 3
-    // RBAC — list-level filtering alone is not sufficient).
+    // Archive download and live-search refresh are shared across all three
+    // roles; ArchiveController itself re-checks category ownership
+    // per-document for staff (Section 3 RBAC — list-level filtering alone
+    // is not sufficient).
     Route::middleware('role:admin,originator,approver')
         ->get('/archive/{document}/download', [ArchiveController::class, 'download'])
         ->name('archive.download');
+
+    // Live search (Feature: instant results as you type instead of a full
+    // page reload) — returns just the results-table fragment, same query
+    // logic as ArchiveController::index()'s results branch. Throttled like
+    // every other live-poll endpoint in this app.
+    Route::middleware('role:admin,originator,approver')
+        ->get('/archive/refresh', [ArchiveController::class, 'refresh'])
+        ->middleware('throttle:30,1')
+        ->name('archive.refresh');
 
     // Admin may also inspect any document's tracking page for support purposes.
     Route::middleware('role:admin,originator')->get('/documents/{document}/track', [DocumentController::class, 'show'])

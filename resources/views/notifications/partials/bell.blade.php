@@ -16,7 +16,12 @@
         <span class="absolute -top-0.5 -right-0.5 bg-rejected-500 text-white text-[10px] font-semibold rounded-full w-4 h-4 flex items-center justify-center ring-2 ring-white">{{ $unreadCount > 9 ? '9+' : $unreadCount }}</span>
     @endif
 </summary>
-<div class="absolute right-0 mt-2 w-[30rem] max-w-[94vw] bg-white rounded-xl shadow-elevated border border-surface-200/80 z-30">
+{{-- Below sm: anchored to the VIEWPORT (fixed, inset-x-4), not the trigger
+     button — an absolute-positioned panel this wide, hung off a button near
+     the screen's right edge, pushed its left side off-screen on narrow
+     phones. At sm and up there's enough room to anchor to the trigger like
+     a normal dropdown. --}}
+<div class="fixed inset-x-4 top-16 sm:absolute sm:inset-x-auto sm:top-auto sm:right-0 sm:mt-2 w-auto sm:w-[30rem] sm:max-w-[94vw] bg-white rounded-xl shadow-elevated border border-surface-200/80 z-30">
     <div class="px-5 py-4 border-b border-surface-200 flex items-center justify-between">
         <h3 class="text-sm font-semibold text-surface-900 tracking-tight">Notifications</h3>
         @if($unreadCount > 0)

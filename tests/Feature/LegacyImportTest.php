@@ -63,7 +63,10 @@ it('shows the imported badge on the archive listing', function () {
         'import_reason' => 'Digitizing 2019 paper records approved before this system existed.',
     ]);
 
-    $response = $this->actingAs($admin)->get(route('admin.archive'));
+    // The bare archive URL now shows the folder-grid landing screen (see
+    // ArchiveController::index()'s $showFolders) — a category filter is
+    // what transitions into the flat results view the badge renders in.
+    $response = $this->actingAs($admin)->get(route('admin.archive', ['category' => 'Purchase Requisition']));
 
     $response->assertOk();
     $response->assertSee('Imported');

@@ -77,34 +77,58 @@ document.addEventListener('DOMContentLoaded', () => {
         setInterval(tick, 30000);
     }
 
-    // Collapsible sidebar (hamburger menu) — shared by every role's
-    // dashboard since they all extend this one layout. It's a plain flex
-    // sibling of the main column (see layouts/app.blade.php), collapsed by
-    // toggling its width between w-64 and w-0 — the main column reflows on
-    // its own since they're flex siblings, no separate class to sync on a
-    // second element. Same toggle, same button, identical behavior at
-    // every screen width — no breakpoint-dependent branching here.
+    // Collapsible sidebar (hamburger menu) — a fixed off-canvas drawer,
+    // shared by every role's dashboard since they all extend this one
+    // layout. Toggled via `transform: translateX()`, not `width` — a
+    // width-collapsing flex-sibling version used to live here, but that
+    // technique turned out unreliable enough across mobile browsers that
+    // the sidebar sometimes wouldn't visibly close at all. Same toggle,
+    // same button, identical behavior at every screen width — this is a
+    // different, more robust MECHANISM, not a breakpoint-dependent branch.
     const sidebar = document.getElementById('sidebar');
     const sidebarToggle = document.getElementById('sidebar-toggle');
     const sidebarClose = document.getElementById('sidebar-close');
+    const sidebarBackdrop = document.getElementById('sidebar-backdrop');
     if (sidebar && sidebarToggle) {
-        const isOpen = () => sidebar.classList.contains('w-64');
+        const isOpen = () => sidebar.classList.contains('translate-x-0');
 
         const openSidebar = () => {
-            sidebar.classList.remove('w-0');
-            sidebar.classList.add('w-64');
+            sidebar.classList.remove('-translate-x-full');
+            sidebar.classList.add('translate-x-0');
+            sidebarBackdrop?.classList.remove('opacity-0', 'pointer-events-none');
+            sidebarBackdrop?.classList.add('opacity-100');
             sidebarToggle.setAttribute('aria-expanded', 'true');
         };
         const closeSidebar = () => {
-            sidebar.classList.remove('w-64');
-            sidebar.classList.add('w-0');
+            sidebar.classList.remove('translate-x-0');
+            sidebar.classList.add('-translate-x-full');
+            sidebarBackdrop?.classList.add('opacity-0', 'pointer-events-none');
+            sidebarBackdrop?.classList.remove('opacity-100');
             sidebarToggle.setAttribute('aria-expanded', 'false');
         };
         const toggleSidebar = () => (isOpen() ? closeSidebar() : openSidebar());
 
         sidebarToggle.addEventListener('click', toggleSidebar);
         sidebarClose?.addEventListener('click', closeSidebar);
+        sidebarBackdrop?.addEventListener('click', closeSidebar);
     }
+
+    // Click-outside-to-close for transient <details> popovers/menus
+    // (notification bell, the deactivation-reason form, etc.) — native
+    // <details> only toggles via clicking its own <summary> again, which
+    // isn't how a dropdown menu is expected to behave. Deliberately opt-in
+    // via a data-popover marker rather than applying to every <details> on
+    // the page — plenty of others (violation breach lists, the approver
+    // roster, stage edit forms) are "expand to read/edit," not transient
+    // menus, and closing those just because you clicked elsewhere on the
+    // page would be actively annoying while reading or filling one in.
+    document.addEventListener('click', (e) => {
+        document.querySelectorAll('details[data-popover][open]').forEach((details) => {
+            if (!details.contains(e.target)) {
+                details.open = false;
+            }
+        });
+    });
 
     // Notification bell — live unread count/list, present on every page.
     // Instant via Reverb (see startLiveChannel below); the slow poll is
@@ -121,6 +145,23 @@ document.addEventListener('DOMContentLoaded', () => {
         };
         startLiveChannel(`user.${bell.dataset.userId}`, '.notification.created', bellOpts);
         startLivePoll({ ...bellOpts, pollUrl: bell.dataset.pollUrl, minDelay: 45, maxDelay: 75 });
+
+        // Account deactivation — same already-open per-user channel as the
+        // bell above, just a second event on it. Logs the session out
+        // server-side (not just a client-side redirect) so it can't be
+        // bypassed by navigating back; reuses the existing logout route
+        // rather than a bespoke endpoint.
+        if (window.Echo) {
+            window.Echo.private(`user.${bell.dataset.userId}`).listen('.account.deactivated', () => {
+                const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content;
+                fetch('/logout', {
+                    method: 'POST',
+                    headers: { 'X-CSRF-TOKEN': csrfToken, Accept: 'application/json' },
+                }).finally(() => {
+                    window.location.href = '/login';
+                });
+            });
+        }
     }
 });
 

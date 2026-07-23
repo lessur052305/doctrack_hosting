@@ -37,6 +37,8 @@ class DocumentRepository extends Model
         'mime_type', 'ocr_text', 'used_ocr_fallback', 'ml_category', 'ml_confidence',
         'is_validated', 'validation_errors', 'due_date', 'global_status',
         'previous_version_id', 'version_number', 'is_legacy_import', 'disputed_at',
+        'ml_review_status', 'ml_recheck_category', 'ml_recheck_confidence', 'ml_rechecked_at',
+        'ml_recheck_dismissed_at', 'confirmed_at_model_id',
     ];
 
     protected $casts = [
@@ -47,15 +49,31 @@ class DocumentRepository extends Model
         'due_date' => 'datetime',
         'upload_date' => 'datetime',
         'disputed_at' => 'datetime',
+        'ml_recheck_confidence' => 'float',
+        'ml_rechecked_at' => 'datetime',
+        'ml_recheck_dismissed_at' => 'datetime',
     ];
 
     // Every state a document can be in — mirrors Section 5 state machine.
     public const STATES = ['processing', 'classified_validated', 'approved', 'auto_approved', 'rejected'];
 
-    /** What <x-status-badge> should show — 'disputed' overrides the underlying global_status without replacing it. */
+    /**
+     * What <x-status-badge> should show — 'disputed'/'pending_review'
+     * override the underlying global_status without replacing it (an
+     * admin-held document is still, technically, 'classified_validated';
+     * this just tells the UI not to say "Awaiting Approval" for one that
+     * was never actually routed to an approver — see WorkflowService::
+     * process() and AdminController::reviewFlaggedDocument()).
+     */
     public function getDisplayStatusAttribute(): string
     {
-        return $this->disputed_at ? 'disputed' : $this->global_status;
+        if ($this->disputed_at) {
+            return 'disputed';
+        }
+        if ($this->ml_review_status === 'pending' && $this->global_status === 'classified_validated') {
+            return 'pending_review';
+        }
+        return $this->global_status;
     }
 
     public function originator()
@@ -76,6 +94,11 @@ class DocumentRepository extends Model
     public function model()
     {
         return $this->belongsTo(MlModelRepository::class, 'model_id', 'model_id');
+    }
+
+    public function confirmedAtModel()
+    {
+        return $this->belongsTo(MlModelRepository::class, 'confirmed_at_model_id', 'model_id');
     }
 
     public function assignments()

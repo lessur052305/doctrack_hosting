@@ -2,6 +2,8 @@
 
 namespace App\Services;
 
+use App\Events\AssignmentRouted;
+use App\Events\DocumentStatusChanged;
 use App\Jobs\EscalateAssignmentJob;
 use App\Mail\DocumentAssignedMail;
 use App\Mail\DocumentDecisionMail;
@@ -241,6 +243,22 @@ class WorkflowService
             $document->ml_confidence = $result['confidence'];
             $document->model_id = $result['model_id'];
 
+            // Below the confidence threshold, the SVM's own guess is exactly
+            // what shouldn't be trusted unsupervised (see WorkflowService's
+            // docblock / the Admin ML Training page's review queue) — a
+            // wrong guess that happens to pass its (wrong) category's
+            // validation would otherwise route straight to the wrong
+            // approvers, who have no reason to suspect it doesn't belong in
+            // their queue and no clean way to undo an approval after the
+            // fact. So instead of routing immediately, this HOLDS the
+            // document (no assignments created, nothing appears on any
+            // approver's dashboard) until an admin confirms or corrects the
+            // category — see AdminController::reviewFlaggedDocument().
+            $needsClassificationReview = $result['confidence'] < config('ml.review_confidence_threshold', 70);
+            if ($needsClassificationReview) {
+                $document->ml_review_status = 'pending';
+            }
+
             AuditLog::record(null, $document->document_id, 'classify',
                 "Classified as '{$result['category']}' (confidence {$result['confidence']}%)" .
                 ($extraction['used_ocr_fallback'] ? ' [OCR fallback used]' : ''));
@@ -256,7 +274,18 @@ class WorkflowService
             AuditLog::record(null, $document->document_id, 'validate',
                 $validation['is_valid'] ? 'Validation passed.' : 'Validation failed: ' . implode('; ', $validation['errors']));
 
-            if ($validation['is_valid']) {
+            if ($validation['is_valid'] && $needsClassificationReview) {
+                NotificationRecord::send($originator->user_id, $document->document_id,
+                    "Your document '{$document->title}' passed validation, but its classification confidence was low " .
+                    "({$result['confidence']}%). An admin will confirm its category before it's routed for approval.");
+
+                // DocumentRepository::booted() only broadcasts on an UPDATE
+                // to global_status/disputed_at — this is a brand new row, so
+                // that hook never fires here. Without this, the Admin ML
+                // Training page's review queue would only pick up a newly
+                // held document on the next manual reload.
+                event(new DocumentStatusChanged($document));
+            } elseif ($validation['is_valid']) {
                 $this->routeToWorkflow($document);
             } else {
                 NotificationRecord::send($originator->user_id, $document->document_id,
@@ -593,6 +622,56 @@ class WorkflowService
         AuditLog::record(null, $document->document_id, 'route',
             "Stage '{$stage->stage_name}': assigned to {$approver->full_name} — least active workload among eligible approvers " .
             "(category '{$document->ml_category}'). SLA window expires {$slaExpiresAt->toDayDateTimeString()}.");
+    }
+
+    /**
+     * Deactivation handoff (Feature) — same load-balanced selection normal
+     * routing uses (eligibleApproversForStage() + selectApproverForStage()),
+     * just pointed at an EXISTING assignment's document/stage instead of a
+     * brand-new one. Returns null if nobody is eligible (e.g. the
+     * deactivated approver was the only one for this stage) — the caller
+     * (AdminController::toggleUser()) falls back to
+     * SlaService::escalateForReassignmentFailure() in that case.
+     */
+    public function findReplacementApprover(DocumentAssignment $assignment): ?User
+    {
+        return $this->selectApproverForStage($assignment->document, $assignment->stage);
+    }
+
+    /**
+     * Hands off a pending assignment to a new approver — used when the
+     * original approver is deactivated. Deliberately does NOT touch
+     * sla_expires_at: the deadline is the stage's actual time budget, not a
+     * personal grace period, so the new approver inherits whatever time is
+     * left rather than getting a fresh window. The EscalateAssignmentJob
+     * already dispatched for this assignment still fires correctly at the
+     * unchanged deadline regardless of who currently holds it (its
+     * staleness guard only checks individual_status and sla_expires_at,
+     * neither of which changes here).
+     */
+    public function reassignAssignment(DocumentAssignment $assignment, User $newApprover, User $oldApprover, ?string $reason = null): void
+    {
+        $assignment->user_id = $newApprover->user_id;
+        $assignment->reassigned_at = now();
+        $assignment->reassigned_from = $oldApprover->user_id;
+        $assignment->reassignment_reason = $reason;
+        $assignment->save();
+
+        NotificationRecord::send($newApprover->user_id, $assignment->document_id,
+            "A document was reassigned to you: '{$assignment->document->title}' (stage '{$assignment->stage->stage_name}'), " .
+            "previously assigned to {$oldApprover->full_name}." . ($reason ? " Reason: \"{$reason}\"" : ''));
+
+        AuditLog::record(null, $assignment->document_id, 'assignment_reassigned',
+            "Reassigned stage '{$assignment->stage->stage_name}' on '{$assignment->document->title}' from " .
+            "{$oldApprover->full_name} to {$newApprover->full_name} due to account deactivation." .
+            ($reason ? " Reason: \"{$reason}\"" : ''));
+
+        // DocumentAssignment::booted()'s updated() hook only broadcasts on an
+        // individual_status change, which this isn't — fire it explicitly so
+        // the new approver's dashboard picks up the handoff instantly instead
+        // of on their next poll cycle. Reuses the exact same event/channel the
+        // approver dashboard already listens on for newly-routed assignments.
+        event(new AssignmentRouted($assignment, $newApprover->user_id));
     }
 
     private function computePriority($dueDate): int

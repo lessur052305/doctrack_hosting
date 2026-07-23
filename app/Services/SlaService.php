@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Events\DocumentStatusChanged;
 use App\Jobs\AutoApproveAssignmentJob;
 use App\Mail\DocumentDecisionMail;
 use App\Mail\SlaEscalationMail;
@@ -97,6 +98,61 @@ class SlaService
                     Mail::to($admin->email)->queue(new SlaEscalationMail($assignment));
                 }
             }
+
+            // DocumentAssignment::booted() only broadcasts on an
+            // individual_status change — escalating to Admin never touches
+            // that column, so without this the Admin dashboard's SLA alert
+            // widget would only learn about the breach via a bell
+            // notification, never a live list refresh. Reuses the same
+            // event/channel the dashboard already listens on.
+            event(new DocumentStatusChanged($assignment->document));
+        });
+    }
+
+    /**
+     * Deactivation handoff (Feature) — an approver was deactivated while
+     * holding a pending assignment, and WorkflowService::
+     * findReplacementApprover() found nobody else eligible for that stage.
+     * Escalates to Admin immediately rather than waiting for the SLA
+     * deadline to actually pass (which may still be hours/days away).
+     *
+     * Deliberately does NOT create an SlaViolation row, unlike escalate()
+     * above — the original approver didn't fail to act in time, they were
+     * deactivated before their deadline hit, so counting this as a breach
+     * would unfairly skew the Violations Report's stats (breach counts,
+     * Top Approver, etc.). escalation_reason records why this one's
+     * different so the SLA Override Queue can show it as such rather than
+     * a misleading "SLA Breached" badge.
+     */
+    public function escalateForReassignmentFailure(DocumentAssignment $assignment): void
+    {
+        DB::transaction(function () use ($assignment) {
+            $escalatedAt = now();
+            $assignment->escalated_to_admin = true;
+            $assignment->escalated_at = $escalatedAt;
+            $assignment->escalation_reason = 'no_eligible_approver';
+            $assignment->save();
+
+            AuditLog::record(null, $assignment->document_id, 'sla_escalation',
+                "Approver assignment #{$assignment->assignment_id} (stage '{$assignment->stage->stage_name}') " .
+                'escalated to Admin immediately — no eligible replacement approver was available after the ' .
+                'original approver\'s account was deactivated.');
+
+            $graceExpiresAt = $escalatedAt->copy()->addHours(config('sla.admin_grace_hours', 12));
+            AutoApproveAssignmentJob::dispatch($assignment->assignment_id, $graceExpiresAt)->delay($graceExpiresAt);
+
+            foreach (User::where('role', 'admin')->where('is_active', true)->get() as $admin) {
+                NotificationRecord::send($admin->user_id, $assignment->document_id,
+                    "'{$assignment->document->title}' (stage '{$assignment->stage->stage_name}') needs a new approver — " .
+                    'the assigned approver was deactivated and no eligible replacement was available.',
+                    'high');
+
+                if ($admin->email) {
+                    Mail::to($admin->email)->queue(new SlaEscalationMail($assignment));
+                }
+            }
+
+            event(new DocumentStatusChanged($assignment->document));
         });
     }
 

@@ -89,10 +89,23 @@
                     @elseif($isMine)
                         <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-primary-100 text-primary-700">Up next</span>
                     @endif
+                    @if($assignment && $assignment->reassigned_from)
+                        <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-processing-100 text-processing-700">Reassigned</span>
+                    @endif
                 </p>
                 <p class="text-[11px] text-surface-400">
                     @if($state === 'upcoming')
                         Not yet reached
+                    @elseif($state === 'pending' && $assignment->reassigned_from)
+                        {{-- Reassignment + its reason lead here, "Awaiting decision"
+                             trails below (see the block after this <p>) — the reason a
+                             stage bounced back is what the approver needs to notice
+                             first, not who it's currently sitting with. No timestamp on
+                             either line: elsewhere in this component a timestamp only
+                             marks a completed event (acted_at once a stage is decided)
+                             — this stage is still open, nothing's been decided yet, so
+                             stamping it here would misleadingly read like an outcome. --}}
+                        Reassigned from {{ $assignment->reassignedFrom->full_name ?? 'a deactivated account' }}
                     @elseif($state === 'pending')
                         Awaiting decision{{ $assignment->approver ? ' · ' . $assignment->approver->full_name : '' }}
                     @elseif($assignment->auto_approved)
@@ -108,6 +121,14 @@
                 </p>
                 @if($assignment && $assignment->comments)
                     <p class="text-[11px] text-surface-500 mt-0.5 italic">"{{ $assignment->comments }}"</p>
+                @endif
+                @if($assignment && $assignment->reassignment_reason)
+                    <p class="text-[11px] text-surface-500 mt-0.5 italic">Reassignment reason: "{{ $assignment->reassignment_reason }}"</p>
+                @endif
+                @if($state === 'pending' && $assignment->reassigned_from)
+                    <p class="text-[11px] text-surface-400 mt-0.5">
+                        Awaiting decision{{ $assignment->approver ? ' · ' . $assignment->approver->full_name : '' }}
+                    </p>
                 @endif
             </div>
         </div>
