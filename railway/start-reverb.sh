@@ -14,4 +14,6 @@
 # public domain actually proxies to, and it isn't always 8080.
 set -e
 
+php artisan config:clear
+
 exec php artisan reverb:start --host=0.0.0.0 --port="${PORT:-8080}"

@@ -14,4 +14,6 @@
 # have.
 set -e
 
+php artisan config:clear
+
 exec php artisan schedule:work

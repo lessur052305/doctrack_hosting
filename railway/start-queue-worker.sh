@@ -14,4 +14,11 @@
 # Settings → Deploy → Custom Start Command → point it at this script.
 set -e
 
+# Belt-and-braces: a Railway variable change restarts the container but
+# doesn't necessarily rebuild it, so a config:cache baked in at build time
+# (if one ever gets created) could keep serving stale env values — e.g.
+# MAIL_MAILER quietly falling back to "log" instead of a since-added "smtp".
+# Clearing here guarantees this process always reads whatever's currently set.
+php artisan config:clear
+
 exec php artisan queue:work --sleep=1 --tries=3 --max-time=3600
