@@ -23,6 +23,12 @@
         </div>
 
         <div class="bg-white rounded-2xl shadow-elevated p-8 ring-1 ring-black/5">
+            @if(session('status'))
+                <div class="mb-5 rounded-xl bg-approved-50 border border-approved-500/25 text-approved-700 px-4 py-3 text-sm">
+                    {{ session('status') }}
+                </div>
+            @endif
+
             @if(session('login_retry_after'))
                 <div id="login-throttle-message" data-retry-after="{{ session('login_retry_after') }}"
                     class="mb-5 rounded-xl bg-rejected-50 border border-rejected-500/25 text-rejected-700 px-4 py-3 text-sm">
@@ -41,12 +47,22 @@
             <form method="POST" action="{{ route('login.attempt') }}" class="space-y-5">
                 @csrf
                 <div>
-                    <label for="username" class="block text-sm font-medium text-surface-700 mb-1.5">Username</label>
-                    <input id="username" name="username" type="text" required autofocus value="{{ old('username') }}"
+                    <label for="email" class="block text-sm font-medium text-surface-700 mb-1.5">Email</label>
+                    {{-- type="text", not "email" — deliberately: browser-native
+                         email validation intercepts an invalid value BEFORE the
+                         form ever submits, showing its own small tooltip instead
+                         of this app's error banner — easy to miss and
+                         inconsistent with every other validation error here.
+                         Letting the server's own 'email' rule catch it instead
+                         guarantees one consistent, visible error every time. --}}
+                    <input id="email" name="email" type="text" inputmode="email" required autofocus value="{{ old('email') }}"
                         class="w-full rounded-lg border-surface-300 focus:border-primary-500 focus:ring-primary-500 text-sm px-3.5 py-2.5">
                 </div>
                 <div>
-                    <label for="password" class="block text-sm font-medium text-surface-700 mb-1.5">Password</label>
+                    <div class="flex items-center justify-between mb-1.5">
+                        <label for="password" class="block text-sm font-medium text-surface-700">Password</label>
+                        <a href="{{ route('password.request') }}" class="text-xs font-medium text-primary-700 hover:underline">Forgot password?</a>
+                    </div>
                     <input id="password" name="password" type="password" required
                         class="w-full rounded-lg border-surface-300 focus:border-primary-500 focus:ring-primary-500 text-sm px-3.5 py-2.5">
                 </div>

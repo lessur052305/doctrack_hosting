@@ -2,13 +2,26 @@
 
 namespace App\Models;
 
+use App\Mail\ResetPasswordMail;
+use App\Mail\VerifyAccountMail;
 use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Illuminate\Support\Facades\Mail;
 use Laravel\Sanctum\HasApiTokens;
 
-class User extends Authenticatable
+/**
+ * implements MustVerifyEmail — the base Authenticatable class already
+ * includes the MustVerifyEmail and CanResetPassword TRAITS (see
+ * vendor/laravel/framework/.../Foundation/Auth/User.php), so this is only
+ * opting into the CONTRACT; no need to re-declare either trait here.
+ * sendEmailVerificationNotification()/sendPasswordResetNotification() are
+ * overridden below to send this app's own branded Mailables instead of
+ * Laravel's default bare notification styling, matching every other email
+ * this app already sends (DocumentAssignedMail, SlaEscalationMail, etc.).
+ */
+class User extends Authenticatable implements MustVerifyEmail
 {
     use HasApiTokens, HasFactory, Notifiable;
 
@@ -23,6 +36,7 @@ class User extends Authenticatable
     protected $casts = [
         'is_active' => 'boolean',
         'is_busy' => 'boolean',
+        'email_verified_at' => 'datetime',
     ];
 
     /**
@@ -85,5 +99,39 @@ class User extends Authenticatable
     public function auditLogs()
     {
         return $this->hasMany(AuditLog::class, 'user_id', 'user_id');
+    }
+
+    /**
+     * Overrides the MustVerifyEmail trait's default (which sends Laravel's
+     * bare Illuminate\Auth\Notifications\VerifyEmail). Signed, expiring
+     * link — same mechanism, just this app's own branded email instead of
+     * the framework default. Deliberately NOT wrapped in a queued
+     * Notification class: this app's other transactional emails are all
+     * plain queued Mailables (see app/Mail/*), so this matches that
+     * existing convention rather than introducing a second pattern.
+     */
+    public function sendEmailVerificationNotification(): void
+    {
+        $url = \Illuminate\Support\Facades\URL::temporarySignedRoute(
+            'verification.verify',
+            now()->addMinutes(60),
+            ['id' => $this->getKey(), 'hash' => sha1($this->getEmailForVerification())]
+        );
+
+        Mail::to($this->email)->queue(new VerifyAccountMail($this, $url));
+    }
+
+    /**
+     * Overrides the CanResetPassword trait's default (Illuminate\Auth\
+     * Notifications\ResetPassword) for the same branding-consistency
+     * reason as sendEmailVerificationNotification() above. $token is
+     * already generated + stored by Password::sendResetLink() before this
+     * is called — this only builds the URL and sends the email.
+     */
+    public function sendPasswordResetNotification($token): void
+    {
+        $url = route('password.reset', ['token' => $token, 'email' => $this->getEmailForPasswordReset()]);
+
+        Mail::to($this->email)->queue(new ResetPasswordMail($this, $url));
     }
 }

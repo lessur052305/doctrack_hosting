@@ -44,12 +44,29 @@ Route::get('/', function () {
 Route::middleware('guest')->group(function () {
     Route::get('/login', [AuthController::class, 'showLogin'])->name('login');
     // Per-account throttling lives inside AuthController::login() itself
-    // (keyed by username+IP, with a tailored lockout message). This
+    // (keyed by email+IP, with a tailored lockout message). This
     // IP-only cap is a second, coarser layer on top of that — it catches
-    // an attacker sweeping through many different usernames from one IP,
-    // which the per-username limiter alone wouldn't trip.
+    // an attacker sweeping through many different emails from one IP,
+    // which the per-email limiter alone wouldn't trip.
     Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:10,1')->name('login.attempt');
+
+    // Self-service password reset — reachable by a guest by definition
+    // (that's the whole point: they can't log in to reach anything else).
+    Route::get('/forgot-password', [AuthController::class, 'showForgotPassword'])->name('password.request');
+    Route::post('/forgot-password', [AuthController::class, 'sendResetLink'])->middleware('throttle:5,1')->name('password.email');
+    Route::get('/reset-password/{token}', [AuthController::class, 'showResetForm'])->name('password.reset');
+    Route::post('/reset-password', [AuthController::class, 'resetPassword'])->middleware('throttle:5,1')->name('password.update');
 });
+
+// Deliberately outside both 'guest' and 'auth' — the person clicking this
+// link cannot be logged in yet (login is blocked until verified, see
+// AuthController::login()), but also isn't necessarily a first-time guest
+// in the session sense. 'signed' is what actually secures it: the URL
+// itself (id + sha1 of the email, expiring) is the credential, not a
+// session or role check.
+Route::get('/email/verify/{id}/{hash}', [AuthController::class, 'verifyEmail'])
+    ->middleware(['signed', 'throttle:10,1'])
+    ->name('verification.verify');
 
 Route::middleware('auth')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout'])->name('logout');
@@ -112,8 +129,11 @@ Route::middleware('auth')->group(function () {
         Route::get('/dashboard/refresh', [AdminController::class, 'overviewRefresh'])->middleware('throttle:30,1')->name('dashboard.refresh');
 
         Route::get('/users', [AdminController::class, 'users'])->name('users');
+        Route::get('/users/refresh', [AdminController::class, 'usersRefresh'])->name('users.refresh');
+        Route::get('/users/poll', [AdminController::class, 'usersPoll'])->name('users.poll');
         Route::post('/users', [AdminController::class, 'storeUser'])->name('users.store');
         Route::post('/users/{user}/toggle', [AdminController::class, 'toggleUser'])->name('users.toggle');
+        Route::post('/users/{user}/resend-verification', [AdminController::class, 'resendVerification'])->name('users.resend-verification');
         Route::get('/users/{user}/stages', [AdminController::class, 'editApproverStages'])->name('users.stages.edit');
         Route::post('/users/{user}/stages', [AdminController::class, 'updateApproverStages'])->name('users.stages.update');
 

@@ -111,6 +111,39 @@ class AdminController extends Controller
 
     public function users(Request $request)
     {
+        $stagesByCategory = WorkflowStage::where('is_archived', false)->orderBy('sequence_order')->get()->groupBy('document_category');
+
+        return view('admin.users', array_merge(
+            compact('stagesByCategory'),
+            $this->usersTableData($request)
+        ));
+    }
+
+    /**
+     * Fragment refresh for the account list — same live-channel/poll
+     * pattern used elsewhere (see ml_training.blade.php's #ml-review-panels).
+     * Verification status doesn't broadcast via DocumentRepository::
+     * booted()-style model hooks (there's no document involved at all),
+     * so without this an admin watching this page would only see the
+     * "Unverified" badge disappear on their next manual reload — see
+     * AuthController::verifyEmail() firing UserVerified.
+     */
+    public function usersRefresh(Request $request)
+    {
+        return view('admin.partials.users_table', $this->usersTableData($request));
+    }
+
+    /** Lightweight JSON signal for the poll fallback — see overviewPoll()'s docblock for the same reasoning. */
+    public function usersPoll()
+    {
+        return response()->json([
+            'unverified_ids' => User::whereNull('email_verified_at')->pluck('user_id'),
+        ]);
+    }
+
+    /** @return array{users: \Illuminate\Contracts\Pagination\LengthAwarePaginator, showInactive: bool, inactiveCount: int} */
+    private function usersTableData(Request $request): array
+    {
         $showInactive = $request->boolean('show_inactive');
 
         $query = User::with(['createdBy', 'workflowStages'])->orderBy('role');
@@ -118,11 +151,11 @@ class AdminController extends Controller
             $query->where('is_active', true);
         }
 
-        $users = $query->paginate(15)->withQueryString();
-        $inactiveCount = User::where('is_active', false)->count();
-        $stagesByCategory = WorkflowStage::where('is_archived', false)->orderBy('sequence_order')->get()->groupBy('document_category');
-
-        return view('admin.users', compact('users', 'stagesByCategory', 'showInactive', 'inactiveCount'));
+        return [
+            'users' => $query->paginate(15)->withQueryString(),
+            'showInactive' => $showInactive,
+            'inactiveCount' => User::where('is_active', false)->count(),
+        ];
     }
 
     public function storeUser(Request $request)
@@ -170,7 +203,26 @@ class AdminController extends Controller
             "Created account #{$user->user_id} ({$user->username}) with role '{$user->role}'" .
             ($user->assigned_category ? ", assigned category '{$user->assigned_category}'." : '.'));
 
-        return back()->with('status', "Account '{$user->username}' created.");
+        // Login is blocked until this is clicked (see AuthController::
+        // login()) — sent immediately so the account is usable as soon as
+        // its owner checks their inbox, not left silently unusable.
+        $user->sendEmailVerificationNotification();
+
+        return back()->with('status', "Account '{$user->username}' created. A verification email was sent to {$user->email}.");
+    }
+
+    /**
+     * Re-sends the verification email — the only way an unverified account
+     * gets a second chance at the link, since the account holder can't log
+     * in yet to request it themselves (see AuthController::login()).
+     */
+    public function resendVerification(User $user)
+    {
+        abort_if($user->hasVerifiedEmail(), 409, 'This account is already verified.');
+
+        $user->sendEmailVerificationNotification();
+
+        return back()->with('status', "Verification email re-sent to {$user->email}.");
     }
 
     /** Admin-only: view/edit which specific stages an approver is restricted to. */
