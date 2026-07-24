@@ -49,14 +49,28 @@ VITE_REVERB_SCHEME="${REVERB_SCHEME}"
 
 # --- Email (see main README.md §2.6) ---
 # Without this, emails (SLA breach alerts, decision notices, dispute
-# notices) silently write to a log file instead of actually being sent —
-# fine for testing, not for a real public deployment. Any SMTP provider
-# works (Gmail, Mailgun, SES, your own server).
+# notices, account verification, password reset) silently write to a log
+# file instead of actually being sent — fine for testing, not for a real
+# public deployment.
+#
+# Do NOT point this at smtp.gmail.com. Gmail's SMTP servers time out /
+# silently drop connections from cloud-hosting IP ranges (Railway, AWS,
+# DigitalOcean, etc. — not a Railway-specific block, Gmail does this to
+# any cloud-originated SMTP traffic as an anti-abuse measure), so it
+# never actually connects no matter which port/encryption combo you try.
+# Use a transactional email provider instead — Brevo's free tier (300
+# emails/day, no card required) is plenty for this app's volume:
+#   1. Sign up at brevo.com, then Settings → SMTP & API → SMTP tab for
+#      your host/login/key.
+#   2. Verify a sender (Senders, Domains & Dedicated IPs → Senders → Add
+#      a Sender) — you can still send FROM your real address (e.g.
+#      MAIL_FROM_ADDRESS below) once it's verified this way; you don't
+#      need to own a domain.
 MAIL_MAILER=smtp
-MAIL_HOST=smtp.your-provider.com
+MAIL_HOST=smtp-relay.brevo.com
 MAIL_PORT=587
-MAIL_USERNAME=your-username
-MAIL_PASSWORD=your-password
+MAIL_USERNAME=your-brevo-login          # shown on the SMTP & API page
+MAIL_PASSWORD=your-brevo-smtp-key       # a generated SMTP key, not your account password
 MAIL_ENCRYPTION=tls
 MAIL_FROM_ADDRESS="noreply@yourdomain.com"
 MAIL_FROM_NAME="${APP_NAME}"

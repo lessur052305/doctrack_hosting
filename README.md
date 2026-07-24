@@ -291,16 +291,21 @@ without needing a real mail account for a demo/dev setup.
 credentials to `.env`:
 ```
 MAIL_MAILER=smtp
-MAIL_HOST=smtp.your-provider.com
+MAIL_HOST=smtp-relay.brevo.com
 MAIL_PORT=587
-MAIL_USERNAME=your-username
-MAIL_PASSWORD=your-password
+MAIL_USERNAME=your-brevo-login
+MAIL_PASSWORD=your-brevo-smtp-key
 MAIL_ENCRYPTION=tls
 MAIL_FROM_ADDRESS="noreply@yourdomain.com"
 MAIL_FROM_NAME="${APP_NAME}"
 ```
-Any SMTP provider works (Gmail, Mailgun, SES, your own mail server) — this is plain
-Laravel mail configuration, nothing DocTrack-specific.
+This is plain Laravel mail configuration, nothing DocTrack-specific — any SMTP provider
+works in principle (Mailgun, SES, your own mail server, etc.). **Avoid Gmail's SMTP
+specifically** if deploying to a cloud host (Railway, AWS, DigitalOcean, ...): Gmail
+times out / silently drops connections from cloud-hosting IP ranges as an anti-abuse
+measure, so it never actually connects regardless of port or encryption settings tried.
+[Brevo](https://www.brevo.com) is a good free option (300 emails/day, no card required)
+built for exactly this — see `railway/README.md` for setup details.
 
 ---
 
