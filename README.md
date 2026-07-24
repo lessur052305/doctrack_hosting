@@ -287,25 +287,24 @@ written to `storage/logs/laravel.log` instead of actually being sent. This is en
 verify the feature works (open the log file after triggering one of the actions above)
 without needing a real mail account for a demo/dev setup.
 
-**To actually send real email** (e.g. a production deployment), add real SMTP
-credentials to `.env`:
+**To actually send real email** (e.g. a production deployment), add real credentials to
+`.env`:
 ```
-MAIL_MAILER=smtp
-MAIL_HOST=smtp-relay.brevo.com
-MAIL_PORT=587
-MAIL_USERNAME=your-brevo-login
-MAIL_PASSWORD=your-brevo-smtp-key
-MAIL_ENCRYPTION=tls
+MAIL_MAILER=brevo
+BREVO_API_KEY=your-brevo-api-key
 MAIL_FROM_ADDRESS="noreply@yourdomain.com"
 MAIL_FROM_NAME="${APP_NAME}"
 ```
-This is plain Laravel mail configuration, nothing DocTrack-specific — any SMTP provider
-works in principle (Mailgun, SES, your own mail server, etc.). **Avoid Gmail's SMTP
-specifically** if deploying to a cloud host (Railway, AWS, DigitalOcean, ...): Gmail
-times out / silently drops connections from cloud-hosting IP ranges as an anti-abuse
-measure, so it never actually connects regardless of port or encryption settings tried.
-[Brevo](https://www.brevo.com) is a good free option (300 emails/day, no card required)
-built for exactly this — see `railway/README.md` for setup details.
+Note this uses Brevo's **HTTP API**, not SMTP — see the `Mail::extend('brevo', ...)`
+registration in `app/Providers/AppServiceProvider.php` and the `'brevo'` entry in
+`config/mail.php`, which is what makes `MAIL_MAILER=brevo` resolve to anything. **Avoid
+SMTP entirely if deploying to a cloud host** (Railway, AWS, DigitalOcean, ...): outbound
+SMTP gets silently blocked on some of these platforms regardless of provider or
+port — confirmed on Railway specifically, where both Gmail's and Brevo's own SMTP
+endpoints timed out identically, while Brevo's HTTP API (plain HTTPS, port 443) worked
+immediately. [Brevo](https://www.brevo.com) is a good free option (300 emails/day, no
+card required) and only needs the individual sender address verified, not a DNS-verified
+domain — see `railway/README.md` for setup details.
 
 ---
 

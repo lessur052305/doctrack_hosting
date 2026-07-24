@@ -2,8 +2,11 @@
 
 namespace App\Providers;
 
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\ServiceProvider;
+use Symfony\Component\Mailer\Bridge\Brevo\Transport\BrevoTransportFactory;
+use Symfony\Component\Mailer\Transport\Dsn;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -32,5 +35,17 @@ class AppServiceProvider extends ServiceProvider
         // generated URL consistent regardless of which host a given
         // request happened to arrive on.
         URL::forceRootUrl(config('app.url'));
+
+        // Custom mailer — Laravel has no built-in Brevo driver. Brevo's
+        // *SMTP* transport times out from Railway (outbound SMTP appears
+        // blocked there regardless of provider — Resend's API worked fine
+        // in the same environment), so this uses Brevo's HTTP API instead
+        // via Symfony's brevo-mailer bridge. Brevo was chosen over Resend
+        // because it only requires verifying the individual sender address
+        // (a one-click email confirmation), not owning/verifying a DNS
+        // domain — this app sends from real personal Gmail addresses with
+        // no domain of its own.
+        Mail::extend('brevo', fn (array $config) => (new BrevoTransportFactory())
+            ->create(new Dsn('brevo+api', 'default', $config['key'] ?? null)));
     }
 }

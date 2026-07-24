@@ -53,25 +53,25 @@ VITE_REVERB_SCHEME="${REVERB_SCHEME}"
 # file instead of actually being sent — fine for testing, not for a real
 # public deployment.
 #
-# Do NOT point this at smtp.gmail.com. Gmail's SMTP servers time out /
-# silently drop connections from cloud-hosting IP ranges (Railway, AWS,
-# DigitalOcean, etc. — not a Railway-specific block, Gmail does this to
-# any cloud-originated SMTP traffic as an anti-abuse measure), so it
-# never actually connects no matter which port/encryption combo you try.
-# Use a transactional email provider instead — Brevo's free tier (300
-# emails/day, no card required) is plenty for this app's volume:
-#   1. Sign up at brevo.com, then Settings → SMTP & API → SMTP tab for
-#      your host/login/key.
+# Uses Brevo's HTTP API, not SMTP — Railway blocks outbound SMTP
+# entirely regardless of provider or port (confirmed: both
+# smtp.gmail.com:587 and smtp-relay.brevo.com:587 time out identically
+# from a Railway service; an HTTP API call on port 443 does not). See
+# the Mail::extend('brevo', ...) registration in
+# AppServiceProvider::boot() and the 'brevo' entry in config/mail.php —
+# this is what lets MAIL_MAILER=brevo below resolve to anything.
+#
+# Brevo (not Resend) because it only needs the individual sender address
+# verified (a one-click email confirmation), not a DNS-verified domain —
+# useful when sending from a real personal address with no domain of
+# its own:
+#   1. Sign up at brevo.com, then Settings → SMTP & API → API Keys tab →
+#      Generate a new API key. That's BREVO_API_KEY below.
 #   2. Verify a sender (Senders, Domains & Dedicated IPs → Senders → Add
-#      a Sender) — you can still send FROM your real address (e.g.
-#      MAIL_FROM_ADDRESS below) once it's verified this way; you don't
-#      need to own a domain.
-MAIL_MAILER=smtp
-MAIL_HOST=smtp-relay.brevo.com
-MAIL_PORT=587
-MAIL_USERNAME=your-brevo-login          # shown on the SMTP & API page
-MAIL_PASSWORD=your-brevo-smtp-key       # a generated SMTP key, not your account password
-MAIL_ENCRYPTION=tls
+#      a Sender) — confirms you can send FROM that address (e.g.
+#      MAIL_FROM_ADDRESS below); you don't need to own a domain.
+MAIL_MAILER=brevo
+BREVO_API_KEY=your-brevo-api-key        # starts with xkeysib-, from the API Keys tab
 MAIL_FROM_ADDRESS="noreply@yourdomain.com"
 MAIL_FROM_NAME="${APP_NAME}"
 
