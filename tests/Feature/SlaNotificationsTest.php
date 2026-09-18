@@ -31,7 +31,7 @@ function classifiedJobOrderDueIn(User $originator, int $minutesUntilDue): Docume
     ]);
 }
 
-function escalatableAssignment(int $minutesUntilDue = 60 * 24, bool $needsApprover = false): DocumentAssignment
+function escalatableAssignment(int $minutesUntilDue = 60 * 24): DocumentAssignment
 {
     $originator = User::factory()->originator()->create();
     $approver = User::factory()->approver('Job Order')->create();
@@ -55,8 +55,6 @@ function escalatableAssignment(int $minutesUntilDue = 60 * 24, bool $needsApprov
         'priority_rank' => 2,
         'individual_status' => 'pending',
         'sla_expires_at' => now()->subMinutes(5),
-        'needs_approver' => $needsApprover,
-        'needs_approver_at' => $needsApprover ? now()->subHours(1) : null,
     ]);
 }
 

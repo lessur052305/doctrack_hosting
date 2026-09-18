@@ -2,7 +2,10 @@
 
 namespace App\Services;
 
+use App\Models\DocumentRepository;
 use App\Models\MlModelRepository;
+use App\Models\MlStagingSample;
+use Carbon\Carbon;
 use Illuminate\Support\Facades\Storage;
 use Phpml\Classification\SVC;
 use Phpml\FeatureExtraction\TfIdfTransformer;
@@ -191,22 +194,147 @@ class ClassificationService
     }
 
     /**
+     * The fully-automatic counterpart to train() (Feature: no manual admin
+     * review/retrain) — checked every few minutes by AutoTrainClassifier
+     * (config('ml.auto_train_check_interval_minutes')), but only actually
+     * retrains once ONE of two triggers is met, whichever comes first:
+     *   - config('ml.auto_train_batch_size') new confidently-classified
+     *     documents have piled up since the last training, OR
+     *   - config('ml.auto_train_max_age_hours') has passed since the last
+     *     training with at least ONE new document waiting.
+     * "Confidently-classified" mirrors WorkflowService::ingest()'s
+     * $isAmbiguous tiering exactly (high confidence, or a clear margin at
+     * moderate confidence) — the same documents that were trusted enough
+     * to auto-route are trusted enough to teach the model.
+     *
+     * Requires a model to already be active — this can't bootstrap the
+     * very first model from nothing (see AdminController::trainModel(),
+     * the one-time manual step that has to happen before automation can
+     * take over).
+     *
+     * Protects itself with an accuracy-gated rollback: if the newly
+     * trained model's cross-validated accuracy comes out WORSE than the
+     * model it would replace, the old one is reactivated instead and the
+     * new one is kept (inactive) purely for the history/audit trail — an
+     * automatic retrain can therefore never make live classification
+     * worse, only better or unchanged.
+     *
+     * Each category's auto-added documents are also capped at
+     * config('ml.auto_train_max_auto_ratio') times that category's own
+     * human-curated MlStagingSample count, oldest-eligible-first, so the
+     * model stays anchored to trustworthy data even after a long stretch
+     * of automatic additions; anything over the cap simply stays eligible
+     * for a later run instead of being skipped forever.
+     *
+     * @return array{kept: bool, documentsUsed: int, previousAccuracy: float, newAccuracy: float, version: string}|null
+     *     null when nothing was due to run at all.
+     */
+    public function autoTrainIfDue(): ?array
+    {
+        $activeModel = MlModelRepository::active();
+        if (!$activeModel) {
+            return null;
+        }
+
+        $categories = ValidationService::knownCategories();
+
+        // Oldest-first per category, so a long-waiting document isn't
+        // perpetually crowded out by newer ones once the population cap
+        // below starts limiting how many get included in one run.
+        $eligibleByCategory = collect($categories)->mapWithKeys(fn ($category) => [
+            $category => DocumentRepository::where('ml_category', $category)
+                ->where('desired_routing', '!=', 'unrelated')
+                ->whereNotNull('ocr_text')
+                ->whereNull('used_for_training_at')
+                ->where(fn ($q) => $q->where('ml_confidence', '>=', config('ml.review_confidence_threshold', 70))
+                    ->orWhere('ml_margin', '>=', config('ml.margin_threshold', 20)))
+                ->orderBy('created_at')
+                ->get(),
+        ]);
+
+        $totalEligible = $eligibleByCategory->sum->count();
+        if ($totalEligible === 0) {
+            return null;
+        }
+
+        $lastTrained = MlModelRepository::max('last_trained');
+        $dueByAge = $lastTrained && Carbon::parse($lastTrained)
+            ->lt(now()->subHours(config('ml.auto_train_max_age_hours', 24)));
+        $dueByBatch = $totalEligible >= config('ml.auto_train_batch_size', 5);
+
+        if (!$dueByBatch && !$dueByAge) {
+            return null;
+        }
+
+        $maxAutoRatio = config('ml.auto_train_max_auto_ratio', 2.0);
+        $samplesByCategory = [];
+        $usedDocuments = collect();
+
+        foreach ($categories as $category) {
+            $curated = MlStagingSample::where('category', $category)->pluck('extracted_text');
+            $cap = (int) floor($curated->count() * $maxAutoRatio);
+            $included = $eligibleByCategory->get($category, collect())->take($cap);
+
+            $usedDocuments = $usedDocuments->merge($included);
+            $samplesByCategory[$category] = $curated->merge($included->pluck('ocr_text'))->all();
+        }
+
+        $previousAccuracy = (float) $activeModel->accuracy_score;
+        $newModel = $this->train($samplesByCategory);
+
+        // A tolerance, not an exact "must be equal or better" comparison
+        // — accuracy is a fresh cross-validated measurement every run,
+        // usually against a bigger/more varied pool of real documents
+        // each time, and a small drop from that (e.g. 100% -> 99%) is
+        // normal, expected noise, not proof the model got worse. An exact
+        // comparison would wrongly discard good progress forever once a
+        // model ever reached 100%, since nothing can score higher than
+        // that. Only a drop bigger than the tolerance rolls back.
+        $tolerance = config('ml.auto_train_rollback_tolerance', 5);
+        $kept = $newModel->accuracy_score >= ($previousAccuracy - $tolerance);
+        if (!$kept) {
+            // Raw query updates, not $model->save() — train() itself just
+            // changed is_active on these exact rows via its own raw query
+            // ("5. Register the new version"), which the in-memory
+            // $activeModel/$newModel objects here were never refreshed
+            // from. Setting the same in-memory value back and calling
+            // save() sees nothing "dirty" and silently skips the UPDATE
+            // — confirmed reproducing exactly that while testing this.
+            MlModelRepository::where('model_id', $activeModel->model_id)->update(['is_active' => true]);
+            MlModelRepository::where('model_id', $newModel->model_id)->update(['is_active' => false]);
+        }
+
+        // Tried either way, kept or rolled back — a rolled-back document
+        // isn't retried forever on every subsequent check; it stays part
+        // of the corpus for the NEXT run alongside whatever's new by then.
+        $usedDocuments->each(fn (DocumentRepository $doc) => $doc->update(['used_for_training_at' => now()]));
+
+        return [
+            'kept' => $kept,
+            'documentsUsed' => $usedDocuments->count(),
+            'previousAccuracy' => $previousAccuracy,
+            'newAccuracy' => (float) $newModel->accuracy_score,
+            'version' => $newModel->version,
+        ];
+    }
+
+    /**
      * Classify raw document text against the active trained SVM model.
      *
-     * @return array{category: string, confidence: float, model_id: int|null}
+     * @return array{category: string, confidence: float, margin: float, model_id: int|null}
      */
     public function classify(string $text): array
     {
         $model = MlModelRepository::active();
 
         if (!$model || !$model->model_file_path || !Storage::exists($model->model_file_path)) {
-            return ['category' => 'Unclassified', 'confidence' => 0.0, 'model_id' => null];
+            return ['category' => 'Other', 'confidence' => 0.0, 'margin' => 0.0, 'model_id' => null];
         }
 
         $stamp = preg_replace('/\D/', '', basename($model->model_file_path));
         $sidecarPath = "ml_models/pipeline_{$stamp}.bin";
         if (!Storage::exists($sidecarPath)) {
-            return ['category' => 'Unclassified', 'confidence' => 0.0, 'model_id' => $model->model_id];
+            return ['category' => 'Other', 'confidence' => 0.0, 'margin' => 0.0, 'model_id' => $model->model_id];
         }
 
         // Reuse the exact fitted vectorizer + tfidf objects from training so
@@ -233,35 +361,54 @@ class ClassificationService
         $vectorizer->transform($sample); // uses the already-fitted vocabulary
         $tfIdf->transform($sample);      // uses the already-fitted IDF weights
 
-        $predicted = $svm->predict($sample)[0] ?? 'Unclassified';
-        $confidence = $this->predictConfidence($svm, $sample, (string) $predicted);
+        $predicted = $svm->predict($sample)[0] ?? 'Other';
+        ['confidence' => $confidence, 'margin' => $margin] = $this->predictConfidenceAndMargin($svm, $sample, (string) $predicted);
 
         return [
             'category' => (string) $predicted,
             'confidence' => round($confidence, 2),
+            'margin' => round($margin, 2),
             'model_id' => $model->model_id,
         ];
     }
 
     /**
-     * Confidence estimate. Because the SVM is built with probabilityEstimates
-     * enabled, predictProbability() returns per-class probabilities; we return
-     * the winning class's probability as a percentage. Falls back gracefully
-     * if probability estimates are unavailable on the installed php-ml build.
+     * Confidence + margin, from the same probability distribution.
+     * Because the SVM is built with probabilityEstimates enabled,
+     * predictProbability() returns per-class probabilities:
+     *   - confidence: the winning category's own probability, as a %.
+     *   - margin: how far ahead the winning category is over the
+     *     RUNNER-UP category, as a % — what WorkflowService's automatic
+     *     tiering uses to tell "moderate confidence, but still clearly
+     *     this category" (a real margin) apart from "genuinely ambiguous,
+     *     doesn't confidently match anything" (a flat spread across
+     *     categories, near-zero margin), which plain confidence alone
+     *     can't distinguish.
+     * Falls back gracefully if probability estimates are unavailable on
+     * the installed php-ml build — margin defaults to a wide, trusting
+     * value in that case (nothing to compare against), matching the
+     * existing neutral-confidence fallback's own spirit.
+     *
+     * @return array{confidence: float, margin: float}
      */
-    private function predictConfidence(SVC $svm, array $sample, string $predicted): float
+    private function predictConfidenceAndMargin(SVC $svm, array $sample, string $predicted): array
     {
         try {
             if (method_exists($svm, 'predictProbability')) {
                 $probs = $svm->predictProbability($sample)[0] ?? [];
                 if (is_array($probs) && isset($probs[$predicted])) {
-                    return (float) $probs[$predicted] * 100;
+                    $sorted = collect($probs)->sortDesc()->values();
+                    $top = (float) $sorted->get(0, 0.0);
+                    $runnerUp = (float) $sorted->get(1, 0.0);
+
+                    return ['confidence' => $top * 100, 'margin' => ($top - $runnerUp) * 100];
                 }
             }
         } catch (\Throwable $e) {
             report($e);
         }
-        return 85.0; // neutral default when probability estimates are off
+
+        return ['confidence' => 85.0, 'margin' => 100.0]; // neutral default when probability estimates are off
     }
 
     /**

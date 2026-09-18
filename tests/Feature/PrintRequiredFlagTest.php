@@ -17,7 +17,7 @@ function fakeClassifiedIngest(string $category, bool $requiresPrinting = false):
     $originator = User::factory()->originator()->create();
 
     $mock = Mockery::mock(ClassificationService::class);
-    $mock->shouldReceive('classify')->andReturn(['category' => $category, 'confidence' => 95, 'model_id' => null]);
+    $mock->shouldReceive('classify')->andReturn(['category' => $category, 'confidence' => 95, 'margin' => 100.0, 'model_id' => null]);
     app()->instance(ClassificationService::class, $mock);
 
     return app(WorkflowService::class)->ingest(

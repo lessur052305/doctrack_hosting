@@ -305,31 +305,29 @@ class WorkflowService
 
             $document->ml_category = $result['category'];
             $document->ml_confidence = $result['confidence'];
+            $document->ml_margin = $result['margin'];
             $document->model_id = $result['model_id'];
 
-            // Below the confidence threshold, the SVM's own guess is exactly
-            // what shouldn't be trusted unsupervised (see WorkflowService's
-            // docblock / the Admin ML Training page's review queue) — a
-            // wrong guess that happens to pass its (wrong) category's
-            // validation would otherwise route straight to the wrong
-            // approvers, who have no reason to suspect it doesn't belong in
-            // their queue and no clean way to undo an approval after the
-            // fact. So instead of routing immediately, this HOLDS the
-            // document (no assignments created, nothing appears on any
-            // approver's dashboard) until an admin confirms or corrects the
-            // category — see AdminController::reviewFlaggedDocument().
+            // Automatic tiering (Feature: no manual admin review) — plain
+            // confidence alone can't tell "moderate confidence because of
+            // unfamiliar vocabulary, but still clearly this category"
+            // (e.g. 45/30/25 — a real lead) apart from "genuinely
+            // ambiguous, doesn't confidently match anything" (e.g.
+            // 35/33/32 — no real leader). MARGIN over the runner-up
+            // category is what makes that distinction — see
+            // ClassificationService::predictConfidenceAndMargin()'s
+            // docblock. A document is only genuinely ambiguous when BOTH
+            // its confidence AND its margin are weak; either one alone
+            // being strong is enough to trust it automatically.
             //
             // Never applies to an 'unrelated' document (Feature:
             // originator-directed routing) — ml_category there is only
             // ever the classifier's best guess for reference, never
-            // authoritative, so there's nothing meaningful for an admin
-            // to confirm/correct it INTO.
-            $needsClassificationReview = $routingMode !== 'unrelated'
-                && $result['confidence'] < config('ml.review_confidence_threshold', 70);
-            if ($needsClassificationReview) {
-                $document->ml_review_status = 'pending';
-                $document->ml_review_due_at = now()->addHours(config('ml.ml_review_window_hours', 6));
-            }
+            // authoritative, so there's no "which category" question to
+            // resolve for one of these in the first place.
+            $isAmbiguous = $routingMode !== 'unrelated'
+                && $result['confidence'] < config('ml.review_confidence_threshold', 70)
+                && $result['margin'] < config('ml.margin_threshold', 20);
 
             AuditLog::record(null, $document->document_id, 'classify',
                 "Classified as '{$result['category']}' (confidence {$result['confidence']}%)" .
@@ -349,52 +347,59 @@ class WorkflowService
 
             // Readability failing ALONE (required sections present, word
             // count met) is a judgment call, not a definite defect — held
-            // for admin review same as low classification confidence,
-            // rather than a flat block with no recourse. Any OTHER
-            // validation failure (missing section, too short) is objective
-            // and stays a hard block: there's nothing for a human to weigh
-            // in on until that's fixed, so no review is offered.
-            $needsReadabilityReview = $validation['readability_only_failure'];
+            // for admin review, rather than a flat block with no recourse.
+            // Any OTHER validation failure (missing section, too short) is
+            // objective and stays a hard block: there's nothing for a
+            // human to weigh in on until that's fixed, so no review is
+            // offered. Never set when the classification is ALSO
+            // ambiguous, though — that rejects the document outright
+            // regardless (see $canRoute below), so a readability hold
+            // would just sit orphaned in the admin queue forever with
+            // nothing left to route even once resolved.
+            $needsReadabilityReview = !$isAmbiguous && $validation['readability_only_failure'];
             if ($needsReadabilityReview) {
                 $document->readability_review_status = 'pending';
             }
 
-            // Valid (or held only for readability, not an objective
-            // failure) determines whether this document has a shot at
-            // reaching the workflow at all; whether it does so NOW depends
-            // on whether either review gate is still pending.
-            $canRoute = $validation['is_valid'] || $needsReadabilityReview;
-            $readyToRoute = $canRoute && !$needsClassificationReview && !$needsReadabilityReview;
+            // An ambiguous classification is rejected outright, regardless
+            // of what validation found — routing it to approvers on a
+            // guessed category nobody's confident in risks the wrong
+            // people deciding it, with no clean way to undo an approval
+            // after the fact (see completeStage()). The originator
+            // resubmits and chooses how it should be routed instead — see
+            // DocumentController::resubmit()'s routing_mode option.
+            $canRoute = !$isAmbiguous && ($validation['is_valid'] || $needsReadabilityReview);
+            $readyToRoute = $canRoute && !$needsReadabilityReview;
 
-            $document->global_status = $canRoute ? 'classified_validated' : 'processing';
+            $document->global_status = match (true) {
+                $isAmbiguous => 'rejected',
+                $canRoute => 'classified_validated',
+                default => 'processing',
+            };
             $document->save();
 
             AuditLog::record(null, $document->document_id, 'validate',
                 $validation['is_valid'] ? 'Validation passed.' : 'Validation failed: ' . implode('; ', $validation['errors']));
 
-            if ($readyToRoute) {
-                $this->routeOrAwaitApproverSelection($document);
-            } elseif ($needsClassificationReview && $needsReadabilityReview) {
+            if ($isAmbiguous) {
+                AuditLog::record(null, $document->document_id, 'classification_ambiguous',
+                    "Classification too ambiguous to trust automatically — best guess '{$result['category']}' at " .
+                    "{$result['confidence']}% confidence, only {$result['margin']} points ahead of the runner-up " .
+                    '(needs at least ' . config('ml.margin_threshold', 20) . '). Rejected pending the originator\'s resubmission.');
+
                 NotificationRecord::send($originator->user_id, $document->document_id,
-                    "Your document '{$document->title}' is awaiting admin review for both its classification confidence " .
-                    "({$result['confidence']}%) and its content readability ({$validation['readability_score']}%) before it's routed for approval.");
-                $this->notifyAdminsDocumentNeedsReview($document,
-                    "'{$document->title}' needs admin review — both classification confidence ({$result['confidence']}%) " .
-                    'and content readability are unresolved.');
-                event(new DocumentStatusChanged($document));
-            } elseif ($needsClassificationReview) {
-                NotificationRecord::send($originator->user_id, $document->document_id,
-                    "Your document '{$document->title}' passed validation, but its classification confidence was low " .
-                    "({$result['confidence']}%). An admin will confirm its category before it's routed for approval.");
-                $this->notifyAdminsDocumentNeedsReview($document,
-                    "'{$document->title}' needs admin review — classification confidence was low ({$result['confidence']}%).");
+                    "Your document '{$document->title}' doesn't clearly match any of our trained categories " .
+                    "(best guess: '{$result['category']}' at {$result['confidence']}%, not confident enough to route " .
+                    "automatically). Please resubmit and choose how you'd like it routed.");
 
                 // DocumentRepository::booted() only broadcasts on an UPDATE
-                // to global_status/disputed_at — this is a brand new row, so
-                // that hook never fires here. Without this, the Admin ML
-                // Training page's review queue would only pick up a newly
-                // held document on the next manual reload.
+                // to global_status/disputed_at — this is a brand new row,
+                // so that hook never fires here. Without this, the
+                // originator's own tracking page wouldn't pick up this
+                // rejection live.
                 event(new DocumentStatusChanged($document));
+            } elseif ($readyToRoute) {
+                $this->routeOrAwaitApproverSelection($document);
             } elseif ($needsReadabilityReview) {
                 NotificationRecord::send($originator->user_id, $document->document_id,
                     "Your document '{$document->title}' passed classification and its required sections, but its content " .
@@ -415,9 +420,9 @@ class WorkflowService
 
     /**
      * Every other "needs an Admin's attention" moment in this app (SLA
-     * escalation, an orphaned needs_approver seat) already notifies every
-     * active admin — a document held for ML/readability review was the one
-     * spot that only ever told the originator, leaving admins with no way
+     * escalation, a stage auto-approved with no eligible approver) already
+     * notifies every active admin — a document held for ML/readability
+     * review was the one spot that only ever told the originator, leaving admins with no way
      * to know a new item landed short of manually checking the ML Training
      * page. Deliberately normal priority, not the urgent/red flag those
      * other cases use — nothing about a freshly-held document is on a
@@ -589,8 +594,22 @@ class WorkflowService
         // separately calling now() a few milliseconds apart.
         $slaExpiresAt = $this->computeApproverSlaExpiry($document);
 
+        // Deferred (autoApproveImmediately: false) — every stage needs its
+        // own assignment row created FIRST, so completeStage()'s "is
+        // anything else still pending" check (run when the no-approver
+        // resolution below completes it) sees the real, whole picture
+        // instead of just whichever stages this loop had reached so far.
+        // See assignStage()'s own docblock.
+        $noApproverAssignments = collect();
         foreach ($stages as $stage) {
-            $this->assignStage($document, $stage, $slaExpiresAt);
+            $assignment = $this->assignStage($document, $stage, $slaExpiresAt, autoApproveImmediately: false);
+            if ($assignment) {
+                $noApproverAssignments->push($assignment);
+            }
+        }
+
+        foreach ($noApproverAssignments as $assignment) {
+            $this->autoApproveNoEligibleApprover($assignment, 'nobody is currently assigned to this category/stage.');
         }
     }
 
@@ -882,20 +901,28 @@ class WorkflowService
      * eligible approver gets a seat regardless of busy status, since
      * "assign everyone" and "skip busy ones" can't both hold.
      */
-    private function assignStage(DocumentRepository $document, WorkflowStage $stage, Carbon $slaExpiresAt): void
+    /**
+     * $autoApproveImmediately=false defers resolving a "nobody eligible"
+     * stage back to the caller (returned, not auto-approved here) — used
+     * by routeToWorkflow()'s own loop, which calls this once per
+     * configured stage. Resolving immediately from inside that loop would
+     * let completeStage()'s "is anything else still pending" check see
+     * only whichever stages had been created SO FAR in the loop, and
+     * wrongly conclude the whole document was done after just the first
+     * stage, before later stages even got their own assignment rows.
+     * completeStage()'s own "safety net" call site (a stage discovered
+     * after the fact, one at a time, never part of a batch) keeps the
+     * default of resolving right away, since that hazard doesn't apply
+     * there.
+     */
+    private function assignStage(DocumentRepository $document, WorkflowStage $stage, Carbon $slaExpiresAt, bool $autoApproveImmediately = true): ?DocumentAssignment
     {
         $approvers = $this->eligibleApproversForStage($document->ml_category, $stage);
 
         if ($approvers->isEmpty()) {
-            // Same fallback every OTHER "nobody's eligible" case in this
-            // app already gets (see markNeedsApprover()'s docblock) —
-            // Admin is always the fallback, on the same clock, visible on
-            // Unassigned Documents. This used to just log a notice and
-            // give up, leaving the document permanently stuck with no SLA
-            // deadline and nothing to ever retry it, even after an Admin
-            // later added an eligible approver for this category/stage —
-            // a real gap, since every OTHER path into "no eligible
-            // approver" already gets the full fallback treatment.
+            // Nobody is currently eligible for this stage — auto-approve
+            // it rather than parking it in a queue waiting for an admin
+            // or an SLA deadline (see autoApproveNoEligibleApprover()).
             $assignment = DocumentAssignment::create([
                 'document_id' => $document->document_id,
                 'stage_id' => $stage->stage_id,
@@ -903,32 +930,45 @@ class WorkflowService
                 'due_date' => $document->due_date,
                 'priority_rank' => $this->computePriority($document->due_date),
                 'individual_status' => 'pending',
-                'needs_approver' => true,
-                'needs_approver_at' => now(),
                 'sla_expires_at' => $slaExpiresAt,
             ]);
 
-            EscalateAssignmentJob::dispatch($assignment->assignment_id, $slaExpiresAt)->delay($slaExpiresAt);
-
-            AuditLog::record(null, $document->document_id, 'needs_approver',
-                "Stage '{$stage->stage_name}' on '{$document->title}' has no eligible approver — nobody is currently " .
-                "assigned to this category/stage. Moved to the Unassigned Documents queue, due {$slaExpiresAt->toDayDateTimeString()}.");
-
-            foreach (User::where('role', 'admin')->where('is_active', true)->get() as $admin) {
-                NotificationRecord::send($admin->user_id, $document->document_id,
-                    "'{$document->title}' (stage '{$stage->stage_name}') needs an approver — nobody is currently " .
-                    'eligible for this category/stage. See Unassigned Documents.', 'high');
+            if ($autoApproveImmediately) {
+                $this->autoApproveNoEligibleApprover($assignment,
+                    'nobody is currently assigned to this category/stage.');
             }
 
-            event(new DocumentStatusChanged($document));
-
-            return;
+            return $assignment;
         }
 
         $this->createAssignmentsForApprovers($document, $stage, $approvers, $slaExpiresAt,
             "Stage '{$stage->stage_name}': assigned to all {$approvers->count()} eligible approver(s) " .
             "(category '{$document->ml_category}') — {$approvers->pluck('full_name')->implode(', ')}. " .
             "SLA window expires {$slaExpiresAt->toDayDateTimeString()} for each; the stage completes once every one has responded.");
+
+        return null;
+    }
+
+    /**
+     * Auto-approves $assignment immediately because nobody is (or was)
+     * eligible for it — shared by assignStage()'s "no eligible approver
+     * at all" branch and autoApproveDeactivatedSeat()'s "approver
+     * deactivated with no replacement" branch. Reuses SlaService::
+     * autoApproveNoEligibleApprover() — same underlying autoApproveOne()
+     * mechanism a real approver who misses their own deadline gets (so
+     * the same post-hoc admin review notification/queue already fires),
+     * plus the matching AdminViolation entry for the SLA Violations
+     * report. Resolved via app(), not constructor injection: SlaService
+     * itself depends on WorkflowService, so a constructor dependency here
+     * would be circular.
+     */
+    private function autoApproveNoEligibleApprover(DocumentAssignment $assignment, string $reason): void
+    {
+        AuditLog::record(null, $assignment->document_id, 'auto_approve_no_approver',
+            "Stage '{$assignment->stage->stage_name}' on '{$assignment->document->title}' has no eligible approver — " .
+            "{$reason} Auto-approved immediately; an Admin will still review it.");
+
+        app(SlaService::class)->autoApproveNoEligibleApprover($assignment);
     }
 
     /**
@@ -1194,70 +1234,26 @@ class WorkflowService
      * sibling seat exists on this stage (see hasSiblingSeat()) and
      * findReplacementApprover() found nobody either, using the exact same
      * category+stage eligibility rule normal routing uses (deliberately
-     * NOT broadened for this case). Unlike the old escalateForReassignment
-     * Failure() this replaces, this never blames the deactivated approver —
-     * they didn't fail an SLA deadline, they were deactivated with nothing
-     * else available. It's flagged needs_approver and surfaced in the
-     * separate Unassigned Documents module (see AdminController::
-     * unassignedDocuments()), where an Admin decides it directly — see
-     * adminDecideUnassigned() below. Deliberately no "assign anyone"
-     * bypass: eligibility stays strictly tied to each approver's assigned
-     * category/stages even here.
-     *
-     * It DOES get its own SLA deadline, though — the same tiered formula
-     * an approver's own window uses, anchored at this moment instead of
-     * routing time — so a seat nobody's eligible for still can't sit
-     * unresolved forever. If that deadline lapses, CheckParallelSlas's
-     * existing sweep (and the event-driven job dispatched below) picks it
-     * up exactly like any other expired seat and escalates it — but
-     * SlaService::escalate() branches on needs_approver so the resulting
-     * violation/notification reads as "nobody was eligible in time," not
-     * as blaming whoever used to hold the seat. See adminGraceExpiresAt()
-     * and autoApproveUnresolved() for why nothing else needs to change to
-     * make grace-period-then-auto-approve work for this too.
+     * NOT broadened for this case). This never blames the deactivated
+     * approver — they didn't fail an SLA deadline, they were deactivated
+     * with nothing else available — it's auto-approved immediately via
+     * autoApproveNoEligibleApprover(), same as a stage that never had an
+     * eligible approver in the first place (assignStage()). This used to
+     * flag the seat needs_approver and park it in a separate Unassigned
+     * Documents queue for an Admin to decide directly, or wait out its own
+     * SLA deadline — removed in favor of the immediate auto-approve +
+     * mandatory post-hoc review every other "nobody decided this" case
+     * already gets, so there's one queue to check, not two.
      */
-    public function markNeedsApprover(DocumentAssignment $assignment, User $oldApprover, ?string $reason = null): void
+    public function autoApproveDeactivatedSeat(DocumentAssignment $assignment, User $oldApprover, ?string $reason = null): void
     {
-        $slaExpiresAt = $this->computeApproverSlaExpiry($assignment->document);
-
-        $assignment->needs_approver = true;
-        $assignment->needs_approver_at = now();
         $assignment->reassigned_from = $oldApprover->user_id;
         $assignment->reassignment_reason = $reason;
-        $assignment->sla_expires_at = $slaExpiresAt;
         $assignment->save();
 
-        EscalateAssignmentJob::dispatch($assignment->assignment_id, $slaExpiresAt)->delay($slaExpiresAt);
-
-        AuditLog::record(null, $assignment->document_id, 'needs_approver',
-            "Stage '{$assignment->stage->stage_name}' on '{$assignment->document->title}' has no eligible approver — " .
+        $this->autoApproveNoEligibleApprover($assignment,
             "{$oldApprover->full_name}'s account was deactivated and nobody else qualifies for this category/stage." .
-            ($reason ? " Reason: \"{$reason}\"" : '') . " Moved to the Unassigned Documents queue, due {$slaExpiresAt->toDayDateTimeString()}.");
-
-        foreach (User::where('role', 'admin')->where('is_active', true)->get() as $admin) {
-            NotificationRecord::send($admin->user_id, $assignment->document_id,
-                "'{$assignment->document->title}' (stage '{$assignment->stage->stage_name}') needs an approver — " .
-                'nobody is currently eligible after an account deactivation. See Unassigned Documents.', 'high');
-        }
-
-        event(new DocumentStatusChanged($assignment->document));
-    }
-
-    /**
-     * Admin decides a needs_approver seat directly rather than assigning it
-     * to anyone — same mechanics as SlaService::adminOverride() (reuses the
-     * same admin_override_at/by fields — an Admin deciding on someone
-     * else's behalf, regardless of which queue brought them there) but
-     * deliberately kept in WorkflowService rather than SlaService: this
-     * isn't an SLA concern, and running it through SlaService would invite
-     * exactly the SLA-violation conflation this whole feature exists to
-     * avoid.
-     */
-    public function adminDecideUnassigned(DocumentAssignment $assignment, User $admin, string $decision, ?string $comments = null): void
-    {
-        $this->applyAdminDecision($assignment, $admin, $decision, $comments,
-            "Admin {$admin->full_name} decided stage '{$assignment->stage->stage_name}' directly (no approver " .
-            "was eligible) -> {$decision}." . ($comments ? " Notes: {$comments}" : ''));
+            ($reason ? " Reason: \"{$reason}\"" : ''));
     }
 
     /**
@@ -1293,7 +1289,6 @@ class WorkflowService
             $assignment->individual_status = $decision;
             $assignment->comments = $comments;
             $assignment->acted_at = now();
-            $assignment->needs_approver = false;
             $assignment->save();
 
             $document = $assignment->document;

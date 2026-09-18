@@ -72,7 +72,7 @@ it('withdraws a deactivated approver\'s seat with no Admin involvement when a si
     expect($seatB->escalated_to_admin)->toBeFalse();
 });
 
-it('flags needs_approver (not an SLA escalation) when the deactivated approver was the only one on the stage', function () {
+it('auto-approves immediately (not an SLA escalation) when the deactivated approver was the only one on the stage', function () {
     [$admin, $approvers, $document] = deactivationWithdrawTestSetup(1);
     [$approverA] = $approvers;
 
@@ -80,8 +80,8 @@ it('flags needs_approver (not an SLA escalation) when the deactivated approver w
 
     $seatA = DocumentAssignment::where('document_id', $document->document_id)->where('user_id', $approverA->user_id)->first();
 
-    expect($seatA->individual_status)->toBe('pending');
-    expect($seatA->needs_approver)->toBeTrue();
+    expect($seatA->individual_status)->toBe('approved');
+    expect($seatA->auto_approved)->toBeTrue();
     expect($seatA->escalated_to_admin)->toBeFalse();
 });
 
@@ -98,23 +98,23 @@ it('finalizes the document once the remaining approver decides after a withdrawa
     expect($document->fresh()->global_status)->toBe('approved');
 });
 
-it('flags needs_approver for the last real approver instead of withdrawing, when a prior sibling seat on the stage was already withdrawn', function () {
+it('auto-approves the last real approver instead of withdrawing, when a prior sibling seat on the stage was already withdrawn', function () {
     [$admin, $approvers, $document] = deactivationWithdrawTestSetup(2);
     [$approverA, $approverB] = $approvers;
 
     // First deactivation: A withdraws, covered by B.
     $this->actingAs($admin)->post(route('admin.users.toggle', $approverA), ['reason' => null]);
-    // Second deactivation: B is now the only REAL seat left — must flag
-    // needs_approver, not withdraw (A's row is already withdrawn and
-    // doesn't count as cover).
+    // Second deactivation: B is now the only REAL seat left — must
+    // auto-approve immediately, not withdraw (A's row is already
+    // withdrawn and doesn't count as cover).
     $this->actingAs($admin)->post(route('admin.users.toggle', $approverB), ['reason' => null]);
 
     $seatA = DocumentAssignment::where('document_id', $document->document_id)->where('user_id', $approverA->user_id)->first();
     $seatB = DocumentAssignment::where('document_id', $document->document_id)->where('user_id', $approverB->user_id)->first();
 
     expect($seatA->individual_status)->toBe('withdrawn');
-    expect($seatB->individual_status)->toBe('pending');
-    expect($seatB->needs_approver)->toBeTrue();
+    expect($seatB->individual_status)->toBe('approved');
+    expect($seatB->auto_approved)->toBeTrue();
     expect($seatB->escalated_to_admin)->toBeFalse();
 });
 

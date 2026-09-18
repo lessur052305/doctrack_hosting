@@ -21,7 +21,7 @@ function forecastDoc(User $originator, string $category = 'Job Order'): Document
     ]);
 }
 
-test('returns null when the category has no historical decisions yet', function () {
+test('falls back to the stage\'s own SLA deadline when the category has no historical decisions yet', function () {
     WorkflowStage::create(['document_category' => 'Job Order', 'stage_name' => 'Only Stage', 'sequence_order' => 1]);
     $originator = User::factory()->originator()->create();
     User::factory()->approver('Job Order')->create();
@@ -29,7 +29,48 @@ test('returns null when the category has no historical decisions yet', function 
     $document = forecastDoc($originator);
     app(WorkflowService::class)->routeToWorkflow($document);
 
-    expect(app(ApprovalForecastService::class)->estimateFor($document))->toBeNull();
+    $estimate = app(ApprovalForecastService::class)->estimateFor($document->fresh());
+    $slaExpiresAt = $document->assignments()->first()->sla_expires_at;
+
+    // No history to average or train from, but there IS a real SLA
+    // deadline on the routed seat — that's what gets used instead of
+    // going blank. Measured business-hours-aware (businessSecondsRemaining(),
+    // not a plain wall-clock diff) since that's how the estimate itself is
+    // computed and later re-expanded wherever it's rendered — a plain
+    // diff would disagree with it across any non-working stretch.
+    // Compared with a tolerance since a couple of seconds pass between
+    // routing and this assertion.
+    $expectedSeconds = app(App\Services\BusinessHoursService::class)->businessSecondsRemaining(now(), $slaExpiresAt);
+    expect($estimate)->not->toBeNull()
+        ->and(abs($estimate->totalSeconds - $expectedSeconds))->toBeLessThan(5);
+});
+
+test('falls back to the SLA deadline (not a misleading 0) when every historical decision measured 0 business seconds', function () {
+    WorkflowStage::create(['document_category' => 'Job Order', 'stage_name' => 'Only Stage', 'sequence_order' => 1]);
+    $originator = User::factory()->originator()->create();
+    $approver = User::factory()->approver('Job Order')->create();
+    $workflow = app(WorkflowService::class);
+
+    // A prior document routed AND decided entirely outside business hours
+    // (9 PM) — real wall-clock time passed, but none of it was business
+    // time, so it measures exactly 0 business seconds. This used to get
+    // silently trusted as "the real average," producing a confidently
+    // near-0 estimate instead of the honest SLA-deadline fallback.
+    test()->travelTo(now()->next('Monday')->setTime(21, 0));
+    $history = forecastDoc($originator);
+    $workflow->routeToWorkflow($history);
+    $workflow->decide(DocumentAssignment::where('document_id', $history->document_id)->first(), $approver, 'approved');
+
+    test()->travelTo(now()->addDay()->setTime(10, 0)); // back to a real business hour
+    $current = forecastDoc($originator);
+    $workflow->routeToWorkflow($current);
+    $slaExpiresAt = DocumentAssignment::where('document_id', $current->document_id)->first()->sla_expires_at;
+
+    $estimate = app(ApprovalForecastService::class)->estimateFor($current->fresh());
+
+    $expectedSeconds = app(App\Services\BusinessHoursService::class)->businessSecondsRemaining(now(), $slaExpiresAt);
+    expect($estimate)->not->toBeNull()
+        ->and(abs($estimate->totalSeconds - $expectedSeconds))->toBeLessThan(5);
 });
 
 test('returns null for a document with no category yet', function () {
@@ -55,7 +96,7 @@ test('returns null once the document is already fully resolved', function () {
     expect(app(ApprovalForecastService::class)->estimateFor($document->fresh()))->toBeNull();
 });
 
-test('produces a non-null estimate once historical decisions exist for the category, scaled by remaining stages', function () {
+test('produces a non-null estimate once historical decisions exist for the category', function () {
     WorkflowStage::create(['document_category' => 'Job Order', 'stage_name' => 'Stage One', 'sequence_order' => 1]);
     WorkflowStage::create(['document_category' => 'Job Order', 'stage_name' => 'Stage Two', 'sequence_order' => 2]);
     $originator = User::factory()->originator()->create();
@@ -79,6 +120,82 @@ test('produces a non-null estimate once historical decisions exist for the categ
         ->and($estimate->totalSeconds)->toBeGreaterThanOrEqual(0);
 });
 
+test('a multi-stage estimate is the SLOWEST pending stage, not every stage added together', function () {
+    // Every configured stage routes simultaneously (see WorkflowService::
+    // routeToWorkflow()) — Engineering and Finance both go pending on the
+    // new document at once, not one waiting for the other. So the whole-
+    // document estimate should track whichever department's history is
+    // slower, not the sum of both.
+    $fastStage = WorkflowStage::create(['document_category' => 'Job Order', 'stage_name' => 'Fast Stage', 'sequence_order' => 1]);
+    $slowStage = WorkflowStage::create(['document_category' => 'Job Order', 'stage_name' => 'Slow Stage', 'sequence_order' => 2]);
+
+    $originator = User::factory()->originator()->create();
+    $fastApprover = User::factory()->approver('Job Order')->create(['department' => 'Engineering']);
+    $slowApprover = User::factory()->approver('Job Order')->create(['department' => 'Finance']);
+    // Restrict each approver to exactly their own stage — without this,
+    // "no explicit stage picks" means eligible for every stage in the
+    // category (see eligibleApproversFor()'s docblock), which would let
+    // routing assign either approver to either stage unpredictably.
+    $fastApprover->workflowStages()->sync([$fastStage->stage_id]);
+    $slowApprover->workflowStages()->sync([$slowStage->stage_id]);
+    $workflow = app(WorkflowService::class);
+
+    // Every timestamp below is pinned to an explicit travelTo() rather than
+    // relying on travelBack() to restore a prior checkpoint — travelBack()
+    // resets to the REAL host clock, not to the last travelTo(), which
+    // would make the "5 hours" gap measure against an uncontrolled date.
+    $this->travelTo(\Carbon\Carbon::parse('2026-08-12 09:00:00')); // Wednesday, business hours
+
+    // Fast department's history: decided almost immediately — 3 rounds
+    // (ApprovalForecastService::MIN_NON_ZERO_DECISIONS), not just 1, so
+    // the average is actually trusted instead of falling back to the SLA
+    // deadline.
+    $fastHistoryDocs = [];
+    $slowHistoryDocs = [];
+    for ($i = 0; $i < 3; $i++) {
+        $this->travelTo(\Carbon\Carbon::parse('2026-08-12 09:00:00'));
+        $fastHistory = forecastDoc($originator);
+        $workflow->routeToWorkflow($fastHistory);
+        $this->travelTo(\Carbon\Carbon::parse('2026-08-12 09:30:00'));
+        foreach (DocumentAssignment::where('document_id', $fastHistory->document_id)->where('user_id', $fastApprover->user_id)->get() as $a) {
+            $workflow->decide($a, $fastApprover, 'approved');
+        }
+        $fastHistoryDocs[] = $fastHistory;
+
+        // Slow department's history: took several real business hours, same
+        // fixed Wednesday so the gap is deterministic.
+        $this->travelTo(\Carbon\Carbon::parse('2026-08-12 09:00:00'));
+        $slowHistory = forecastDoc($originator);
+        $workflow->routeToWorkflow($slowHistory);
+        $this->travelTo(\Carbon\Carbon::parse('2026-08-12 14:00:00'));
+        foreach (DocumentAssignment::where('document_id', $slowHistory->document_id)->where('user_id', $slowApprover->user_id)->get() as $a) {
+            $workflow->decide($a, $slowApprover, 'approved');
+        }
+        $slowHistoryDocs[] = $slowHistory;
+    }
+
+    // The histories' OTHER stage assignments (the ones each approver
+    // wasn't eligible for) are left pending — resolve those too so they
+    // don't pollute this category's later queue-depth counts.
+    DocumentAssignment::whereIn('document_id', collect([...$fastHistoryDocs, ...$slowHistoryDocs])->pluck('document_id'))
+        ->where('individual_status', 'pending')
+        ->get()
+        ->each(fn ($a) => $workflow->decide($a, $a->approver, 'approved'));
+
+    $current = forecastDoc($originator);
+    $workflow->routeToWorkflow($current);
+
+    $estimate = app(ApprovalForecastService::class)->estimateFor($current->fresh());
+
+    expect($estimate)->not->toBeNull()
+        // Comfortably north of the fast stage's own ~30min average, and in
+        // the neighborhood of the slow stage's ~5h average — not anywhere
+        // near their SUM (~5.5h would already be close to the max here,
+        // so the real signal is that it's nowhere near double-counted).
+        ->and($estimate->totalSeconds)->toBeGreaterThan(3 * 3600)
+        ->and($estimate->totalSeconds)->toBeLessThan(6 * 3600);
+});
+
 test('pads the estimate for a next-stage approver who already has a deep pending queue', function () {
     WorkflowStage::create(['document_category' => 'Job Order', 'stage_name' => 'Only Stage', 'sequence_order' => 1]);
     $originator = User::factory()->originator()->create();
@@ -91,14 +208,18 @@ test('pads the estimate for a next-stage approver who already has a deep pending
     // regardless of when the test suite itself happens to run.
     $this->travelTo(\Carbon\Carbon::parse('2026-08-12 10:00:00'));
 
-    // History so avg-per-stage isn't null AND non-zero — decided a
-    // simulated hour after routing, so the queue-depth padding below has
-    // something non-trivial to multiply against.
-    $history = forecastDoc($originator);
-    $workflow->routeToWorkflow($history);
-    $this->travel(1)->hours();
-    $workflow->decide(DocumentAssignment::where('document_id', $history->document_id)->first(), $approver, 'approved');
-    $this->travelBack();
+    // History so avg-per-stage isn't null AND non-zero — 3 rounds
+    // (ApprovalForecastService::MIN_NON_ZERO_DECISIONS), each decided a
+    // simulated hour after routing, so the average is actually trusted
+    // (not just falling back to the SLA deadline) and the queue-depth
+    // padding below has something non-trivial to multiply against.
+    for ($i = 0; $i < 3; $i++) {
+        $history = forecastDoc($originator);
+        $workflow->routeToWorkflow($history);
+        $this->travel(1)->hours();
+        $workflow->decide(DocumentAssignment::where('document_id', $history->document_id)->first(), $approver, 'approved');
+        $this->travelBack();
+    }
 
     $current = forecastDoc($originator);
     $workflow->routeToWorkflow($current);

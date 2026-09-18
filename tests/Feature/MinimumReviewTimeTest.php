@@ -10,10 +10,10 @@ use App\Models\WorkflowStage;
 /**
  * Coverage for the minimum-review-time gate (config('review.min_review_seconds'))
  * added to every decision point in the app: the approver's own decide()/
- * decideBatch(), and every admin direct-decision path (Unassigned
- * Documents, SLA Override, ML Review, Readability Review). Verifies the
- * gate itself — blocks under the threshold, allows at/over it — not just
- * that other tests still pass around it.
+ * decideBatch(), and every admin direct-decision path (SLA Override, ML
+ * Review, Readability Review). Verifies the gate itself — blocks under
+ * the threshold, allows at/over it — not just that other tests still
+ * pass around it.
  */
 function minReviewDoc(User $originator, array $overrides = []): DocumentRepository
 {
@@ -143,36 +143,24 @@ it('skips (not blocks) under-reviewed assignments in a batch decision, deciding 
     expect($assignmentB->fresh()->individual_status)->toBe('pending');
 });
 
-it('blocks an admin from deciding an Unassigned Documents seat with no review time', function () {
+it('blocks an admin from deciding an SLA Override seat with no review time', function () {
     $admin = User::factory()->admin()->create();
     $originator = User::factory()->originator()->create();
+    $approver = User::factory()->approver('Job Order')->create();
     $stage = WorkflowStage::create(['document_category' => 'Job Order', 'stage_name' => 'Review', 'sequence_order' => 1]);
     $document = minReviewDoc($originator);
     $assignment = DocumentAssignment::create([
-        'document_id' => $document->document_id, 'user_id' => null,
+        'document_id' => $document->document_id, 'user_id' => $approver->user_id,
         'stage_id' => $stage->stage_id, 'due_date' => $document->due_date,
-        'priority_rank' => 2, 'individual_status' => 'pending', 'needs_approver' => true, 'needs_approver_at' => now(),
+        'priority_rank' => 2, 'individual_status' => 'pending', 'sla_expires_at' => now()->addHour(),
     ]);
 
-    $response = $this->actingAs($admin)->post(route('admin.unassigned.decide', $assignment), [
+    $response = $this->actingAs($admin)->post(route('admin.sla.override', $assignment), [
         'decision' => 'approved',
     ]);
 
     $response->assertStatus(422);
     expect($assignment->fresh()->individual_status)->toBe('pending');
-});
-
-it('blocks confirming an ML review document with no review time', function () {
-    $admin = User::factory()->admin()->create();
-    $originator = User::factory()->originator()->create();
-    $document = minReviewDoc($originator, ['ml_review_status' => 'pending', 'ml_confidence' => 30.0, 'global_status' => 'processing']);
-
-    $response = $this->actingAs($admin)->post(route('admin.ml.review', $document), [
-        'action' => 'confirm', 'category' => 'Job Order',
-    ]);
-
-    $response->assertStatus(422);
-    expect($document->fresh()->ml_review_status)->toBe('pending');
 });
 
 it('renders the Approve/Reject buttons disabled with a countdown label when review time is insufficient', function () {

@@ -81,8 +81,8 @@
                                                     </button>
                                                 @endif
                                             </div>
-                                            {{-- Same shared-textarea + required-toggle pattern as
-                                                 Unassigned Documents' identical Approve/Reject form —
+                                            {{-- Same shared-textarea + required-toggle pattern used
+                                                 by every other Approve/Reject form in this app —
                                                  a rejection needs a real reason on file, same as every
                                                  other reject anywhere in this app; approving needs none. --}}
                                             <form method="POST" action="{{ route('admin.sla.override', $assignment) }}" class="flex flex-col gap-1.5 shrink-0 w-full sm:w-64">

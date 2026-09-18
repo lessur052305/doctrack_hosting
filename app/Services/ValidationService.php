@@ -15,18 +15,42 @@ namespace App\Services;
  */
 class ValidationService
 {
-    /** Required section keywords each document category must contain. */
+    /**
+     * Required section keywords each document category must contain. Each
+     * entry is a list of acceptable phrasings for the SAME field, not a
+     * list of separate fields — a document only needs to contain ONE of
+     * them (e.g. "Job Order No" or "Job Order Number") to satisfy that
+     * requirement. Added after a real document ("Job Order Number:")
+     * failed validation purely over wording, not any actual missing
+     * content — see validate()'s matching comment.
+     */
     private const TEMPLATES = [
         'Job Order' => [
-            'required_sections' => ['job order no', 'date requested', 'requested by', 'description of work'],
+            'required_sections' => [
+                ['job order no', 'job order number', 'job order #'],
+                ['date requested', 'date needed', 'requested date'],
+                ['requested by', 'requestor', 'requested for'],
+                ['description of work', 'work description', 'scope of work'],
+            ],
             'min_word_count' => 30,
         ],
         'Purchase Requisition' => [
-            'required_sections' => ['requisition no', 'department', 'item description', 'quantity', 'budget'],
+            'required_sections' => [
+                ['requisition no', 'requisition number', 'pr no', 'pr number'],
+                ['department'],
+                ['item description', 'items', 'description of items'],
+                ['quantity', 'qty'],
+                ['budget', 'estimated cost', 'estimated budget', 'total cost'],
+            ],
             'min_word_count' => 20,
         ],
         'Service Report' => [
-            'required_sections' => ['service report no', 'technician', 'date of service', 'findings'],
+            'required_sections' => [
+                ['service report no', 'service report number', 'sr no', 'report no'],
+                ['technician'],
+                ['date of service', 'service date', 'date serviced'],
+                ['findings', 'observations'],
+            ],
             'min_word_count' => 25,
         ],
     ];
@@ -61,9 +85,20 @@ class ValidationService
 
         $normalized = strtolower($text);
 
-        foreach ($template['required_sections'] as $section) {
-            if (!str_contains($normalized, $section)) {
-                $errors[] = "Missing required section/field: \"" . ucwords($section) . "\"";
+        foreach ($template['required_sections'] as $variants) {
+            $found = false;
+            foreach ($variants as $variant) {
+                if (str_contains($normalized, $variant)) {
+                    $found = true;
+                    break;
+                }
+            }
+
+            if (!$found) {
+                // The first variant is the canonical display name — same
+                // wording every existing error message/test already
+                // expects, just now backed by a list instead of one string.
+                $errors[] = "Missing required section/field: \"" . ucwords($variants[0]) . "\"";
             }
         }
 

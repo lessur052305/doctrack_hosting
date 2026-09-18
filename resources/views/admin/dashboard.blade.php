@@ -106,8 +106,8 @@
         scrollEl.style.maxHeight = Math.max(available - 8, 90) + 'px';
     }
 
-    // The Auto-Approval Alerts/Unassigned Documents column (see
-    // overview.blade.php's matching comment) needs to match the Analytics
+    // The Auto-Approval Alerts column (see overview.blade.php's matching
+    // comment) needs to match the Analytics
     // card's height exactly, not just "whichever of the two naturally
     // needs more room" — CSS grid's default stretch behavior gives the
     // latter, which at wide viewports (Analytics needs less height there,

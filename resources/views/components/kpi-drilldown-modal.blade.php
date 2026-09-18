@@ -34,7 +34,19 @@
         // openReviewAndComment()). Guarded since that function only exists
         // on pages that actually load approver/dashboard.blade.php's script,
         // and is itself a no-op unless that popup was the one open.
-        if (typeof __annotationStopPresencePoll === 'function') __annotationStopPresencePoll();
+        if (typeof __annotationStopPresencePoll === 'function') {
+            // Captured BEFORE __annotationStopPresencePoll() — that call
+            // sends the presence-leave beacon (closes the real review
+            // session server-side) and is also what nulls this out.
+            const documentId = typeof __annotationPresenceDocumentId !== 'undefined' ? __annotationPresenceDocumentId : null;
+            __annotationStopPresencePoll();
+            // Same "the real session just ended, stop the countdown from
+            // ticking in the background" signal document-viewer-modal.
+            // blade.php's closeDocumentViewer() sends — see its comment.
+            if (documentId) {
+                window.dispatchEvent(new CustomEvent('documentviewer:closed', { detail: { documentId } }));
+            }
+        }
     }
 
     async function openKpiDrilldown(type, label, url) {

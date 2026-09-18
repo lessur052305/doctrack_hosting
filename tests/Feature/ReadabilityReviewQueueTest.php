@@ -52,7 +52,7 @@ function ingestWithText(string $category, string $text, float $confidence = 95.0
     $originator = User::factory()->originator()->create();
 
     $mock = Mockery::mock(ClassificationService::class);
-    $mock->shouldReceive('classify')->andReturn(['category' => $category, 'confidence' => $confidence, 'model_id' => null]);
+    $mock->shouldReceive('classify')->andReturn(['category' => $category, 'confidence' => $confidence, 'margin' => 100.0, 'model_id' => null]);
     // Stubbed too — AdminController::confirmReadabilityReview()'s
     // near-duplicate-in-staging check calls this when a held document is
     // later confirmed via the admin review tests below.
@@ -176,7 +176,12 @@ it('rejects reviewing a document that is not pending readability review', functi
         ->assertNotFound();
 });
 
-it('does not route a document until BOTH classification and readability review clear, confirming in either order', function () {
+it('confirming readability review routes the document immediately — classification confidence is no longer a second gate', function () {
+    // Regression: this used to require BOTH a classification-confidence
+    // AND a readability confirm before routing. Classification review is
+    // retired (see WorkflowService::ingest()'s $isAmbiguous docblock) —
+    // readability is the only remaining hold, so confirming it now routes
+    // on its own.
     User::factory()->approver('Job Order')->create();
     WorkflowStage::create(['document_category' => 'Job Order', 'stage_name' => 'Review', 'sequence_order' => 1]);
     stageVocabulary('Job Order');
@@ -184,66 +189,22 @@ it('does not route a document until BOTH classification and readability review c
     $originator = User::factory()->originator()->create();
     $document = DocumentRepository::create([
         'originator_id' => $originator->user_id,
-        'title' => 'dual-pending.txt', 'file_path' => 'documents/dual-pending.txt',
+        'title' => 'readability-only.txt', 'file_path' => 'documents/readability-only.txt',
         'mime_type' => 'text/plain', 'ocr_text' => READABILITY_GOOD_JOB_ORDER,
         'due_date' => now()->addDay(), 'global_status' => 'processing',
-        'ml_category' => 'Job Order', 'ml_confidence' => 30.0, 'ml_review_status' => 'pending',
+        'ml_category' => 'Job Order', 'ml_confidence' => 95.0,
         'readability_score' => 55, 'readability_review_status' => 'pending',
     ]);
 
     $admin = readabilityAdmin();
 
-    // Confirm readability first — classification is still pending, so it
-    // must NOT route yet.
     seedReviewTime($admin, $document);
     $this->actingAs($admin)
         ->post(route('admin.ml.review.readability', $document), ['action' => 'confirm']);
 
     $document->refresh();
     expect($document->readability_review_status)->toBe('confirmed')
-        ->and($document->ml_review_status)->toBe('pending')
-        ->and(DocumentAssignment::where('document_id', $document->document_id)->count())->toBe(0);
-
-    // Now confirm classification too — every gate has cleared, so THIS
-    // action is the one that actually routes it.
-    seedReviewTime($admin, $document);
-    $this->actingAs($admin)
-        ->post(route('admin.ml.review', $document), ['action' => 'confirm', 'category' => 'Job Order']);
-
-    $document->refresh();
-    expect($document->ml_review_status)->toBe('confirmed')
         ->and(DocumentAssignment::where('document_id', $document->document_id)->count())->toBe(1);
-});
-
-it('stages a dual-review document into ML training only once, not once per gate', function () {
-    User::factory()->approver('Job Order')->create();
-    WorkflowStage::create(['document_category' => 'Job Order', 'stage_name' => 'Review', 'sequence_order' => 1]);
-    stageVocabulary('Job Order');
-
-    $originator = User::factory()->originator()->create();
-    $document = DocumentRepository::create([
-        'originator_id' => $originator->user_id,
-        'title' => 'dual-pending-staging-check.txt', 'file_path' => 'documents/dual-pending-staging-check.txt',
-        'mime_type' => 'text/plain', 'ocr_text' => READABILITY_GOOD_JOB_ORDER,
-        'due_date' => now()->addDay(), 'global_status' => 'processing',
-        'ml_category' => 'Job Order', 'ml_confidence' => 30.0, 'ml_review_status' => 'pending',
-        'readability_score' => 55, 'readability_review_status' => 'pending',
-    ]);
-
-    $admin = readabilityAdmin();
-
-    seedReviewTime($admin, $document);
-    $this->actingAs($admin)->post(route('admin.ml.review.readability', $document), ['action' => 'confirm']);
-
-    expect(MlStagingSample::where('original_filename', 'dual-pending-staging-check.txt')->count())->toBe(1);
-
-    seedReviewTime($admin, $document);
-    $this->actingAs($admin)->post(route('admin.ml.review', $document), ['action' => 'confirm', 'category' => 'Job Order']);
-
-    // Still just the one sample — the classification confirm must not have
-    // staged this exact document a second time now that readability's
-    // confirm already did.
-    expect(MlStagingSample::where('original_filename', 'dual-pending-staging-check.txt')->count())->toBe(1);
 });
 
 it('notifies every active admin when a document is held for readability review', function () {
@@ -259,30 +220,57 @@ it('notifies every active admin when a document is held for readability review',
             ->exists())->toBeTrue();
 });
 
-it('notifies every active admin when a document is held for classification confidence review', function () {
+it('notifies the ORIGINATOR, not admins, when a document is rejected for an ambiguous classification', function () {
+    // Confidence alone no longer holds a document for admin review — see
+    // WorkflowService::ingest()'s $isAmbiguous docblock. Low confidence
+    // AND a flat margin together are what reject it outright, straight
+    // back to the originator to resubmit, with no admin involved.
     $admin = User::factory()->admin()->create();
 
-    $document = ingestWithText('Job Order', READABILITY_GOOD_JOB_ORDER, confidence: 30.0);
+    $mock = Mockery::mock(ClassificationService::class);
+    $mock->shouldReceive('classify')->andReturn(['category' => 'Job Order', 'confidence' => 30.0, 'margin' => 5.0, 'model_id' => null]);
+    $mock->shouldReceive('wordOverlapSimilarity')->andReturn(0.0);
+    app()->instance(ClassificationService::class, $mock);
 
-    expect($document->ml_review_status)->toBe('pending')
+    $originator = User::factory()->originator()->create();
+    $document = app(App\Services\WorkflowService::class)->ingest(
+        UploadedFile::fake()->createWithContent('memo.txt', READABILITY_GOOD_JOB_ORDER),
+        $originator,
+        now()->addDay()->toDateTimeString(),
+    );
+
+    expect($document->global_status)->toBe('rejected')
+        ->and(NotificationRecord::where('recipient_id', $originator->user_id)
+            ->where('document_id', $document->document_id)
+            ->where('message_body', 'like', "%doesn't clearly match any of our trained categories%")
+            ->exists())->toBeTrue()
         ->and(NotificationRecord::where('recipient_id', $admin->user_id)
             ->where('document_id', $document->document_id)
-            ->where('message_body', 'like', '%needs admin review%classification confidence%')
-            ->exists())->toBeTrue();
+            ->exists())->toBeFalse();
 });
 
-it('notifies admins once, not twice, when a document needs both classification and readability review', function () {
+it('an ambiguous classification rejects the document immediately, taking priority over readability review', function () {
+    // Both gates would have applied under the old design (garbled text +
+    // low confidence) — ambiguity now short-circuits before readability
+    // is ever considered, since routing an ambiguous document anywhere
+    // (even one that also passed readability) risks the wrong approvers
+    // deciding it — see ingest()'s branch ordering.
     stageVocabulary('Job Order');
-    $admin = User::factory()->admin()->create();
 
-    $document = ingestWithText('Job Order', READABILITY_GARBLED_JOB_ORDER, confidence: 30.0);
+    $mock = Mockery::mock(ClassificationService::class);
+    $mock->shouldReceive('classify')->andReturn(['category' => 'Job Order', 'confidence' => 30.0, 'margin' => 5.0, 'model_id' => null]);
+    $mock->shouldReceive('wordOverlapSimilarity')->andReturn(0.0);
+    app()->instance(ClassificationService::class, $mock);
 
-    expect($document->ml_review_status)->toBe('pending')
-        ->and($document->readability_review_status)->toBe('pending')
-        ->and(NotificationRecord::where('recipient_id', $admin->user_id)
-            ->where('document_id', $document->document_id)
-            ->where('message_body', 'like', '%needs admin review%')
-            ->count())->toBe(1);
+    $originator = User::factory()->originator()->create();
+    $document = app(App\Services\WorkflowService::class)->ingest(
+        UploadedFile::fake()->createWithContent('memo.txt', READABILITY_GARBLED_JOB_ORDER),
+        $originator,
+        now()->addDay()->toDateTimeString(),
+    );
+
+    expect($document->global_status)->toBe('rejected')
+        ->and($document->readability_review_status)->not->toBe('pending');
 });
 
 it('shows the Content Readability Review panel on the ML training page', function () {

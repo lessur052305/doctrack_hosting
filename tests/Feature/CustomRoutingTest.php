@@ -17,7 +17,7 @@ beforeEach(function () {
  * The classifier is mocked to a fixed category/confidence rather than
  * relying on the real trained SVM's output for arbitrary test content —
  * there's no active trained model in a fresh test DB at all, so a real
- * classify() call always returns 'Unclassified' at 0% — see
+ * classify() call always returns 'Other' at 0% — see
  * PrintRequiredFlagTest's identical helper for the same reasoning.
  */
 function fakeClassifiedIngestWithRoutingMode(string $category, float $confidence, string $content, string $routingMode): DocumentRepository
@@ -25,7 +25,7 @@ function fakeClassifiedIngestWithRoutingMode(string $category, float $confidence
     $originator = User::factory()->originator()->create();
 
     $mock = Mockery::mock(ClassificationService::class);
-    $mock->shouldReceive('classify')->andReturn(['category' => $category, 'confidence' => $confidence, 'model_id' => null]);
+    $mock->shouldReceive('classify')->andReturn(['category' => $category, 'confidence' => $confidence, 'margin' => 100.0, 'model_id' => null]);
     app()->instance(ClassificationService::class, $mock);
 
     return app(WorkflowService::class)->ingest(
@@ -226,7 +226,13 @@ test('the estimated approval time for a custom-routed document reflects its real
     $estimate = app(App\Services\ApprovalForecastService::class)->estimateFor($document);
 
     expect($estimate)->not->toBeNull();
-    $expectedSeconds = now()->diffInSeconds($assignment->sla_expires_at, false);
+    // Business-hours-aware, not a plain wall-clock diff — the estimate
+    // is re-expanded via addBusinessMinutes() wherever it's rendered
+    // (see workflow-stage-list.blade.php), so it has to be measured with
+    // that same business-hours ruler (businessSecondsRemaining(), its
+    // exact mirror image) to land back on the real SLA deadline.
+    $expectedSeconds = app(App\Services\BusinessHoursService::class)
+        ->businessSecondsRemaining(now(), $assignment->sla_expires_at);
     expect($estimate->totalSeconds)->toBeGreaterThan($expectedSeconds - 5)
         ->and($estimate->totalSeconds)->toBeLessThan($expectedSeconds + 5);
 });

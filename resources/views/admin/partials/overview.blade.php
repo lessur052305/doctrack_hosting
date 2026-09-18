@@ -89,20 +89,17 @@
     </div>
 
     {{--
-        Right column (1/3 width) — Auto-Approval Alerts above Unassigned
-        Documents (ML Model moved up into the KPI row as its own clickable
-        card; Category Volume/Performance Insights removed from this
-        column entirely). Grid's default row-stretch equalizes the two
-        columns' heights ONLY up to whichever one naturally needs the
-        MOST room — with real per-document rows in both cards now, that
-        can be THIS column, not Analytics, at wider viewports, leaving
-        Analytics with dead space below it instead. So this column's
-        actual pixel height is explicitly measured off the Analytics card
-        and set via JS (sizeAlertColumn() in dashboard.blade.php, same
-        technique as sizeRecentActivity() below) rather than trusted to
-        pure CSS stretch. flex-1/min-h-0 on both cards below then split
-        that FIXED height evenly, each scrolling internally if it has more
-        rows than its share allows.
+        Right column (1/3 width) — Auto-Approval Alerts (ML Model moved up
+        into the KPI row as its own clickable card; Category Volume/
+        Performance Insights/Unassigned Documents removed from this column
+        entirely — a stage with no eligible approver auto-approves
+        immediately now instead of sitting in its own queue, see
+        WorkflowService::assignStage()). This column's actual pixel height
+        is explicitly measured off the Analytics card and set via JS
+        (sizeAlertColumn() in dashboard.blade.php, same technique as
+        sizeRecentActivity() below) rather than trusted to pure CSS
+        stretch, so it matches Analytics exactly instead of CSS grid's
+        default row-stretch leaving dead space under a shorter column.
     --}}
     <div id="admin-alerts-column" class="flex flex-col gap-4">
         <div class="flex-1 min-h-0 flex flex-col bg-white rounded-xl shadow-card border border-surface-200 overflow-hidden">
@@ -135,49 +132,6 @@
                     </li>
                 @empty
                     <li class="flex-1 flex items-center justify-center px-5 py-6 text-center text-sm text-surface-400">No documents are currently awaiting review — everything is on schedule.</li>
-                @endforelse
-            </ul>
-        </div>
-
-        {{--
-            Unassigned Documents preview — replaces Category Volume/
-            Performance Insights. Mirrors AdminController::
-            unassignedDocumentsData()'s own query, capped to a top-5
-            preview; the full paginated list lives one click away via
-            "View all", same "taste, not the whole thing" pattern as
-            Recent Activity and Auto-Approval Alerts on this same
-            dashboard.
-        --}}
-        <div class="flex-1 min-h-0 flex flex-col bg-white rounded-xl shadow-card border border-surface-200 overflow-hidden">
-            <div class="px-5 py-3 border-b border-surface-200 flex items-center justify-between gap-2 shrink-0">
-                <div class="flex items-center gap-2 min-w-0">
-                    <h2 class="text-sm font-semibold text-surface-900 tracking-tight flex items-center gap-2 shrink-0">
-                        <span class="relative flex w-2 h-2 shrink-0">
-                            <span class="absolute inline-flex h-full w-full rounded-full bg-rejected-400 opacity-75 animate-ping"></span>
-                            <span class="relative inline-flex rounded-full h-2 w-2 bg-rejected-500"></span>
-                        </span>
-                        Unassigned Documents
-                    </h2>
-                    @if($unassignedCount > 0)
-                        <a href="{{ route('admin.unassigned.index') }}" class="shrink-0 text-xs bg-rejected-50 text-rejected-700 px-2 py-0.5 rounded-full font-medium ring-1 ring-inset ring-rejected-500/20 hover:bg-rejected-100 transition-colors">{{ $unassignedCount }} unassigned</a>
-                    @endif
-                </div>
-                <a href="{{ route('admin.unassigned.index') }}" class="shrink-0 text-xs text-primary-700 hover:underline font-medium">View all &rarr;</a>
-            </div>
-            <ul class="flex-1 overflow-y-auto min-h-[80px] divide-y divide-surface-100 flex flex-col">
-                @forelse($unassignedAlerts as $row)
-                    <li class="px-5 py-2.5 hover:bg-surface-50/60 transition-colors">
-                        <div class="flex items-center justify-between gap-3">
-                            <p class="font-medium text-surface-800 truncate">{{ $row->document->title }}</p>
-                            <a href="{{ route('admin.unassigned.index') }}" class="shrink-0 text-xs bg-primary-700 text-white px-2.5 py-1 rounded-lg font-medium hover:bg-primary-800 shadow-sm transition-colors">Assign</a>
-                        </div>
-                        <p class="text-xs text-surface-400 mt-0.5">
-                            No eligible approver &middot;
-                            since <span data-live-time="{{ optional($row->needs_approver_at)->timestamp }}">{{ optional($row->needs_approver_at)->diffForHumans() }}</span>
-                        </p>
-                    </li>
-                @empty
-                    <li class="flex-1 flex items-center justify-center px-5 py-6 text-center text-sm text-surface-400">No documents currently need an eligible approver — everything is on schedule.</li>
                 @endforelse
             </ul>
         </div>

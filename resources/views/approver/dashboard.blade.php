@@ -108,8 +108,40 @@
         reviewCountdownIntervals = {};
     }
 
+    // How many popups are currently open for a given document — a count,
+    // not a plain flag, because "View original file" and "Review &
+    // Comment" are two separate modals that can genuinely both be open at
+    // once for the same document (see openReviewAndComment()'s own
+    // comment). startReviewCountdown() below refuses to tick unless this
+    // says a popup is actually open — see its own comment for why that
+    // check has to live THERE, not just at the open/close event sites.
+    let openReviewDocumentCounts = {};
+
+    function markReviewDocumentOpened(documentId) {
+        openReviewDocumentCounts[documentId] = (openReviewDocumentCounts[documentId] || 0) + 1;
+    }
+
+    function markReviewDocumentClosed(documentId) {
+        if (!openReviewDocumentCounts[documentId]) return;
+        openReviewDocumentCounts[documentId] -= 1;
+        if (openReviewDocumentCounts[documentId] <= 0) delete openReviewDocumentCounts[documentId];
+    }
+
     function startReviewCountdown(documentId) {
         if (reviewCountdownIntervals[documentId]) return; // already ticking
+
+        // This is the actual fix for the countdown ticking down in the
+        // background with no popup open at all: it's not enough to stop
+        // ticking when a popup closes (see documentviewer:closed below) —
+        // the live queue refresh (poll or Reverb broadcast) restarts a
+        // countdown for EVERY form with remaining time left on EVERY swap,
+        // with no idea whether that document's popup is still open. That
+        // restart call is exactly what kept resurrecting the countdown a
+        // few seconds after close and letting it finish counting down in
+        // the background anyway. Refusing to start here — regardless of
+        // which of the several call sites asked — is the one place that
+        // guards all of them at once.
+        if (!openReviewDocumentCounts[documentId]) return;
 
         const initialForm = document.querySelector(`.review-decide-form[data-document-id="${documentId}"]`);
         if (!initialForm) return;
@@ -170,7 +202,43 @@
     // Added once, on `window` — never torn down by a live swap (only the
     // #review-queue subtree gets replaced), so this doesn't need to be
     // re-attached in onSwap the way DOM-scoped listeners would.
-    window.addEventListener('documentviewer:opened', (e) => startReviewCountdown(e.detail.documentId));
+    window.addEventListener('documentviewer:opened', (e) => {
+        markReviewDocumentOpened(e.detail.documentId);
+        startReviewCountdown(e.detail.documentId);
+    });
+
+    // Closing either popup (document-viewer-modal.blade.php's
+    // closeDocumentViewer() or kpi-drilldown-modal.blade.php's
+    // closeKpiDrilldown()) ends the REAL review session server-side, but
+    // without this, the countdown above kept ticking down in the browser
+    // regardless — a plain wall-clock stopwatch from "opened", with no
+    // idea the popup (and the session behind it) had already closed. That
+    // let it reach 0 and enable Approve/Reject even after someone closed
+    // the viewer well before the real minimum review time — clicking
+    // still correctly got rejected server-side (ApprovalController::
+    // decide() re-checks the real session time independently), but the
+    // button itself lied about being usable.
+    //
+    // Two things happen on close, both necessary: stopReviewCountdown()
+    // freezes whatever interval is ticking RIGHT NOW (so
+    // form.dataset.reviewRemaining stops at the real remaining figure
+    // instead of continuing past it), and markReviewDocumentClosed()
+    // records that nothing is open for this document anymore, so the next
+    // live-refresh's blanket "restart every countdown with time left"
+    // pass (see the two onSwap handlers below) can't resurrect a fresh
+    // countdown for it either — startReviewCountdown() checks exactly
+    // that before it will start ticking at all.
+    function stopReviewCountdown(documentId) {
+        if (reviewCountdownIntervals[documentId]) {
+            clearInterval(reviewCountdownIntervals[documentId]);
+            delete reviewCountdownIntervals[documentId];
+        }
+    }
+
+    window.addEventListener('documentviewer:closed', (e) => {
+        markReviewDocumentClosed(e.detail.documentId);
+        stopReviewCountdown(e.detail.documentId);
+    });
 
     // "Review & Comment" feature parity with "View original file" (Feature:
     // in practice this is the popup approvers actually use to decide, so

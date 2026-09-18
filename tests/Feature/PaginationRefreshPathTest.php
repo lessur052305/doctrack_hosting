@@ -57,12 +57,10 @@ it('Admin Users refresh fragment points Next/Previous at the real users page, no
     $response->assertDontSee('users/refresh?', false);
 });
 
-it('ML Review Queue refresh fragment points Next/Previous at the real ML training page, not the refresh route', function () {
+it('Readability Review Queue refresh fragment points Next/Previous at the real ML training page, not the refresh route', function () {
     $admin = User::factory()->admin()->create();
     for ($i = 0; $i < 6; $i++) {
-        $word = str_repeat(chr(97 + $i), 4);
-        $text = implode(' ', array_fill(0, 30, $word));
-        refreshPathDoc($admin, ['global_status' => 'processing', 'ml_review_status' => 'pending', 'ml_confidence' => 30.0, 'ocr_text' => $text]);
+        refreshPathDoc($admin, ['global_status' => 'processing', 'readability_review_status' => 'pending', 'readability_score' => 50]);
     }
 
     $response = $this->actingAs($admin)->get(route('admin.ml.review.refresh'));

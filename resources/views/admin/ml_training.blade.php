@@ -25,6 +25,13 @@
         @include('admin.partials.ml_review_panels')
     </div>
 
+    {{-- One-time-only bootstrap — see WorkflowService::ingest()'s
+         $isAmbiguous docblock: automatic classification needs SOME
+         trained model to check a document against in the first place,
+         so this one manual step can't be automated away, unlike every
+         retrain after it (see AutoTrainClassifier). Disappears for good
+         the moment a model actually exists. --}}
+    @unless($activeModel)
     <div class="lg:col-span-2">
         <div class="bg-white rounded-xl shadow-card border border-surface-200 p-6">
             <h2 class="text-sm font-semibold text-surface-900 mb-3">Train / Retrain Classifier</h2>
@@ -133,8 +140,16 @@
             </div>
         </div>
     </div>
+    @endunless
 
-    <div class="space-y-6">
+    <div class="{{ $activeModel ? 'lg:col-span-3' : '' }} space-y-6">
+        @if($activeModel)
+            <div class="bg-white rounded-xl shadow-card border border-surface-200 p-6">
+                <p class="text-sm text-surface-600">
+                    Classification is fully automatic now — new documents are classified and routed on their own, and the model retrains itself as confidently-classified documents come in. Nothing to do here day to day; this page is for visibility only.
+                </p>
+            </div>
+        @endif
         <div class="bg-white rounded-xl shadow-card border border-surface-200 p-6">
             <h2 class="text-sm font-semibold text-surface-900 mb-4">Current Active Model</h2>
             @if($activeModel)
@@ -143,6 +158,12 @@
                     <div class="flex justify-between"><dt class="text-surface-500">Samples</dt><dd class="font-medium">{{ $activeModel->training_sample_count }}</dd></div>
                     <div class="flex justify-between"><dt class="text-surface-500">Accuracy</dt><dd class="font-medium text-approved-700">{{ $activeModel->accuracy_score }}%</dd></div>
                 </dl>
+                <details class="mt-3 text-xs">
+                    <summary class="cursor-pointer text-primary-700 hover:underline font-medium">What does this mean?</summary>
+                    <p class="mt-2 text-surface-500 leading-relaxed">
+                        How often the model correctly identifies a document's category when tested on samples it never saw during training — not just guessing on familiar material. It's checked by rotating which documents get held back as a quiz, five rounds in a row, so every sample gets quizzed exactly once before the final score is settled.
+                    </p>
+                </details>
             @else
                 <p class="text-sm text-surface-400">No trained model yet — upload samples to get started.</p>
             @endif

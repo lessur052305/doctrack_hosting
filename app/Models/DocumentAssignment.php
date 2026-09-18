@@ -83,7 +83,7 @@ class DocumentAssignment extends Model
         'admin_override_by', 'escalated_to_admin', 'escalated_at', 'escalation_reason', 'auto_approved', 'acted_at',
         'admin_reviewed_at', 'admin_reviewed_by', 'admin_review_note', 'admin_review_outcome',
         'review_reminder_sent_at', 'urgent_reminder_sent_at', 'grace_reminder_sent_at',
-        'reassigned_at', 'reassigned_from', 'reassignment_reason', 'needs_approver', 'needs_approver_at',
+        'reassigned_at', 'reassigned_from', 'reassignment_reason',
         'cascade_closed_by', 'review_due_at',
     ];
 
@@ -100,8 +100,6 @@ class DocumentAssignment extends Model
         'urgent_reminder_sent_at' => 'datetime',
         'grace_reminder_sent_at' => 'datetime',
         'reassigned_at' => 'datetime',
-        'needs_approver' => 'boolean',
-        'needs_approver_at' => 'datetime',
         'review_due_at' => 'datetime',
     ];
 

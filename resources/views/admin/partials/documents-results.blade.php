@@ -24,7 +24,7 @@
                     <p class="text-xs text-surface-500 mt-1">
                         Uploaded {{ $doc->upload_date?->format('M j, Y g:i:s A') }}
                         &middot; {{ $doc->originator->full_name ?? 'Unknown' }}
-                        &middot; {{ $doc->ml_category ?? 'Unclassified' }}
+                        &middot; {{ $doc->ml_category ?? 'Other' }}
                     </p>
                     <div class="mt-2" onclick="event.stopPropagation()">
                         <x-document-presence :document="$doc" />

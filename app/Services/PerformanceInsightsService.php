@@ -98,7 +98,18 @@ class PerformanceInsightsService
     private function rank(Collection $grouped, \Closure $labelFor, int $limit): Collection
     {
         return $grouped
-            ->filter(fn (Collection $rows) => $rows->count() >= self::MIN_DECISIONS)
+            // Requires MIN_DECISIONS GENUINELY non-zero readings, not just
+            // MIN_DECISIONS total with one real one mixed in — a decision
+            // measures 0 whenever it was both routed AND decided entirely
+            // outside business hours (see ApprovalTimeMlService::
+            // trainFor()'s identical guard). This single check already
+            // implies "at least MIN_DECISIONS total" too (a non-zero count
+            // can never exceed the total), so it replaces what used to be
+            // two separate filters. A misleading near-0 "fastest" entry,
+            // mostly built from zero-contaminated readings, is worse than
+            // just excluding it until enough real business-hours data
+            // exists.
+            ->filter(fn (Collection $rows) => $rows->filter(fn ($row) => $row->elapsed_seconds > 0)->count() >= self::MIN_DECISIONS)
             ->map(fn (Collection $rows, $key) => [
                 'key' => $key,
                 'label' => $labelFor($rows),

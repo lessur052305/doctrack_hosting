@@ -11,9 +11,12 @@ use Illuminate\Console\Command;
  * workflow:check-parallel-slas (see README.md for the cron entry needed
  * to drive Laravel's scheduler in production).
  *
- * The actual auto-approval decision (a real approver's own miss, or a
- * needs_approver seat's own fallback-to-Admin miss) is event-driven —
- * see EscalateAssignmentJob and SlaService::escalate(). This command is
+ * The actual auto-approval decision (a real approver's own missed
+ * deadline) is event-driven — see EscalateAssignmentJob and
+ * SlaService::escalate(). A stage with no eligible approver at all
+ * auto-approves immediately at routing time instead (see
+ * WorkflowService::assignStage()), so there's no deadline for it to
+ * miss here either. This command is
  * the periodic backstop for the two things that genuinely need to run on
  * a schedule: outage detection/compensation, and following up on
  * auto-approvals that are sitting unreviewed (see trackLateReviews()).
@@ -32,7 +35,6 @@ class CheckSlaDeadlines extends Command
             : '';
 
         $this->info("SLA sweep complete: {$result['late_review_reminders_sent']} late-review reminder(s) sent, " .
-            "{$result['late_ml_review_reminders_sent']} late-classification-review reminder(s) sent, " .
             "{$result['urgent_approver_reminders_sent']} approver final-call reminder(s) sent.{$outageNote}");
 
         return self::SUCCESS;

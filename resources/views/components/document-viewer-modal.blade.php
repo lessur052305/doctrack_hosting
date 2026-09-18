@@ -185,9 +185,25 @@
     }
 
     function closeDocumentViewer() {
+        // Captured BEFORE __stopPresencePoll() — that call sends the
+        // presence-leave beacon, which is what closes the real review
+        // session server-side and is also what nulls this out.
+        const documentId = __presenceDocumentId;
+
         document.getElementById('doc-viewer-overlay').classList.add('hidden');
         document.getElementById('doc-viewer-body').innerHTML = '';
         __stopPresencePoll();
+
+        // Lets the Approver Queue's minimum-review-time countdown (see
+        // startReviewCountdown() in approver/dashboard.blade.php) know the
+        // real review session just ended, so it can stop ticking down
+        // instead of continuing to count wall-clock seconds as if
+        // reviewing were still happening — see that listener's own
+        // docblock for why the countdown used to reach 0 and "unlock"
+        // Approve/Reject even after someone closed the viewer early.
+        if (documentId) {
+            window.dispatchEvent(new CustomEvent('documentviewer:closed', { detail: { documentId } }));
+        }
     }
 
     async function openDocumentViewer(url, mimeType, filename, documentId, autoPrint = false) {

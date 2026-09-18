@@ -4,17 +4,25 @@ namespace App\Services;
 
 use App\Models\DocumentAssignment;
 use App\Models\MlTimeEstimateModel;
+use App\Support\RidgeRegression;
 use Illuminate\Support\Collection;
-use Phpml\Regression\LeastSquares;
 
 /**
- * Trains one Linear Regression model per (category, department) combo,
+ * Trains one Ridge Regression model per (category, department) combo,
  * predicting how long the NEXT decision in that combo will take. Two
  * features: the deciding approver's own historical average speed
  * (leave-one-out, so a row is never used to predict itself) and the day
  * of week — genuinely learnable signal, not just echoing the target back
  * at itself. Runs fully automatically (see TrainTimeEstimateModels) —
  * there is deliberately no manual "train now" control.
+ *
+ * Ridge, not plain Linear Regression — see App\Support\RidgeRegression's
+ * own docblock for the mechanism, but in short: it stays conservative
+ * when there's little data to constrain it (fewer real decisions, more
+ * room for one unusual outlier to skew a plain fit), and automatically
+ * trusts the data more as more real decisions accumulate — exactly the
+ * "works reasonably from a small sample, gets sharper as data grows"
+ * property MIN_TRAINING_SAMPLES alone can't provide on its own.
  *
  * See ApprovalForecastService's docblock for why THAT stays a plain
  * statistical average — this is the genuine ML regression counterpart,
@@ -25,11 +33,20 @@ use Phpml\Regression\LeastSquares;
  */
 class ApprovalTimeMlService
 {
-    /** Below this many real decisions for a (category, department) combo, there isn't enough signal to train on. */
-    public const MIN_TRAINING_SAMPLES = 20;
+    /**
+     * Below this many real decisions for a (category, department) combo,
+     * there isn't enough signal to train on — lowered from 20, now that
+     * Ridge Regression's own conservatism (see class docblock) makes a
+     * smaller floor safe: below this, it isn't that no algorithm COULD
+     * run (Ridge's penalty term means it technically can, even on very
+     * few rows), it's that grading the result honestly needs at least a
+     * couple of held-out folds' worth of real data to mean anything more
+     * than a coin flip — see crossValidatedMae()'s docblock.
+     */
+    public const MIN_TRAINING_SAMPLES = 10;
 
-    /** Held back from training, purely to grade the result honestly. */
-    private const TEST_FRACTION = 0.2;
+    /** How hard Ridge's penalty pushes coefficients toward a conservative baseline — see RidgeRegression's own docblock. */
+    private const RIDGE_LAMBDA = 1.0;
 
     private ?Collection $rowsCache = null;
 
@@ -95,6 +112,23 @@ class ApprovalTimeMlService
             return null;
         }
 
+        // Fewer than the training floor's worth of GENUINELY non-zero
+        // decisions — not just "not literally every row is 0". A handful
+        // of real readings mixed in with mostly-zero ones would otherwise
+        // still pass the raw count check above and get treated as a
+        // trustworthy sample, when most of it is the same blind spot that
+        // produced a misleadingly-confident 0-second model earlier: a
+        // decision measures 0 whenever it was both routed AND decided
+        // entirely outside business hours (e.g. same-evening testing) —
+        // real wall-clock time passed, but businessSecondsRemaining() had
+        // nothing to measure. Requiring the SAME floor as the raw count
+        // (not just ">= 1") means a mostly-zero-contaminated sample gets
+        // the same "not enough real data yet" treatment as a genuinely
+        // small one, rather than only catching the all-zero extreme.
+        if ($rows->filter(fn ($row) => (float) $row->elapsed_seconds > 0.0)->count() < self::MIN_TRAINING_SAMPLES) {
+            return null;
+        }
+
         $byApprover = $rows->groupBy('user_id');
         $historicalSpeedFor = function ($row) use ($byApprover, $rows) {
             $others = $byApprover[$row->user_id]->where('assignment_id', '!=', $row->assignment_id);
@@ -109,29 +143,18 @@ class ApprovalTimeMlService
             $targets[] = (float) $row->elapsed_seconds;
         }
 
-        // Shuffled before splitting — the rows are naturally in creation
-        // order, and holding back only the LATEST slice (instead of a
-        // random one) would test the model exclusively on however things
-        // happened to be trending most recently, not a representative sample.
-        $indices = range(0, count($samples) - 1);
-        shuffle($indices);
-        $testCount = max(1, (int) floor(count($indices) * self::TEST_FRACTION));
-        $testIndices = array_slice($indices, 0, $testCount);
-        $trainIndices = array_slice($indices, $testCount);
-
         try {
-            $regression = new LeastSquares();
-            $regression->train(
-                array_map(fn ($i) => $samples[$i], $trainIndices),
-                array_map(fn ($i) => $targets[$i], $trainIndices)
-            );
+            $mae = $this->crossValidatedMae($samples, $targets);
 
-            $predictions = $regression->predict(array_map(fn ($i) => $samples[$i], $testIndices));
-            $predictions = is_array($predictions) ? $predictions : [$predictions];
-            $testTargets = array_map(fn ($i) => $targets[$i], $testIndices);
-
-            $absErrors = array_map(fn ($predicted, $actual) => abs($predicted - $actual), $predictions, $testTargets);
-            $mae = (int) round(array_sum($absErrors) / count($absErrors));
+            // The FINAL model is trained on every row, not just whatever
+            // fraction happened to land in one fold — same reasoning as
+            // ClassificationService::train(): the cross-validation above
+            // exists purely to grade the result honestly, the folds are
+            // discarded once that's done, and the deployed model
+            // shouldn't be built from a smaller slice than what's
+            // actually available.
+            $regression = new RidgeRegression(self::RIDGE_LAMBDA);
+            $regression->train($samples, $targets);
         } catch (\Throwable $e) {
             report($e);
 
@@ -157,6 +180,66 @@ class ApprovalTimeMlService
             'is_active' => true,
             'trained_at' => now(),
         ]);
+    }
+
+    /**
+     * 5-fold cross-validation — mirrors ClassificationService::
+     * estimateAccuracyViaCrossValidation() exactly, just measuring mean
+     * absolute error instead of a right/wrong rate: shuffle, split into
+     * 5 groups, and run 5 rounds where each group takes its turn being
+     * held out as the test set while a throwaway Ridge model trains on
+     * the other 4. Every row's prediction error (across whichever round
+     * it was the held-out test row) gets pooled into one list, and the
+     * final MAE is the average of that whole pooled list — not an
+     * average of 5 separate per-fold averages, and not a single one-time
+     * 80/20 split that permanently sacrifices a fixed slice of an
+     * already-small dataset to testing.
+     *
+     * @param  array<int, array<int, float>>  $samples
+     * @param  array<int, float>  $targets
+     */
+    private function crossValidatedMae(array $samples, array $targets): int
+    {
+        $count = count($samples);
+        $folds = min(5, $count);
+
+        $shuffled = range(0, $count - 1);
+        shuffle($shuffled);
+
+        $foldIndices = array_fill(0, $folds, []);
+        foreach ($shuffled as $position => $sampleIndex) {
+            $foldIndices[$position % $folds][] = $sampleIndex;
+        }
+
+        $absErrors = [];
+        for ($testFold = 0; $testFold < $folds; $testFold++) {
+            $testIndices = $foldIndices[$testFold];
+            $trainIndices = [];
+            foreach ($foldIndices as $f => $indices) {
+                if ($f !== $testFold) {
+                    $trainIndices = array_merge($trainIndices, $indices);
+                }
+            }
+
+            if (empty($testIndices) || empty($trainIndices)) {
+                continue; // degenerate fold (can happen at the small end) — skip rather than crash
+            }
+
+            $regression = new RidgeRegression(self::RIDGE_LAMBDA);
+            $regression->train(
+                array_map(fn ($i) => $samples[$i], $trainIndices),
+                array_map(fn ($i) => $targets[$i], $trainIndices)
+            );
+
+            $predictions = $regression->predict(array_map(fn ($i) => $samples[$i], $testIndices));
+            $predictions = is_array($predictions) ? $predictions : [$predictions];
+
+            foreach (array_values($testIndices) as $position => $sampleIndex) {
+                $absErrors[] = abs($predictions[$position] - $targets[$sampleIndex]);
+            }
+        }
+
+        return (int) round(array_sum($absErrors) / count($absErrors));
     }
 
     /**
@@ -197,13 +280,18 @@ class ApprovalTimeMlService
     }
 
     /**
-     * Every real (human, non-auto-approved) decision ever made by an
+     * Every real (human, non-auto-approved) APPROVAL ever made by an
      * approver with a department set, with the business-hours-aware
-     * elapsed time already computed per row — same raw material and same
-     * exclusions as PerformanceInsightsService::decisions(), reused here
-     * rather than duplicated. Department is required (not merely
-     * preferred, as in ApprovalForecastService's fallback) because this
-     * model is keyed on it.
+     * elapsed time already computed per row. Similar raw material to
+     * PerformanceInsightsService::decisions() (same joins/business-hours
+     * treatment), but deliberately narrower: that one intentionally still
+     * counts rejections too (it measures general decision responsiveness,
+     * not specifically how fast someone approves), while this model
+     * predicts approval time specifically — a reject isn't the same
+     * behavior, so it's excluded here rather than shared wholesale.
+     * Department is required (not merely preferred, as in
+     * ApprovalForecastService's fallback) because this model is keyed
+     * on it.
      */
     private function rows(): Collection
     {
@@ -216,6 +304,11 @@ class ApprovalTimeMlService
             ->join('document_repository', 'document_assignments.document_id', '=', 'document_repository.document_id')
             ->whereNotNull('document_assignments.acted_at')
             ->where('document_assignments.auto_approved', false)
+            // Approvals only, not rejections — same reasoning as
+            // ApprovalForecastService::estimateStageSeconds()'s identical
+            // filter: this model predicts approval time specifically, and
+            // a reject measures different behavior from a genuine approve.
+            ->where('document_assignments.individual_status', 'approved')
             ->whereNotNull('users.department')
             ->get([
                 'document_assignments.assignment_id',

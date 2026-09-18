@@ -15,7 +15,7 @@ function unrelatedDisplayDoc(User $originator, bool $pending = false): DocumentR
     ]);
 }
 
-test('display_category shows Unclassified for a document flagged unrelated, hiding the classifier guess', function () {
+test('display_category shows Other for a document flagged unrelated, hiding the classifier guess', function () {
     $originator = User::factory()->originator()->create();
     $unrelated = unrelatedDisplayDoc($originator);
 
@@ -26,12 +26,12 @@ test('display_category shows Unclassified for a document flagged unrelated, hidi
         'global_status' => 'classified_validated', 'desired_routing' => 'auto',
     ]);
 
-    expect($unrelated->display_category)->toBe('Unclassified')
+    expect($unrelated->display_category)->toBe('Other')
         ->and($unrelated->ml_category)->toBe('Job Order') // still stored underneath, just not displayed
         ->and($normal->display_category)->toBe('Job Order');
 });
 
-test('the submissions table shows Unclassified, not the raw guess, for an unrelated document', function () {
+test('the submissions table shows Other, not the raw guess, for an unrelated document', function () {
     $originator = User::factory()->originator()->create();
     unrelatedDisplayDoc($originator, pending: true);
 
@@ -41,39 +41,48 @@ test('the submissions table shows Unclassified, not the raw guess, for an unrela
     // Categories" filter dropdown legitimately lists every real category
     // by name regardless of this document, so that string appearing
     // somewhere on the page isn't itself meaningful; what matters is
-    // that THIS document's own row shows Unclassified.
-    $response->assertOk()->assertSee('Unclassified');
+    // that THIS document's own row shows Other.
+    $response->assertOk()->assertSee('Other');
 });
 
-test('the tracking page shows Unclassified and hides the confidence score for an unrelated document', function () {
+test('the tracking page shows Other and hides the confidence score for an unrelated document', function () {
     $originator = User::factory()->originator()->create();
     $document = unrelatedDisplayDoc($originator, pending: true);
 
     $response = $this->actingAs($originator)->get(route('originator.documents.show', $document));
 
     $response->assertOk()
-        ->assertSee('Unclassified')
+        ->assertSee('Other')
         ->assertDontSee('Job Order')
         ->assertDontSee('Confidence:');
 });
 
-test('the upload confirmation message says "marked as Unclassified" for an unrelated upload, not "classified as Job Order"', function () {
+test('the upload confirmation message says "marked as Other" for an unrelated upload, not "classified as Job Order"', function () {
     $originator = User::factory()->originator()->create();
 
     $mock = Mockery::mock(App\Services\ClassificationService::class);
-    $mock->shouldReceive('classify')->andReturn(['category' => 'Job Order', 'confidence' => 42, 'model_id' => null]);
+    $mock->shouldReceive('classify')->andReturn(['category' => 'Job Order', 'confidence' => 42, 'margin' => 5.0, 'model_id' => null]);
     app()->instance(App\Services\ClassificationService::class, $mock);
 
     $content = str_repeat('This is a perfectly ordinary internal memo about scheduling and staffing. ', 5);
 
+    // Pinned rather than now()->addHours(4) — that was flaky (real-clock
+    // dependent: whatever hour the suite actually happens to run at,
+    // +4 hours can easily land outside the 9 AM-5 PM business-hours
+    // window, which the due_date validator correctly rejects, making
+    // this test fail depending purely on what time it's run — confirmed
+    // by reproducing it directly: due_date validation failed exactly
+    // this way against the real host clock).
+    Carbon\Carbon::setTestNow(Carbon\Carbon::parse('2026-08-12 10:00:00')); // Wednesday, business hours
+
     $response = $this->actingAs($originator)->post(route('originator.documents.store'), [
         'files' => [\Illuminate\Http\UploadedFile::fake()->createWithContent('memo.txt', $content)],
-        'due_date' => now()->addHours(4)->format('Y-m-d\TH:i'), // within business hours, comfortably past the 1-hour minimum
+        'due_date' => now()->addHours(4)->format('Y-m-d\TH:i'), // comfortably within the same business day
         'routing_mode' => 'unrelated',
     ]);
 
     $response->assertRedirect(route('originator.dashboard'));
     $response->assertSessionHas('status', function ($status) {
-        return str_contains($status, 'marked as Unclassified') && !str_contains($status, "classified as 'Job Order'");
+        return str_contains($status, 'marked as Other') && !str_contains($status, "classified as 'Job Order'");
     });
 });

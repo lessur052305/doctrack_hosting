@@ -32,6 +32,55 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Automatic classification tiering (Feature: no manual admin review)
+    |--------------------------------------------------------------------------
+    |
+    | margin_threshold: the gap (percentage points) the winning category
+    | needs over the RUNNER-UP category before a document below
+    | review_confidence_threshold still gets trusted automatically. Plain
+    | confidence alone can't tell "moderate confidence because of
+    | unfamiliar vocabulary, but still clearly this category" (e.g.
+    | 45/30/25 — Job Order is still the clear leader) apart from
+    | "genuinely ambiguous, doesn't confidently match anything" (e.g.
+    | 35/33/32 — no real leader at all) — margin is what makes that
+    | distinction. See WorkflowService::classificationTier().
+    |
+    | auto_train_batch_size / auto_train_max_age_hours: the two triggers
+    | for the automatic retrain check (see AutoTrainClassifier) — whichever
+    | comes first. Batch size reacts fast during busy periods; the age
+    | ceiling guarantees a slow period never goes silent indefinitely.
+    |
+    | auto_train_check_interval_minutes: how often the scheduler looks for
+    | either trigger — cheap (a count query), so checking often costs
+    | nothing; only the retrain itself (fired when a trigger is actually
+    | met) is expensive.
+    |
+    | auto_train_max_auto_ratio: the cap on how much of the training pool
+    | can be auto-added samples, as a fraction of the ORIGINAL curated
+    | seed count — keeps the model anchored to human-verified samples
+    | even after a long stretch of automatic additions.
+    |
+    */
+
+    'margin_threshold' => 20,
+    'auto_train_batch_size' => 5,
+    'auto_train_max_age_hours' => 24,
+    'auto_train_check_interval_minutes' => 5,
+    'auto_train_max_auto_ratio' => 2.0,
+
+    // How many accuracy percentage points a retrain is allowed to drop
+    // below the current active model before it's rolled back. Not zero —
+    // cross-validated accuracy is a fresh measurement every run, usually
+    // on a bigger/more varied pool of real documents each time, and a
+    // small dip from that (e.g. 100% -> 99%) is normal, expected noise,
+    // not a sign the model got worse — an exact "must be equal or
+    // better" comparison would wrongly discard good progress forever
+    // once a model ever reaches 100%. See ClassificationService::
+    // autoTrainIfDue()'s rollback logic.
+    'auto_train_rollback_tolerance' => 5,
+
+    /*
+    |--------------------------------------------------------------------------
     | Content readability heuristic
     |--------------------------------------------------------------------------
     |

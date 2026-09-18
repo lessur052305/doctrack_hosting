@@ -13,10 +13,14 @@ use Illuminate\Database\Eloquent\Model;
  * individually owned the way an approver's own assignment is), not any
  * one person:
  *
- *   - 'missed_approval': a stage had no eligible approver, Admin was the
- *     fallback approver, and its own deadline passed with nobody having
- *     decided it — so it auto-approved immediately (see SlaService::
- *     escalate()). Always created already resolved (resolved_at =
+ *   - 'missed_approval': a stage had no eligible approver — auto-approved
+ *     immediately, no waiting period, no deadline to miss (see
+ *     SlaService::autoApproveNoEligibleApprover(), called from
+ *     WorkflowService::assignStage()/autoApproveDeactivatedSeat()). The
+ *     name is a holdover from an earlier design where this only fired
+ *     after Admin's own fallback deadline passed unattended; kept
+ *     unchanged so historical rows and existing report filters don't
+ *     need migrating. Always created already resolved (resolved_at =
  *     first_violated_at) since the auto-approval happens in the same
  *     instant the violation does — there's nothing further to wait on.
  *
@@ -29,19 +33,13 @@ use Illuminate\Database\Eloquent\Model;
  *     and resolves the moment Admin actually confirms/disputes it (see
  *     AdminController::reviewAutoApproval()).
  *
- *   - 'late_ml_review': a low-confidence classification (see
- *     DocumentRepository::ml_review_status) sat past its own 6-hour
- *     review window without Admin confirming/correcting its category.
- *     Same open-until-resolved shape as 'late_review' (see SlaService::
- *     trackLateMlReviews()), just triggered off a document's
- *     ml_review_due_at instead of an assignment's review_due_at — has
- *     no assignment_id or stage_name (both null), since this predates
- *     any stage/seat existing for the document at all. Resolves the
- *     moment Admin actually confirms or rejects it (see
- *     AdminController::reviewFlaggedDocument()). Deliberately never
- *     auto-decides the category once the window passes, only escalates
- *     visibility — the whole point of the review gate is that the
- *     guess shouldn't be trusted unsupervised.
+ *   - 'late_ml_review': RETIRED — a low-confidence classification used to
+ *     sit past its own 6-hour review window without Admin confirming/
+ *     correcting its category. Classification confidence no longer holds
+ *     a document for manual review at all (see WorkflowService::ingest()'s
+ *     $isAmbiguous docblock), so this type is never created anymore; kept
+ *     here only so any pre-existing historical row of this type still
+ *     resolves to something meaningful.
  */
 class AdminViolation extends Model
 {

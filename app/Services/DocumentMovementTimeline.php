@@ -27,7 +27,13 @@ class DocumentMovementTimeline
         'approve' => 'Approved', 'reject' => 'Rejected', 'approved' => 'Approved', 'rejected' => 'Rejected',
         'admin_override' => 'Admin Override', 'admin_review' => 'Admin Review', 'admin_dispute' => 'Admin Dispute',
         'auto_approve' => 'Auto-Approved', 'sla_escalation' => 'SLA Escalation',
-        'assignment_reassigned' => 'Reassigned', 'assignment_withdrawn' => 'Seat Withdrawn', 'needs_approver' => 'Needs Approver', 'due_date_adjusted' => 'Due Date Adjusted',
+        'assignment_reassigned' => 'Reassigned', 'assignment_withdrawn' => 'Seat Withdrawn',
+        // 'needs_approver' is RETIRED/historical-only — nothing creates it
+        // anymore (see WorkflowService::assignStage()'s docblock); a seat
+        // with no eligible approver now auto-approves immediately instead
+        // ('auto_approve_no_approver' below). Kept so an old row from
+        // before that change still renders correctly.
+        'needs_approver' => 'Needs Approver', 'auto_approve_no_approver' => 'Auto-Approved (No Eligible Approver)', 'due_date_adjusted' => 'Due Date Adjusted',
         'reject_stranded' => 'Rejection Overturned', 'revision_requested' => 'Revision Requested', 'revision_saved' => 'Revision Saved',
         'revision_withdrawn' => 'Revision Request Withdrawn',
         'sla_recalculated' => 'SLA Recalculated',
@@ -56,7 +62,7 @@ class DocumentMovementTimeline
         'resubmit' => 'lifecycle', 'stage_complete' => 'lifecycle',
         'approve' => 'approved', 'approved' => 'approved',
         'reject' => 'rejected', 'rejected' => 'rejected',
-        'admin_override' => 'escalation', 'auto_approve' => 'escalation', 'sla_escalation' => 'escalation', 'needs_approver' => 'escalation',
+        'admin_override' => 'escalation', 'auto_approve' => 'escalation', 'sla_escalation' => 'escalation', 'needs_approver' => 'escalation', 'auto_approve_no_approver' => 'escalation',
         'reject_stranded' => 'escalation', 'revision_requested' => 'escalation', 'revision_saved' => 'lifecycle',
         'revision_withdrawn' => 'escalation',
         'security_blocked' => 'rejected',

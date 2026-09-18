@@ -44,6 +44,45 @@ function mlDecidedAssignment(User $originator, User $approver, string $category,
     ]);
 }
 
+/**
+ * Both created_at AND acted_at fall outside business hours (9 PM), so
+ * businessSecondsRemaining() measures exactly 0 regardless of how many
+ * real wall-clock minutes passed — the exact "off-hours testing" pattern
+ * that produced a misleadingly-confident 0-second model in real use.
+ */
+function offHoursAssignment(User $originator, User $approver, string $category, int $dayIndex, int $elapsedMinutes): DocumentAssignment
+{
+    test()->travelTo(Carbon::parse(ML_TEST_DAYS[$dayIndex % count(ML_TEST_DAYS)])->setTime(21, 0));
+
+    $stage = WorkflowStage::firstOrCreate(
+        ['document_category' => $category, 'stage_name' => 'Only Stage'],
+        ['sequence_order' => 1]
+    );
+
+    $document = DocumentRepository::create([
+        'originator_id' => $originator->user_id,
+        'title' => 'ml-offhours.txt',
+        'file_path' => 'documents/ml-offhours.txt',
+        'mime_type' => 'text/plain',
+        'ml_category' => $category,
+        'is_validated' => true,
+        'due_date' => now()->addDays(3),
+        'global_status' => 'classified_validated',
+    ]);
+
+    return DocumentAssignment::create([
+        'document_id' => $document->document_id,
+        'user_id' => $approver->user_id,
+        'stage_id' => $stage->stage_id,
+        'due_date' => $document->due_date,
+        'priority_rank' => 2,
+        'individual_status' => 'approved',
+        'sla_expires_at' => now()->addHours(4),
+        'acted_at' => now()->addMinutes($elapsedMinutes),
+        'auto_approved' => false,
+    ]);
+}
+
 /** 24 decisions split between a fast and a slow approver, cycled across 5 different weekdays — comfortably over the 20-sample training floor with real feature variance. */
 function seedTrainableCombo(string $category = 'Job Order', string $department = 'Engineering'): array
 {
@@ -82,6 +121,68 @@ test('trainFor refuses to train below the minimum sample count', function () {
 
     expect(app(ApprovalTimeMlService::class)->trainFor('Job Order', 'Engineering'))->toBeNull();
     expect(MlTimeEstimateModel::count())->toBe(0);
+});
+
+test('refuses to train when every decision on record measured exactly 0 business seconds', function () {
+    $originator = User::factory()->originator()->create();
+    $approver = User::factory()->approver('Job Order')->create(['department' => 'Engineering']);
+
+    for ($i = 0; $i < ApprovalTimeMlService::MIN_TRAINING_SAMPLES; $i++) {
+        offHoursAssignment($originator, $approver, 'Job Order', $i, 10);
+    }
+
+    expect(app(ApprovalTimeMlService::class)->trainFor('Job Order', 'Engineering'))->toBeNull();
+    expect(MlTimeEstimateModel::count())->toBe(0);
+});
+
+test('still refuses to train when non-zero decisions exist but fall short of the training floor themselves', function () {
+    // 9 off-hours (zero) + 1 real — passes the raw row-count floor (10
+    // total) but only has 1 GENUINELY non-zero reading, nowhere near the
+    // training floor. A milder, more realistic version of "mostly
+    // contaminated" than the all-zero extreme the test above covers.
+    $originator = User::factory()->originator()->create();
+    $approver = User::factory()->approver('Job Order')->create(['department' => 'Engineering']);
+
+    for ($i = 0; $i < ApprovalTimeMlService::MIN_TRAINING_SAMPLES - 1; $i++) {
+        offHoursAssignment($originator, $approver, 'Job Order', $i, 10);
+    }
+    mlDecidedAssignment($originator, $approver, 'Job Order', 0, 10);
+
+    expect(app(ApprovalTimeMlService::class)->trainFor('Job Order', 'Engineering'))->toBeNull();
+});
+
+test('trains normally once the training floor is met by genuinely non-zero decisions, even with extra off-hours ones mixed in', function () {
+    $originator = User::factory()->originator()->create();
+    $approver = User::factory()->approver('Job Order')->create(['department' => 'Engineering']);
+
+    // A full training floor's worth of REAL decisions...
+    for ($i = 0; $i < ApprovalTimeMlService::MIN_TRAINING_SAMPLES; $i++) {
+        mlDecidedAssignment($originator, $approver, 'Job Order', $i, 10);
+    }
+    // ...plus a few contaminated off-hours ones mixed in — real Ridge
+    // Regression noise-tolerance handles a minority of these fine once
+    // there's already enough genuine signal to trust.
+    for ($i = 0; $i < 3; $i++) {
+        offHoursAssignment($originator, $approver, 'Job Order', $i, 10);
+    }
+
+    expect(app(ApprovalTimeMlService::class)->trainFor('Job Order', 'Engineering'))->not->toBeNull();
+});
+
+test('trains successfully right at the (now lower) minimum sample count, exercising 5-fold cross-validation at its smallest fold sizes', function () {
+    $originator = User::factory()->originator()->create();
+    $approver = User::factory()->approver('Job Order')->create(['department' => 'Engineering']);
+
+    for ($i = 0; $i < ApprovalTimeMlService::MIN_TRAINING_SAMPLES; $i++) {
+        mlDecidedAssignment($originator, $approver, 'Job Order', $i, 10);
+    }
+
+    $model = app(ApprovalTimeMlService::class)->trainFor('Job Order', 'Engineering');
+
+    expect($model)->not->toBeNull()
+        // The FINAL model trains on every row, not a held-back 80% slice
+        // — see trainFor()'s own docblock update.
+        ->and($model->training_sample_count)->toBe(ApprovalTimeMlService::MIN_TRAINING_SAMPLES);
 });
 
 test('trainFor fits and activates a model once there is enough real decision history', function () {

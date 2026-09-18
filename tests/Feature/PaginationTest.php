@@ -61,20 +61,16 @@ it('paginates Admin Users at 5 per page', function () {
     $this->actingAs($admin)->get(route('admin.users'))->assertSee('Next');
 });
 
-it('paginates the ML Review Queue and Readability Review Queue at 5 per page each, independently', function () {
+it('paginates the Readability Review Queue at 5 per page', function () {
     $admin = User::factory()->admin()->create();
     for ($i = 0; $i < 6; $i++) {
-        $word = str_repeat(chr(97 + $i), 4);
-        $text = implode(' ', array_fill(0, 30, $word));
-        paginationDoc($admin, ['global_status' => 'processing', 'ml_review_status' => 'pending', 'ml_confidence' => 30.0, 'ocr_text' => $text]);
         paginationDoc($admin, ['global_status' => 'processing', 'readability_review_status' => 'pending', 'readability_score' => 50]);
     }
 
     $response = $this->actingAs($admin)->get(route('admin.ml.training'));
-    $response->assertOk()->assertSee('Awaiting ML Review (6)')->assertSee('Content Readability Review (6)');
+    $response->assertOk()->assertSee('Content Readability Review (6)');
 
-    // Paging ML Review to page 2 must not also page Readability Review.
-    $page2 = $this->actingAs($admin)->get(route('admin.ml.training', ['ml_page' => 2]));
+    $page2 = $this->actingAs($admin)->get(route('admin.ml.training', ['readability_page' => 2]));
     $page2->assertOk();
 });
 
@@ -149,28 +145,10 @@ it('honors the pagination param on the SLA Queue refresh fragment (Feature: AJAX
     $response->assertDontSee('auto-0.txt')->assertDontSee('auto-1.txt')->assertSee('auto-2.txt');
 });
 
-it('paginates Unassigned Documents at 2 per page', function () {
-    $admin = User::factory()->admin()->create();
-    WorkflowStage::create(['document_category' => 'Job Order', 'stage_name' => 'Review', 'sequence_order' => 1]);
-
-    for ($i = 0; $i < 2; $i++) {
-        $doc = paginationDoc($admin, ['global_status' => 'processing']);
-        DocumentAssignment::create([
-            'document_id' => $doc->document_id, 'user_id' => null,
-            'stage_id' => WorkflowStage::first()->stage_id, 'due_date' => $doc->due_date,
-            'priority_rank' => 2, 'individual_status' => 'pending', 'needs_approver' => true, 'needs_approver_at' => now(),
-        ]);
-    }
-    $this->actingAs($admin)->get(route('admin.unassigned.index'))->assertDontSee('Next');
-
-    $doc = paginationDoc($admin, ['global_status' => 'processing']);
-    DocumentAssignment::create([
-        'document_id' => $doc->document_id, 'user_id' => null,
-        'stage_id' => WorkflowStage::first()->stage_id, 'due_date' => $doc->due_date,
-        'priority_rank' => 2, 'individual_status' => 'pending', 'needs_approver' => true, 'needs_approver_at' => now(),
-    ]);
-    $this->actingAs($admin)->get(route('admin.unassigned.index'))->assertSee('Next');
-});
+// The Unassigned Documents pagination test that used to live here is
+// gone along with the module itself — a stage with no eligible approver
+// auto-approves immediately now (see WorkflowService::assignStage()),
+// so there's no longer a "pending, waiting" list of these to paginate.
 
 it('paginates the Admin Audit Trail at 10 per page', function () {
     $admin = User::factory()->admin()->create();

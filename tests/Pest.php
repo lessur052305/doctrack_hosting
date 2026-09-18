@@ -1,5 +1,9 @@
 <?php
 
+// Real-browser tests (tests/browser/) run separately via Playwright, not
+// through Pest/PHPUnit at all — see package.json's "test:e2e" script and
+// the README's testing section. Nothing to register here for those.
+
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 

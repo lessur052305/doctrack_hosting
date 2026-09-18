@@ -587,7 +587,7 @@ class ApprovalController extends Controller
     //
     // Grouped by document, one row per document (not one row per
     // decision) — same "collapse to one row, expand for the rest"
-    // pattern the Audit Logs/SLA Queue/Unassigned Documents pages already
+    // pattern the Audit Logs/SLA Queue pages already
     // use, since one approver can hold more than one stage on the same
     // document and a flat per-decision list repeated the title for each.
     // ---------------------------------------------------------------
@@ -615,8 +615,8 @@ class ApprovalController extends Controller
         }
 
         // 'admin_override' isn't a real individual_status value — an admin
-        // deciding on this approver's behalf (SLA Queue / Unassigned
-        // Documents) still writes 'approved'/'rejected' to individual_
+        // deciding on this approver's behalf (SLA Queue / Workflow Config)
+        // still writes 'approved'/'rejected' to individual_
         // status, just with admin_override_by also set. Filtering on that
         // column instead is what actually answers "show me the ones an
         // admin decided for me," which individual_status alone can't.

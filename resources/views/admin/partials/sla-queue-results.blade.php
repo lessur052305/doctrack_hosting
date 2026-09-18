@@ -64,22 +64,23 @@
                 @foreach($container->assignments->groupBy('stage_id') as $stageAssignments)
                     @php
                         $stage = $stageAssignments->first()->stage;
-                        // Which queue this came from — needs_approver means
-                        // Admin was the fallback approver for that seat and
-                        // missed it too; otherwise a real approver missed
-                        // their own window. A stage's seats can mix both
-                        // (e.g. one real approver missed, the other seat had
-                        // nobody eligible), so show whichever apply once
-                        // next to the stage name instead of repeating per
-                        // seat below.
-                        $hasApproverMiss = $stageAssignments->contains(fn ($a) => ! $a->needs_approver);
-                        $hasAdminMiss = $stageAssignments->contains(fn ($a) => $a->needs_approver);
+                        // Which reason this came from — a null user_id
+                        // means nobody was ever eligible for this seat, so
+                        // it was auto-approved immediately (see
+                        // WorkflowService::assignStage()); otherwise a real
+                        // approver missed their own window. A stage's seats
+                        // can mix both (e.g. one real approver missed, the
+                        // other seat had nobody eligible), so show whichever
+                        // apply once next to the stage name instead of
+                        // repeating per seat below.
+                        $hasApproverMiss = $stageAssignments->contains(fn ($a) => $a->user_id !== null);
+                        $hasNoEligibleApprover = $stageAssignments->contains(fn ($a) => $a->user_id === null);
                     @endphp
                     <li class="px-4 py-2.5 bg-surface-50/50">
                         <div class="flex items-center gap-2 mb-1">
                             <p class="text-xs font-medium text-surface-800">{{ $stage->stage_name }}</p>
-                            @if($hasAdminMiss)
-                                <span class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-rejected-50 text-rejected-700 ring-1 ring-inset ring-rejected-500/20">Missed by Admin</span>
+                            @if($hasNoEligibleApprover)
+                                <span class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-rejected-50 text-rejected-700 ring-1 ring-inset ring-rejected-500/20">No Eligible Approver</span>
                             @endif
                             @if($hasApproverMiss)
                                 <span class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-processing-50 text-processing-700 ring-1 ring-inset ring-processing-500/20">Missed by Approver</span>
@@ -88,8 +89,18 @@
                         <div class="space-y-1.5">
                             @foreach($stageAssignments as $reviewAssignment)
                                 <p class="text-xs text-surface-500">
-                                    Was assigned to: {{ $reviewAssignment->approver->full_name ?? 'Unassigned' }} &middot;
-                                    SLA violated {{ optional($reviewAssignment->sla_expires_at)->format('M j, Y g:i A') }} (<span data-live-time="{{ optional($reviewAssignment->sla_expires_at)->timestamp }}">{{ optional($reviewAssignment->sla_expires_at)->diffForHumans() }}</span>) &middot;
+                                    @if($reviewAssignment->user_id === null)
+                                        {{-- No real deadline was ever actually
+                                             reached here — the seat resolved
+                                             at routing time, before its own
+                                             sla_expires_at (still stored, but
+                                             irrelevant now) could ever be
+                                             "violated". --}}
+                                        No eligible approver at routing time &middot;
+                                    @else
+                                        Was assigned to: {{ $reviewAssignment->approver->full_name ?? 'a deactivated account' }} &middot;
+                                        SLA violated {{ optional($reviewAssignment->sla_expires_at)->format('M j, Y g:i A') }} (<span data-live-time="{{ optional($reviewAssignment->sla_expires_at)->timestamp }}">{{ optional($reviewAssignment->sla_expires_at)->diffForHumans() }}</span>) &middot;
+                                    @endif
                                     Auto-approved {{ optional($reviewAssignment->acted_at)->format('M j, Y g:i A') }} (<span data-live-time="{{ optional($reviewAssignment->acted_at)->timestamp }}">{{ optional($reviewAssignment->acted_at)->diffForHumans() }}</span>)
                                 </p>
                             @endforeach

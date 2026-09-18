@@ -73,6 +73,62 @@ test('ranks approvers fastest-first by their average real decision time', functi
         ->and($ranked[1]['avg_seconds'])->toBe(55 * 60); // avg(50,55,60)
 });
 
+test('excludes an approver whose decisions all measured exactly 0 business seconds instead of showing a misleading "fastest" 0s', function () {
+    // Both created_at and acted_at fall in the same evening moment,
+    // outside business hours — real wall-clock minutes pass, but none of
+    // it is business time, the exact pattern that produced a confusing
+    // "0s" ranking in real use.
+    $this->travelTo(\Carbon\Carbon::parse('2026-08-12 21:00:00'));
+    $originator = User::factory()->originator()->create();
+    $offHours = User::factory()->approver('Job Order')->create(['full_name' => 'Off Hours Approver']);
+
+    foreach ([5, 10, 15] as $minutes) {
+        decidedAssignment($originator, $offHours, 'Job Order', $minutes);
+    }
+
+    $ranked = app(PerformanceInsightsService::class)->fastestApprovers();
+
+    expect($ranked)->toBeEmpty();
+});
+
+test('excludes an approver whose real (non-zero) decisions fall short of MIN_DECISIONS, even mixed with off-hours ones', function () {
+    // 2 off-hours (zero) + 1 real — 3 total passes the old raw-count
+    // floor, but only 1 is GENUINELY non-zero, short of MIN_DECISIONS
+    // (3). A milder, more realistic version of "mostly zero-contaminated"
+    // than the all-zero extreme the test above covers.
+    $originator = User::factory()->originator()->create();
+    $approver = User::factory()->approver('Job Order')->create(['full_name' => 'Mostly Off Hours']);
+
+    $this->travelTo(\Carbon\Carbon::parse('2026-08-12 21:00:00'));
+    decidedAssignment($originator, $approver, 'Job Order', 5);
+    decidedAssignment($originator, $approver, 'Job Order', 10);
+
+    $this->travelTo(\Carbon\Carbon::parse('2026-08-13 10:00:00'));
+    decidedAssignment($originator, $approver, 'Job Order', 15);
+
+    $ranked = app(PerformanceInsightsService::class)->fastestApprovers();
+
+    expect($ranked)->toBeEmpty();
+});
+
+test('ranks an approver once MIN_DECISIONS genuinely non-zero readings exist, even with extra off-hours ones mixed in', function () {
+    $originator = User::factory()->originator()->create();
+    $approver = User::factory()->approver('Job Order')->create(['full_name' => 'Mostly Real']);
+
+    $this->travelTo(\Carbon\Carbon::parse('2026-08-12 21:00:00'));
+    decidedAssignment($originator, $approver, 'Job Order', 5); // contaminated, off-hours
+
+    $this->travelTo(\Carbon\Carbon::parse('2026-08-13 10:00:00'));
+    foreach ([10, 15, 20] as $minutes) {
+        decidedAssignment($originator, $approver, 'Job Order', $minutes);
+    }
+
+    $ranked = app(PerformanceInsightsService::class)->fastestApprovers();
+
+    expect($ranked)->toHaveCount(1)
+        ->and($ranked[0]['label'])->toBe('Mostly Real');
+});
+
 test('excludes an approver with fewer than the minimum number of real decisions', function () {
     $originator = User::factory()->originator()->create();
     $sparse = User::factory()->approver('Job Order')->create(['full_name' => 'Barely Seen']);

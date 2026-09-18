@@ -175,9 +175,6 @@ Route::middleware('auth')->group(function () {
         Route::post('/ml-training/stage/{category}', [AdminController::class, 'stageTrainingSamples'])->middleware('throttle:mutations')->name('ml.training.stage');
         Route::delete('/ml-training/stage/{category}', [AdminController::class, 'clearTrainingStaging'])->name('ml.training.stage.clear');
         Route::delete('/ml-training/samples/{sample}', [AdminController::class, 'destroyTrainingSample'])->name('ml.training.sample.destroy');
-        Route::post('/ml-training/review/{document}', [AdminController::class, 'reviewFlaggedDocument'])->name('ml.review');
-        Route::post('/ml-training/review/{document}/recheck', [AdminController::class, 'recheckFlaggedDocument'])->name('ml.review.recheck');
-        Route::post('/ml-training/review/{document}/dismiss', [AdminController::class, 'dismissRecheckedDocument'])->name('ml.review.dismiss');
         Route::get('/ml-training/review/refresh', [AdminController::class, 'mlReviewQueueRefresh'])->name('ml.review.refresh');
         Route::get('/ml-training/review/poll', [AdminController::class, 'mlReviewQueuePoll'])->name('ml.review.poll');
         Route::post('/ml-training/readability-review/{document}', [AdminController::class, 'reviewReadability'])->name('ml.review.readability');
@@ -187,19 +184,11 @@ Route::middleware('auth')->group(function () {
         Route::get('/sla-queue/poll', [AdminController::class, 'slaQueuePoll'])->middleware('throttle:polling')->name('sla.queue.poll');
         Route::post('/sla-queue/document/{document}/review', [AdminController::class, 'reviewAutoApproval'])->name('sla.review');
 
-        // Unassigned Documents: seats left with genuinely no eligible
-        // approver — Admin is the fallback approver here up until the
-        // deadline passes, at which point it auto-approves the same way
-        // a missed approver assignment would (see SlaService::
-        // escalateNeedsApprover()).
-        Route::get('/unassigned-documents', [AdminController::class, 'unassignedDocuments'])->name('unassigned.index');
-        Route::get('/unassigned-documents/refresh', [AdminController::class, 'unassignedDocumentsRefresh'])->middleware('throttle:polling')->name('unassigned.refresh');
-        Route::get('/unassigned-documents/poll', [AdminController::class, 'unassignedDocumentsPoll'])->middleware('throttle:polling')->name('unassigned.poll');
-        Route::post('/unassigned-documents/{assignment}/decide', [AdminController::class, 'decideUnassigned'])->name('unassigned.decide');
-
         // Workflow Config's own "decide this pending assignment directly"
-        // action — see AdminController::overrideAssignment()'s docblock
-        // for how this differs from unassigned.decide just above.
+        // action — see AdminController::overrideAssignment()'s docblock.
+        // A seat with genuinely no eligible approver never reaches a
+        // "pending, waiting" state at all anymore — it auto-approves
+        // immediately at routing time (see WorkflowService::assignStage()).
         Route::post('/sla-override/{assignment}', [AdminController::class, 'overrideAssignment'])->middleware('throttle:mutations')->name('sla.override');
 
         Route::post('/system-settings/business-hours-toggle', [AdminController::class, 'updateBusinessHoursEnforcement'])->name('systemSettings.businessHoursToggle');

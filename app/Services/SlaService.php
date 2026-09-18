@@ -115,7 +115,6 @@ class SlaService
             'outage_detected' => $outageCheck['outage'] !== null,
             'deadlines_compensated' => $outageCheck['compensated'],
             'late_review_reminders_sent' => $this->trackLateReviews(),
-            'late_ml_review_reminders_sent' => $this->trackLateMlReviews(),
             'urgent_approver_reminders_sent' => $this->remindStillUrgentApprovers(),
         ];
     }
@@ -306,79 +305,24 @@ class SlaService
         return $count;
     }
 
-    /**
-     * The classification-review counterpart to trackLateReviews() above —
-     * same "log it, keep nudging, never auto-decide" shape, just for a
-     * low-confidence classification sitting unconfirmed (DocumentRepository::
-     * ml_review_due_at, set in WorkflowService::ingest()) instead of an
-     * auto-approved assignment sitting unreviewed. Deliberately does NOT
-     * auto-accept the classifier's guess once the window passes — that
-     * would defeat the entire reason this review step exists (the guess
-     * was already flagged as too uncertain to trust unsupervised); this
-     * only ever escalates visibility, never the decision itself.
-     *
-     * No assignment_id (a late_ml_review violation predates any stage/
-     * seat existing for this document at all — see admin_violations'
-     * migration docblock) and no stage_name (same reason).
-     */
-    private function trackLateMlReviews(): int
-    {
-        $count = 0;
-
-        DocumentRepository::query()
-            ->where('ml_review_status', 'pending')
-            ->whereNotNull('ml_review_due_at')
-            ->where('ml_review_due_at', '<=', now())
-            ->get()
-            ->each(function (DocumentRepository $document) use (&$count) {
-                $violation = AdminViolation::firstOrCreate(
-                    ['document_id' => $document->document_id, 'violation_type' => 'late_ml_review', 'resolved_at' => null],
-                    [
-                        'first_violated_at' => $document->ml_review_due_at,
-                        'notification_count' => 0,
-                    ]
-                );
-
-                if ($violation->notification_count >= self::LATE_REVIEW_NOTIFICATION_CAP) {
-                    return;
-                }
-                if ($violation->last_notified_at && abs(now()->diffInHours($violation->last_notified_at)) < self::LATE_REVIEW_NOTIFICATION_INTERVAL_HOURS) {
-                    return;
-                }
-
-                $violation->last_notified_at = now();
-                $violation->notification_count++;
-                $violation->save();
-
-                foreach (User::where('role', 'admin')->where('is_active', true)->get() as $admin) {
-                    NotificationRecord::send($admin->user_id, $document->document_id,
-                        "URGENT: '{$document->title}' has been awaiting classification review for " .
-                        "{$violation->hoursOverdue()}h past its window — please confirm or correct its category now.",
-                        'high');
-                }
-
-                $count++;
-            });
-
-        return $count;
-    }
+    // trackLateMlReviews() (the classification-review counterpart to
+    // trackLateReviews() above, keyed on the now-retired ml_review_status/
+    // ml_review_due_at) was removed along with the manual classification
+    // review queue itself — see WorkflowService::ingest()'s $isAmbiguous
+    // docblock. Classification is fully automatic now: nothing sets
+    // ml_review_status='pending' anymore, so there was never anything
+    // left for this sweep to find.
 
     /**
-     * Dispatches to whichever violation type applies — a real approver
-     * missing their own window (escalateApproverMiss()) and a stage with
-     * no eligible approver missing Admin's fallback window
-     * (escalateNeedsApprover()) both end the same way (auto-approved
-     * immediately, Admin reviews after), just logged against different
-     * responsible parties.
+     * A real approver missed their own SLA window — auto-approves
+     * immediately, Admin reviews after. A stage with no eligible approver
+     * no longer reaches this at all: it's auto-approved right at routing
+     * time instead (see WorkflowService::assignStage()/
+     * autoApproveNoEligibleApprover()), so there's nothing left here to
+     * dispatch between two cases.
      */
     public function escalate(DocumentAssignment $assignment): void
     {
-        if ($assignment->needs_approver) {
-            $this->escalateNeedsApprover($assignment);
-
-            return;
-        }
-
         $this->escalateApproverMiss($assignment);
     }
 
@@ -409,19 +353,21 @@ class SlaService
     }
 
     /**
-     * A stage had no eligible approver — Admin is the fallback approver
-     * for it (see the Unassigned Documents page, where Admin can decide
-     * it directly at any point before this deadline) — and that fallback
-     * window also passed with nobody having acted. Auto-approves
-     * immediately, same as an approver's own miss, and logs an
-     * AdminViolation against the Admin role rather than a real approver
-     * (there isn't one — that's exactly why Admin was the fallback).
-     * Always created already resolved: the auto-approval happens in the
-     * same instant as the violation, so there's nothing left to wait on
-     * for THIS violation (contrast trackLateReviews()'s late_review
-     * violations, which stay open until actually reviewed).
+     * A stage had no eligible approver — auto-approved immediately (see
+     * WorkflowService::assignStage()/autoApproveDeactivatedSeat(), which
+     * call this instead of parking the seat in a queue), same mechanism
+     * as an approver's own missed deadline. Still logs an AdminViolation
+     * against the Admin role rather than a real approver (there isn't
+     * one), so this still shows up in the SLA Violations report — just
+     * always created already resolved, since the auto-approval IS the
+     * resolution, happening in the very same instant rather than after a
+     * separate fallback window later passed (contrast
+     * trackLateReviews()'s late_review violations, which stay open until
+     * actually reviewed). Public: called directly from WorkflowService,
+     * not reached through escalate() anymore — a stage with no eligible
+     * approver never sits pending long enough to have a deadline to miss.
      */
-    private function escalateNeedsApprover(DocumentAssignment $assignment): void
+    public function autoApproveNoEligibleApprover(DocumentAssignment $assignment): void
     {
         $now = now();
 

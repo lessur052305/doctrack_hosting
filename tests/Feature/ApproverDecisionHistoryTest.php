@@ -323,11 +323,11 @@ it('attributes an admin-overridden decision to the admin, not the approver it wa
     $assignment = DocumentAssignment::create([
         'document_id' => $document->document_id, 'user_id' => $approver->user_id, 'stage_id' => $stage->stage_id,
         'due_date' => $document->due_date, 'priority_rank' => 2, 'individual_status' => 'pending',
-        'needs_approver' => true, 'needs_approver_at' => now(), 'sla_expires_at' => now()->subHour(),
+        'sla_expires_at' => now()->addHour(),
     ]);
 
     seedReviewTime($admin, $document);
-    $this->actingAs($admin)->post(route('admin.unassigned.decide', $assignment), ['decision' => 'approved']);
+    $this->actingAs($admin)->post(route('admin.sla.override', $assignment), ['decision' => 'approved']);
 
     // Still shows up in the ORIGINAL approver's own Decision History...
     $response = $this->actingAs($approver)->get(route('approver.history'));

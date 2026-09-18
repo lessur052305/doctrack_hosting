@@ -14,11 +14,11 @@ function approvedUnrelatedDoc(User $originator): DocumentRepository
     ]);
 }
 
-test('the Unclassified folder appears once an unrelated document exists, and is scoped to desired_routing not ml_category', function () {
+test('the Other folder appears once an unrelated document exists, and is scoped to desired_routing not ml_category', function () {
     $originator = User::factory()->originator()->create();
     $doc = approvedUnrelatedDoc($originator);
     // A real Job Order, for contrast — should NOT show up in the
-    // Unclassified folder even though it shares the same ml_category.
+    // Other folder even though it shares the same ml_category.
     DocumentRepository::create([
         'originator_id' => $originator->user_id,
         'title' => 'real-job-order.txt', 'file_path' => 'documents/real.txt', 'mime_type' => 'text/plain',
@@ -27,13 +27,13 @@ test('the Unclassified folder appears once an unrelated document exists, and is 
     ]);
 
     $folders = $this->actingAs($originator)->get(route('originator.archive'));
-    $folders->assertOk()->assertSee('Unclassified');
+    $folders->assertOk()->assertSee('Other');
 
-    $response = $this->actingAs($originator)->get(route('originator.archive', ['category' => 'Unclassified']));
+    $response = $this->actingAs($originator)->get(route('originator.archive', ['category' => 'Other']));
     $response->assertOk()->assertSee('weird-memo.txt')->assertDontSee('real-job-order.txt');
 });
 
-test('the Unclassified folder does not appear when there is nothing in it', function () {
+test('the Other folder does not appear when there is nothing in it', function () {
     $originator = User::factory()->originator()->create();
     DocumentRepository::create([
         'originator_id' => $originator->user_id,
@@ -44,5 +44,5 @@ test('the Unclassified folder does not appear when there is nothing in it', func
 
     $response = $this->actingAs($originator)->get(route('originator.archive'));
 
-    $response->assertOk()->assertDontSee('Unclassified');
+    $response->assertOk()->assertDontSee('Other');
 });

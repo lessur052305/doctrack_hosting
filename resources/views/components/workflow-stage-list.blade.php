@@ -115,34 +115,43 @@
     // Statistical estimate only — see ApprovalForecastService's docblock
     // for why this isn't a trained model yet. Omitted once the document
     // is fully resolved (nothing left to estimate) or when there's no
-    // historical data yet for this category.
-    $forecast = in_array($document->global_status, ['approved', 'auto_approved', 'rejected'])
-        ? null
-        : app(\App\Services\ApprovalForecastService::class)->estimateFor($document);
+    // historical data yet for this category — estimateFor() itself now
+    // falls back to each stage's own SLA window in that case, so this
+    // still comes back non-null far more often than it used to; it's
+    // null here only once every stage is resolved.
+    $isResolved = in_array($document->global_status, ['approved', 'auto_approved', 'rejected']);
+    $forecast = $isResolved ? null : app(\App\Services\ApprovalForecastService::class)->estimateFor($document);
 @endphp
-@if($forecast)
+{{-- Due is shown independently of whether an estimate could be computed
+     — it's a known fact about the document either way, not a derived
+     guess, so it shouldn't disappear just because $forecast is null. --}}
+@if(!$isResolved && ($forecast || $document->due_date))
     @php
-        // Business-hours-aware, not plain wall-clock addition — the same
-        // helper every sla_expires_at deadline already uses, so this can
-        // never claim an approval will land at 8 PM or on a Sunday.
-        $estApprovalBy = app(\App\Services\BusinessHoursService::class)
-            ->addBusinessMinutes(now(), (int) ceil($forecast->totalSeconds / 60));
+        if ($forecast) {
+            // Business-hours-aware, not plain wall-clock addition — the same
+            // helper every sla_expires_at deadline already uses, so this can
+            // never claim an approval will land at 8 PM or on a Sunday.
+            $estApprovalBy = app(\App\Services\BusinessHoursService::class)
+                ->addBusinessMinutes(now(), (int) ceil($forecast->totalSeconds / 60));
 
-        // Never claim a later estimate than the document's own hard
-        // deadline — a forecast "after your due date" isn't a useful
-        // estimate; the workflow's own SLA machinery (escalation,
-        // auto-approval) forces a resolution well before that regardless.
-        // This also guards against ApprovalForecastService's historical
-        // average getting skewed unrealistically high by a sparse/slow
-        // decision history (common early on, before real usage settles
-        // into a consistent pace) and ballooning the estimate out to
-        // absurd, due-date-defying lengths.
-        if ($document->due_date && $estApprovalBy->greaterThan($document->due_date)) {
-            $estApprovalBy = \Carbon\Carbon::parse($document->due_date);
+            // Never claim a later estimate than the document's own hard
+            // deadline — a forecast "after your due date" isn't a useful
+            // estimate; the workflow's own SLA machinery (escalation,
+            // auto-approval) forces a resolution well before that regardless.
+            // This also guards against ApprovalForecastService's historical
+            // average getting skewed unrealistically high by a sparse/slow
+            // decision history (common early on, before real usage settles
+            // into a consistent pace) and ballooning the estimate out to
+            // absurd, due-date-defying lengths.
+            if ($document->due_date && $estApprovalBy->greaterThan($document->due_date)) {
+                $estApprovalBy = \Carbon\Carbon::parse($document->due_date);
+            }
         }
     @endphp
     <p class="text-sm text-surface-500 mb-2 flex items-center justify-between gap-3">
-        <span><span class="font-medium text-surface-600">Est. Approval by:</span> {{ $estApprovalBy->format('M j, Y, g:i A') }}</span>
+        @if($forecast)
+            <span><span class="font-medium text-surface-600">Est. Approval by:</span> {{ $estApprovalBy->format('M j, Y, g:i A') }}</span>
+        @endif
         @if($document->due_date)
             <span><span class="font-medium text-surface-600">Due:</span> {{ $document->due_date->format('M j, Y, g:i A') }}</span>
         @endif
@@ -231,9 +240,7 @@
                     {{-- Single-seat stage: identical wording to before the
                          multi-approver redesign. --}}
                     <p class="text-sm text-surface-400">
-                        @if($state === 'pending' && $soleAssignment->needs_approver)
-                            Awaiting decision &middot; <span class="text-processing-700 font-medium">Admin</span> (no approver eligible for this category/stage)
-                        @elseif($state === 'pending' && $soleAssignment->reassigned_from)
+                        @if($state === 'pending' && $soleAssignment->reassigned_from)
                             Reassigned from {{ $soleAssignment->reassignedFrom->full_name ?? 'a deactivated account' }}
                         @elseif($state === 'pending')
                             @php $lastOpened = $soleAssignment->approver ? \App\Models\DocumentReviewSession::openedAtFor($document->document_id, $soleAssignment->user_id) : null; @endphp
@@ -280,12 +287,8 @@
                         <p class="text-sm text-surface-400">
                             Awaiting decision from
                             @foreach($pendingSeats as $seat)
-                                @if($seat->needs_approver)
-                                    <span class="text-processing-700 font-medium">Admin</span> (no approver eligible for this category/stage){{ !$loop->last ? ', ' : '' }}
-                                @else
-                                    @php $lastOpened = \App\Models\DocumentReviewSession::openedAtFor($document->document_id, $seat->user_id); @endphp
-                                    <span class="text-surface-500">{{ $seat->approver->full_name ?? 'a deactivated account' }}</span>@if($seat->approver) ({{ $lastOpened ? 'opened ' . $lastOpened->format('M j, Y, g:i A') : 'not yet reviewed' }})@endif{{ !$loop->last ? ', ' : '' }}
-                                @endif
+                                @php $lastOpened = \App\Models\DocumentReviewSession::openedAtFor($document->document_id, $seat->user_id); @endphp
+                                <span class="text-surface-500">{{ $seat->approver->full_name ?? 'a deactivated account' }}</span>@if($seat->approver) ({{ $lastOpened ? 'opened ' . $lastOpened->format('M j, Y, g:i A') : 'not yet reviewed' }})@endif{{ !$loop->last ? ', ' : '' }}
                             @endforeach
                         </p>
                     @elseif($state === 'rejected')

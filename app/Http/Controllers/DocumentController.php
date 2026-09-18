@@ -221,12 +221,12 @@ class DocumentController extends Controller
                 return "'{$document->title}' uploaded but failed validation — see details below." . $failureNote;
             }
             // "classified as X" reads fine for a real category, but odd
-            // for a document marked Unclassified ("classified as
-            // Unclassified") — see DocumentRepository::display_category's
-            // docblock for why the category label itself already differs
-            // by desired_routing; the verb needs to follow suit too.
+            // for a document marked Other ("classified as Other") — see
+            // DocumentRepository::display_category's docblock for why the
+            // category label itself already differs by desired_routing;
+            // the verb needs to follow suit too.
             $categoryPhrase = $document->desired_routing === 'unrelated'
-                ? 'marked as Unclassified'
+                ? 'marked as Other'
                 : "classified as '{$document->display_category}'";
 
             // Awaiting the originator's own approver pick (Feature:
@@ -425,6 +425,14 @@ class DocumentController extends Controller
                     $fail('The due date must fall within working hours (9 AM–5 PM, Mon–Sat, excluding holidays). Please pick a valid date and time.');
                 }
             }],
+            // Feature: originator-directed routing — same option store()
+            // offers on a fresh upload (see WorkflowService::ingest()'s
+            // $routingMode docblock). Matters most here for a document
+            // rejected as an ambiguous classification (see ingest()'s
+            // $isAmbiguous branch): the originator can pick a category
+            // themselves via 'custom', rather than leaving the classifier
+            // to guess again and land in the same ambiguous spot.
+            'routing_mode' => ['sometimes', 'in:auto,custom,unrelated'],
         ]);
 
         $effectiveDueDate = Carbon::parse($validated['due_date']);
@@ -437,6 +445,7 @@ class DocumentController extends Controller
                 null, // resubmissions stand alone, not re-attached to the original's (possibly already-resolved) batch
                 $document,
                 $document->requires_printing, // carries forward rather than asking again on every resubmission
+                $validated['routing_mode'] ?? 'auto',
             );
         } catch (Throwable $e) {
             Log::error('Unexpected failure ingesting a resubmitted document', [

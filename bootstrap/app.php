@@ -99,6 +99,17 @@ return Application::configure(basePath: dirname(__DIR__))
         // wasteful; trainFor() itself is cheap to skip when nothing's
         // actually changed enough to beat the currently active model.
         $schedule->command('ml:train-time-estimator')->hourly()->withoutOverlapping();
+
+        // Fully automatic classifier retraining, same "no admin button"
+        // design as above (see WorkflowService::ingest()'s $isAmbiguous
+        // docblock). Every 5 minutes since real company document volume
+        // moves fast (see config('ml.auto_train_check_interval_minutes'))
+        // — the check itself is cheap; ClassificationService::
+        // autoTrainIfDue() only actually retrains once a real batch-size
+        // or age trigger is met.
+        $schedule->command('ml:auto-train-classifier')
+            ->everyFiveMinutes()
+            ->withoutOverlapping();
     })
     ->withExceptions(function (Exceptions $exceptions) {
         // Sends every unhandled exception to Sentry (config/sentry.php,

@@ -88,10 +88,10 @@
                         </p>
                     @endif
                     <p class="text-sm text-surface-500 mt-1">
-                        Category: <span class="font-medium text-surface-700">{{ $document->display_category ?? 'Unclassified' }}</span>
+                        Category: <span class="font-medium text-surface-700">{{ $document->display_category ?? 'Other' }}</span>
                         {{-- Confidence is confidence IN the classifier's
-                             guess — showing it next to "Unclassified"
-                             would read as contradicting itself, since
+                             guess — showing it next to "Other" would read
+                             as contradicting itself, since
                              that guess isn't what's displayed anymore
                              (see DocumentRepository::display_category). --}}
                         @if($document->desired_routing !== 'unrelated')
@@ -140,6 +140,30 @@
                                     class="w-full rounded-lg border-surface-300 text-sm px-3 py-2">
                                 <p id="resubmit-due-date-warning" class="hidden mt-1 text-xs text-rejected-700">This falls outside working hours (9 AM–5 PM, Mon–Sat) or on a holiday — pick a different date/time.</p>
                             </div>
+                            {{-- Same routing_mode choice as a fresh upload (see
+                                 originator/dashboard.blade.php) — matters most
+                                 right here: a document rejected for an
+                                 ambiguous classification can be resubmitted
+                                 with the originator picking the category/
+                                 approver(s) themselves, instead of leaving the
+                                 classifier to guess again. --}}
+                            <details class="group">
+                                <summary class="text-xs font-medium text-primary-700 hover:underline cursor-pointer select-none">Need a different approval process?</summary>
+                                <div class="mt-2 space-y-2 pl-1">
+                                    <label class="flex items-start gap-2 cursor-pointer">
+                                        <input type="radio" name="routing_mode" value="auto" checked class="mt-0.5 border-surface-300 text-primary-600 focus:ring-primary-500">
+                                        <span class="text-xs text-surface-600"><span class="font-medium text-surface-800">Standard process</span> — classified and routed through the full approval pipeline automatically.</span>
+                                    </label>
+                                    <label class="flex items-start gap-2 cursor-pointer">
+                                        <input type="radio" name="routing_mode" value="custom" class="mt-0.5 border-surface-300 text-primary-600 focus:ring-primary-500">
+                                        <span class="text-xs text-surface-600"><span class="font-medium text-surface-800">Choose the approver(s) yourself</span> — still classified and validated normally; you'll pick who reviews it right after this uploads.</span>
+                                    </label>
+                                    <label class="flex items-start gap-2 cursor-pointer">
+                                        <input type="radio" name="routing_mode" value="unrelated" class="mt-0.5 border-surface-300 text-primary-600 focus:ring-primary-500">
+                                        <span class="text-xs text-surface-600"><span class="font-medium text-surface-800">This doesn't belong to any of our categories</span> — skips category-specific validation; you'll pick who reviews it right after this uploads.</span>
+                                    </label>
+                                </div>
+                            </details>
                             <button class="w-full bg-primary-700 hover:bg-primary-800 text-white text-sm font-medium py-2 rounded-lg">Resubmit</button>
                         </form>
                     </details>

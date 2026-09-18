@@ -14,8 +14,8 @@
         };
     };
     // Who ACTUALLY decided this seat — not always the approver it's
-    // assigned to. An admin can decide on their behalf (SLA Queue /
-    // Unassigned Documents, via admin_override_by) without ever
+    // assigned to. An admin can decide on their behalf (Workflow Config,
+    // via admin_override_by) without ever
     // reassigning the seat itself, and a rejection cascade can close a
     // sibling seat without its holder ever deciding anything (via
     // cascade_closed_by) — both need to be surfaced here, or this page

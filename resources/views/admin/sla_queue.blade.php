@@ -5,7 +5,7 @@
 @section('content')
 <div class="space-y-6">
     <div class="rounded-lg bg-processing-50 border border-processing-500/30 text-processing-700 px-4 py-3 text-xs">
-        Every missed deadline auto-approves right away — a real approver's own miss, or your own fallback miss on a stage with no eligible approver (see Unassigned Documents). The documents below still need your final review, just after the fact instead of before.
+        Every missed deadline auto-approves right away — a real approver's own miss, or a stage with no eligible approver at all (auto-approved immediately, no waiting). The documents below still need your final review, just after the fact instead of before.
     </div>
 
     <div id="sla-queue-results" class="space-y-6" data-poll-url="{{ route('admin.sla.queue.poll') }}" data-refresh-url="{{ route('admin.sla.queue.refresh') }}">

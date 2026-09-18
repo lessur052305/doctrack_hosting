@@ -53,10 +53,18 @@ test('a real approver missing their own SLA window is auto-approved immediately'
             ->where('message_body', 'like', '%will still give it a final check%')->exists())->toBeTrue();
 });
 
-test('a needs_approver seat missing its own (Admin-fallback) window is ALSO auto-approved immediately, logging an Admin violation instead of an approver one', function () {
-    $assignment = pendingAssignment(['needs_approver' => true, 'needs_approver_at' => now()->subHours(1)]);
+// A seat with no eligible approver no longer reaches escalate() at all —
+// it auto-approves immediately at routing time instead (see
+// WorkflowService::assignStage()/autoApproveDeactivatedSeat(), which
+// call SlaService::autoApproveNoEligibleApprover() directly). Coverage
+// for that path now lives in NoEligibleApproverAutoApprovalTest.php; the
+// two tests below cover autoApproveNoEligibleApprover() itself, called
+// the same way those call sites do.
 
-    app(SlaService::class)->escalate($assignment);
+test('a seat with no eligible approver is auto-approved immediately, logging an Admin violation instead of an approver one', function () {
+    $assignment = pendingAssignment(['user_id' => null]);
+
+    app(SlaService::class)->autoApproveNoEligibleApprover($assignment);
 
     $fresh = $assignment->fresh();
     expect($fresh->individual_status)->toBe('approved')
@@ -68,9 +76,9 @@ test('a needs_approver seat missing its own (Admin-fallback) window is ALSO auto
 });
 
 test('the missed_approval Admin violation is logged already resolved — nothing left to wait on', function () {
-    $assignment = pendingAssignment(['needs_approver' => true, 'needs_approver_at' => now()->subHours(1)]);
+    $assignment = pendingAssignment(['user_id' => null]);
 
-    app(SlaService::class)->escalate($assignment);
+    app(SlaService::class)->autoApproveNoEligibleApprover($assignment);
 
     $violation = AdminViolation::where('assignment_id', $assignment->assignment_id)->where('violation_type', 'missed_approval')->first();
 

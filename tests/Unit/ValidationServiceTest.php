@@ -60,6 +60,33 @@ test('a document missing a required section fails validation with a specific err
         ->and($result['errors'])->toContain('Missing required section/field: "Job Order No"');
 });
 
+test('accepts a reasonable wording variant of a required field instead of demanding the exact phrase', function () {
+    // "Job Order Number" instead of "Job Order No" — the exact real-world
+    // mismatch that originally slipped through live testing and prompted
+    // this fix (see ValidationService::TEMPLATES's own comment).
+    $text = "JOB ORDER\nJob Order Number: JO-2026-0001\nDate Requested: July 16, 2026\n"
+        . "Requested By: Test Requester\nDescription of Work:\n"
+        . "Perform scheduled servicing on the company delivery truck including an oil change, "
+        . "brake inspection, tire rotation, and a full fluid level check before the next route.";
+
+    $result = app(ValidationService::class)->validate('Job Order', $text);
+
+    expect($result['is_valid'])->toBeTrue()
+        ->and($result['errors'])->toBe([]);
+});
+
+test('still fails when NONE of a field\'s accepted variants are present', function () {
+    $text = "JOB ORDER\nReference Code: JO-2026-0001\nDate Requested: July 16, 2026\n"
+        . "Requested By: Test Requester\nDescription of Work:\n"
+        . "Perform scheduled servicing on the company delivery truck including an oil change, "
+        . "brake inspection, tire rotation, and a full fluid level check before the next route.";
+
+    $result = app(ValidationService::class)->validate('Job Order', $text);
+
+    expect($result['is_valid'])->toBeFalse()
+        ->and($result['errors'])->toContain('Missing required section/field: "Job Order No"');
+});
+
 test('a document under the minimum word count fails validation', function () {
     $text = "JOB ORDER\nJob Order No: JO-1\nDate Requested: July 16, 2026\n"
         . "Requested By: X\nDescription of Work: too short.";

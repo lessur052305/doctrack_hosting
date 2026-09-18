@@ -99,6 +99,22 @@ complete but silently degrades (see the note after each).
   php artisan test        # should show all tests passing
   ```
 
+  **Optional real-browser test** (`tests/browser/`, via [Playwright](https://playwright.dev))
+  — separate from the command above and from the rest of the PHP suite entirely (it's a
+  Node-based test, run through `npm`, not `phpunit.xml`), since it needs a real Chromium
+  and an actual running server, not the fast in-process test client the rest of the suite
+  uses. Covers the live browser behavior a request/response test can't reach — right now,
+  that a closed "Review & Comment"/"View original file" popup actually stays closed
+  (Approve/Reject stay locked) rather than the minimum-review-time countdown continuing to
+  tick in the background. Playwright downloads and manages its own pinned Chromium build
+  (`npx playwright install chromium`), independent of whatever Chrome the host has —
+  unlike Laravel Dusk's ChromeDriver, it never needs re-matching to a system browser
+  version. Requires the app already running and reachable at `APP_URL`, then:
+  ```bash
+  npx playwright install chromium   # one-time, downloads Playwright's own pinned browser
+  npm run test:e2e
+  ```
+
 - [ ] **8. Persistent queue worker** — without this, SLA escalation still works but is
   up to 5 minutes late instead of instant (§2.1)
   ```bash

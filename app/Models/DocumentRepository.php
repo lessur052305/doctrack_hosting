@@ -41,6 +41,7 @@ class DocumentRepository extends Model
         'ml_recheck_dismissed_at', 'confirmed_at_model_id', 'requires_printing',
         'readability_score', 'readability_review_status', 'is_security_blocked',
         'desired_routing', 'pending_custom_routing_at', 'custom_routed', 'ml_review_due_at',
+        'ml_margin', 'used_for_training_at',
     ];
 
     protected $casts = [
@@ -59,6 +60,8 @@ class DocumentRepository extends Model
         'pending_custom_routing_at' => 'datetime',
         'custom_routed' => 'boolean',
         'ml_review_due_at' => 'datetime',
+        'ml_margin' => 'float',
+        'used_for_training_at' => 'datetime',
     ];
 
     // Every state a document can be in — mirrors Section 5 state machine.
@@ -69,8 +72,12 @@ class DocumentRepository extends Model
      * override the underlying global_status without replacing it (an
      * admin-held document is still, technically, 'classified_validated';
      * this just tells the UI not to say "Awaiting Approval" for one that
-     * was never actually routed to an approver — see WorkflowService::
-     * process() and AdminController::reviewFlaggedDocument()).
+     * was never actually routed to an approver). The 'pending_review'
+     * branch is dormant for any document created from here on —
+     * classification confidence no longer holds a document for manual
+     * review (see WorkflowService::ingest()'s $isAmbiguous docblock) —
+     * kept only so a pre-existing historical row in that state still
+     * displays correctly.
      *
      * Same reasoning for auto_approved: global_status stays 'auto_approved'
      * forever (it's a permanent record of HOW the document got approved),
@@ -114,17 +121,16 @@ class DocumentRepository extends Model
     /**
      * What every category-facing label (upload confirmation, the
      * Submissions table, the tracking page header) should show — plain
-     * "Unclassified" for a document the originator flagged as not
-     * belonging to any category (desired_routing 'unrelated'), never the
-     * classifier's raw guess. ml_category still HOLDS that guess
-     * underneath (kept for reference — see ValidationService::
-     * validateGeneric()'s docblock), but showing it back to an
-     * originator who already made that call themselves added confusion,
-     * not information, without this.
+     * "Other" for a document the originator flagged as not belonging to
+     * any category (desired_routing 'unrelated'), never the classifier's
+     * raw guess. ml_category still HOLDS that guess underneath (kept for
+     * reference — see ValidationService::validateGeneric()'s docblock),
+     * but showing it back to an originator who already made that call
+     * themselves added confusion, not information, without this.
      */
     public function getDisplayCategoryAttribute(): ?string
     {
-        return $this->desired_routing === 'unrelated' ? 'Unclassified' : $this->ml_category;
+        return $this->desired_routing === 'unrelated' ? 'Other' : $this->ml_category;
     }
 
     /**
