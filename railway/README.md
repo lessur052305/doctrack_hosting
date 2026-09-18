@@ -1,13 +1,15 @@
 # Deploying to Railway
 
-This app needs **four Railway services** pointed at the same GitHub repo (`doctrack_hosting`), each with a different **Custom Start Command**, plus a MySQL database. Railway's own build detection (Railpack) already handles the web service correctly — the other three just override the start command on an otherwise-identical build.
+This app needs **four Railway services** pointed at the same GitHub repo (`doctrack_hosting`), each with a different **Custom Start Command**, plus a MySQL database. All four override the start command on an otherwise-identical build.
 
 | Service | Custom Start Command | Why it's separate |
 |---|---|---|
-| **web** (existing) | *(leave as Railway auto-detected — do not override)* | Serves the actual app over HTTP |
+| **web** (existing) | `sh railway/start-web.sh` | Serves the actual app over HTTP — see [`start-web.sh`](start-web.sh) for why this overrides Railway's auto-detected default |
 | **queue-worker** | `sh railway/start-queue-worker.sh` | Sends queued mail and processes delayed SLA-escalation jobs — see [`start-queue-worker.sh`](start-queue-worker.sh) |
 | **reverb** | `sh railway/start-reverb.sh` | WebSocket server — every dashboard's real-time push depends on this running | 
 | **scheduler** | `sh railway/start-scheduler.sh` | Runs the 5-minute SLA sweeps and the daily backup | 
+
+**Why web needs an override now (it didn't used to):** Railway's auto-detected default for a Laravel app runs `php artisan migrate --force` *before* refreshing its config cache — so if any env var was wrong or added after the app's last build, migrate keeps failing against the stale cached config, and there's no way to self-heal short of a brand new build. `start-web.sh` is that same default script with the cache-clear moved before the migrate step. See the comment at the top of the file for the full story — this exact ordering bug is what caused the "Connection refused" crash loop and the stuck post-login/verification redirect during initial setup.
 
 To create each: **Railway dashboard → New → GitHub Repo → pick `doctrack_hosting` again** (same repo, new service) → **Settings → Deploy → Custom Start Command** → paste the command from the table above. Each one rebuilds from the same source but runs a different process at boot.
 
@@ -126,13 +128,7 @@ php artisan key:generate --show
 
 ## Running migrations
 
-Railway doesn't auto-run migrations on deploy. After the **web** service deploys successfully, open its **Shell** tab (or use `railway run` from the Railway CLI if you have it installed locally) and run:
-
-```bash
-php artisan migrate --force
-```
-
-`--force` is required because `APP_ENV=production` otherwise refuses to run migrations without it. Re-run this any time you deploy new migrations.
+`start-web.sh` runs `php artisan migrate --force` automatically on every boot of the **web** service — new migrations in a deploy apply themselves, nothing to run by hand. `--force` is baked in because `APP_ENV=production` otherwise refuses to run migrations without it. Set `RAILPACK_SKIP_MIGRATIONS=true` on the web service if you ever need to boot without migrating (e.g. to fix broken migration state via the shell first).
 
 ## Seeding accounts and training the classifier
 
@@ -168,9 +164,8 @@ type but not others, check this first.
 1. Add a MySQL database to the Railway project (Railway → New → Database → MySQL).
 2. Create the `web` service (already done) — confirm it builds successfully now that `composer.json`/`composer.lock` are fixed, and check its build log for `ext-pcntl`/`ext-zip`/`ext-fileinfo` actually being installed (see above).
 3. Generate `APP_KEY` locally, set all the env vars above on `web`, including real SMTP credentials for `MAIL_*`.
-4. Give `web` a public domain, set `APP_URL` to it.
-5. Run `php artisan migrate --force` via the web service's shell.
-6. Run `php artisan db:seed --force` via the same shell, then log in as `admin` and train the ML classifier (see "Seeding accounts and training the classifier" above) — skip either step and the app looks deployed but silently can't classify/route any document.
-7. Create the `reverb` service, give **it** a public domain, set `REVERB_HOST` to that domain everywhere, redeploy `web` so the build picks up the correct `VITE_REVERB_*` values.
-8. Create `queue-worker` and `scheduler` services with the env vars shared from the same group.
-9. Log in as the seeded admin (see main `README.md` → "Demo accounts") and confirm a document upload shows up live without a manual refresh — that confirms Reverb is actually wired correctly end to end. Then upload one file of each type (.pdf, .docx, .txt, .png) as an originator and confirm every one of them gets classified rather than just the image — that confirms the extension fix above actually took effect.
+4. Give `web` a public domain, set `APP_URL` to it, set `web`'s Custom Start Command to `sh railway/start-web.sh` (migrations then run automatically on every boot — nothing to run by hand).
+5. Run `php artisan db:seed --force` via the web service's shell, then log in as `admin` and train the ML classifier (see "Seeding accounts and training the classifier" above) — skip either step and the app looks deployed but silently can't classify/route any document.
+6. Create the `reverb` service, give **it** a public domain, set `REVERB_HOST` to that domain everywhere, redeploy `web` so the build picks up the correct `VITE_REVERB_*` values.
+7. Create `queue-worker` and `scheduler` services with the env vars shared from the same group.
+8. Log in as the seeded admin (see main `README.md` → "Demo accounts") and confirm a document upload shows up live without a manual refresh — that confirms Reverb is actually wired correctly end to end. Then upload one file of each type (.pdf, .docx, .txt, .png) as an originator and confirm every one of them gets classified rather than just the image — that confirms the extension fix above actually took effect.
