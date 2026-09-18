@@ -1110,8 +1110,6 @@ class AdminController extends Controller
     public function mlTraining(Request $request)
     {
         $categories = ValidationService::knownCategories();
-        $activeModel = MlModelRepository::active();
-        $history = MlModelRepository::orderByDesc('last_trained')->limit(10)->get();
 
         // Shared across every admin, not scoped to the current session —
         // deliberately so: this app only ever has one active classifier at
@@ -1124,16 +1122,51 @@ class AdminController extends Controller
         $minPerCategory = self::TRAINING_MIN_PER_CATEGORY;
         $batchUploadLimit = self::TRAINING_BATCH_UPLOAD_LIMIT;
 
-        // Read-only — no "train now" control for this one, see
-        // ApprovalTimeMlService's docblock for why it trains itself
-        // automatically on a schedule instead.
-        $timeEstimateGroups = $this->timeMl->statusForAllGroups();
-        $timeEstimateTrainingFloor = \App\Services\ApprovalTimeMlService::MIN_TRAINING_SAMPLES;
-
         return view('admin.ml_training', array_merge(compact(
-            'categories', 'activeModel', 'history', 'stagedSamples', 'minPerCategory', 'batchUploadLimit',
-            'timeEstimateGroups', 'timeEstimateTrainingFloor'
-        ), $this->mlReviewQueueData($request)));
+            'categories', 'stagedSamples', 'minPerCategory', 'batchUploadLimit'
+        ), $this->mlMetricsData(), $this->mlReviewQueueData($request)));
+    }
+
+    /**
+     * Fragment refresh for the Active Model / Training History / Estimated
+     * Approval Time panels — see App\Events\MlModelTrained's docblock for
+     * what triggers it. Same live-channel/poll pattern as
+     * mlReviewQueueRefresh()/mlReviewQueuePoll() below.
+     */
+    public function mlMetricsRefresh()
+    {
+        return view('admin.partials.ml_metrics_panels', $this->mlMetricsData());
+    }
+
+    /**
+     * Lightweight JSON signal for the poll fallback — see overviewPoll()'s
+     * docblock for the same reasoning. Active model ids + latest
+     * last_trained/trained_at timestamps are enough to detect "something
+     * changed" without re-fetching the whole fragment just to compare it.
+     */
+    public function mlMetricsPoll()
+    {
+        return response()->json([
+            'active_model_id' => MlModelRepository::active()?->model_id,
+            'latest_trained' => MlModelRepository::max('last_trained'),
+            'latest_time_estimate_trained' => \App\Models\MlTimeEstimateModel::max('trained_at'),
+        ]);
+    }
+
+    /**
+     * @return array{activeModel: ?MlModelRepository, history: \Illuminate\Support\Collection, timeEstimateGroups: \Illuminate\Support\Collection, timeEstimateTrainingFloor: int}
+     */
+    private function mlMetricsData(): array
+    {
+        return [
+            'activeModel' => MlModelRepository::active(),
+            'history' => MlModelRepository::orderByDesc('last_trained')->limit(10)->get(),
+            // Read-only — no "train now" control for this one, see
+            // ApprovalTimeMlService's docblock for why it trains itself
+            // automatically on a schedule instead.
+            'timeEstimateGroups' => $this->timeMl->statusForAllGroups(),
+            'timeEstimateTrainingFloor' => \App\Services\ApprovalTimeMlService::MIN_TRAINING_SAMPLES,
+        ];
     }
 
     /**

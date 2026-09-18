@@ -10,7 +10,7 @@ class MlModelRepository extends Model
     protected $primaryKey = 'model_id';
 
     protected $fillable = [
-        'model_name', 'version', 'accuracy_score', 'model_file_path',
+        'model_name', 'version', 'accuracy_score', 'cv_folds', 'model_file_path',
         'training_sample_count', 'is_active', 'last_trained',
     ];
 

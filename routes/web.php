@@ -177,6 +177,8 @@ Route::middleware('auth')->group(function () {
         Route::delete('/ml-training/samples/{sample}', [AdminController::class, 'destroyTrainingSample'])->name('ml.training.sample.destroy');
         Route::get('/ml-training/review/refresh', [AdminController::class, 'mlReviewQueueRefresh'])->name('ml.review.refresh');
         Route::get('/ml-training/review/poll', [AdminController::class, 'mlReviewQueuePoll'])->name('ml.review.poll');
+        Route::get('/ml-training/metrics/refresh', [AdminController::class, 'mlMetricsRefresh'])->name('ml.metrics.refresh');
+        Route::get('/ml-training/metrics/poll', [AdminController::class, 'mlMetricsPoll'])->name('ml.metrics.poll');
         Route::post('/ml-training/readability-review/{document}', [AdminController::class, 'reviewReadability'])->name('ml.review.readability');
 
         Route::get('/sla-queue', [AdminController::class, 'slaQueue'])->name('sla.queue');

@@ -286,7 +286,7 @@ test('the ML Training page shows the Estimated Approval Time status with no trai
     $response = $this->actingAs($admin)->get(route('admin.ml.training'));
 
     $response->assertOk()
-        ->assertSee('Estimated Approval Time Models')
+        ->assertSee('Estimated Approval Time')
         ->assertSee('Job Order')
         ->assertSee('1/'.ApprovalTimeMlService::MIN_TRAINING_SAMPLES);
 });

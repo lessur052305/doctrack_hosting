@@ -48,13 +48,13 @@ class DatabaseSeeder extends Seeder
         // $vinzLessurApprover below despite the superficially similar name
         // pattern (see that account's own docblock).
         $allenRose = User::updateOrCreate(
-            ['username' => 'arose'],
+            ['username' => 'lvinz'],
             [
-                'full_name' => 'Allen Rose',
-                'email' => 'anastacioalena23@gmail.com',
+                'full_name' => 'Lessur Vinz',
+                'email' => 'lessurvinz@gmail.com',
                 'role' => 'originator',
                 'assigned_category' => null,
-                'password_hash' => Hash::make('arose123'),
+                'password_hash' => Hash::make('lvinz123'),
                 'created_by' => $admin->user_id,
                 'is_active' => true,
             ]
@@ -68,41 +68,22 @@ class DatabaseSeeder extends Seeder
         // WorkflowStageDepartment / the department-eligibility check in
         // WorkflowService::eligibleApproversForStage().
         $lessurVinz = User::updateOrCreate(
-            ['username' => 'lvinz'],
+            ['username' => 'gfunelas'],
             [
-                'full_name' => 'Lessur Vinz',
-                'email' => 'lessurvinz@gmail.com',
+                'full_name' => 'Gian Funelas',
+                'email' => 'gianfunelas175@gmail.com',
                 'role' => 'approver',
                 'assigned_category' => 'Job Order',
                 'department' => 'Engineering',
                 'level' => 'staff',
-                'password_hash' => Hash::make('lvinz123'),
+                'password_hash' => Hash::make('gfunelas123'),
                 'created_by' => $admin->user_id,
                 'is_active' => true,
             ]
         );
 
-        // Engineering department HEAD — sits on Job Order's Final Approval
-        // alongside the Finance head below (Final Approval requires both,
-        // unanimous, same as every other multi-seat stage). Was previously
-        // an unrestricted staff-level account and inactive; reactivated and
-        // promoted, not created fresh, at the user's specific request.
-        $christian = User::updateOrCreate(
-            ['username' => 'cperalta'],
-            [
-                'full_name' => 'Christian',
-                'email' => 'peraltachristian.m@gmail.com',
-                'role' => 'approver',
-                'assigned_category' => 'Job Order',
-                'department' => 'Engineering',
-                'level' => 'head',
-                'password_hash' => Hash::make('cperalta123'),
-                'created_by' => $admin->user_id,
-                'is_active' => true,
-            ]
-        );
 
-        // Job Order — Finance department, staff level: Budget Check only.
+         // Job Order — Finance department, staff level: Budget Check only.
         // Live username renamed from "Vinz Lessur" (with a space — it had
         // been created directly through the admin UI, not this seeder, so
         // it never followed this file's short-username convention) to
@@ -126,18 +107,42 @@ class DatabaseSeeder extends Seeder
             ]
         );
 
+
+
+        // Engineering department HEAD — sits on Job Order's Final Approval
+        // alongside the Finance head below (Final Approval requires both,
+        // unanimous, same as every other multi-seat stage). Was previously
+        // an unrestricted staff-level account and inactive; reactivated and
+        // promoted, not created fresh, at the user's specific request.
+        $christian = User::updateOrCreate(
+            ['username' => 'cperalta'],
+            [
+                'full_name' => 'Christian',
+                'email' => 'peraltachristian.m@gmail.com',
+                'role' => 'approver',
+                'assigned_category' => 'Job Order',
+                'department' => 'Engineering',
+                'level' => 'head',
+                'password_hash' => Hash::make('cperalta123'),
+                'created_by' => $admin->user_id,
+                'is_active' => true,
+            ]
+        );
+
+       
+
         // Finance department HEAD — the other required seat on Job Order's
         // Final Approval, alongside $christian above.
         $financeHead = User::updateOrCreate(
-            ['username' => 'gfunelas'],
+            ['username' => 'cperalta091022'],
             [
-                'full_name' => 'Gian Funelas',
-                'email' => 'gianfunelas175@gmail.com',
+                'full_name' => 'Christian Peralta',
+                'email' => 'christianperalta091022@gmail.com',
                 'role' => 'approver',
                 'assigned_category' => 'Job Order',
                 'department' => 'Finance',
                 'level' => 'head',
-                'password_hash' => Hash::make('gfunelas123'),
+                'password_hash' => Hash::make('cperalta123'),
                 'created_by' => $admin->user_id,
                 'is_active' => true,
             ]

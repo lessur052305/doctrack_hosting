@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Events\MlModelTrained;
 use App\Models\DocumentAssignment;
 use App\Models\MlTimeEstimateModel;
 use App\Support\RidgeRegression;
@@ -169,7 +170,7 @@ class ApprovalTimeMlService
         MlTimeEstimateModel::where('ml_category', $category)->where('department', $department)
             ->update(['is_active' => false]);
 
-        return MlTimeEstimateModel::create([
+        $model = MlTimeEstimateModel::create([
             'ml_category' => $category,
             'department' => $department,
             'version' => 'v'.now()->format('Ymd.His'),
@@ -180,6 +181,10 @@ class ApprovalTimeMlService
             'is_active' => true,
             'trained_at' => now(),
         ]);
+
+        MlModelTrained::dispatch();
+
+        return $model;
     }
 
     /**

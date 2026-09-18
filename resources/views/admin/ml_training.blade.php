@@ -142,85 +142,10 @@
     </div>
     @endunless
 
-    <div class="{{ $activeModel ? 'lg:col-span-3' : '' }} space-y-6">
-        @if($activeModel)
-            <div class="bg-white rounded-xl shadow-card border border-surface-200 p-6">
-                <p class="text-sm text-surface-600">
-                    Classification is fully automatic now — new documents are classified and routed on their own, and the model retrains itself as confidently-classified documents come in. Nothing to do here day to day; this page is for visibility only.
-                </p>
-            </div>
-        @endif
-        <div class="bg-white rounded-xl shadow-card border border-surface-200 p-6">
-            <h2 class="text-sm font-semibold text-surface-900 mb-4">Current Active Model</h2>
-            @if($activeModel)
-                <dl class="space-y-2 text-sm">
-                    <div class="flex justify-between"><dt class="text-surface-500">Version</dt><dd class="font-medium">{{ $activeModel->version }}</dd></div>
-                    <div class="flex justify-between"><dt class="text-surface-500">Samples</dt><dd class="font-medium">{{ $activeModel->training_sample_count }}</dd></div>
-                    <div class="flex justify-between"><dt class="text-surface-500">Accuracy</dt><dd class="font-medium text-approved-700">{{ $activeModel->accuracy_score }}%</dd></div>
-                </dl>
-                <details class="mt-3 text-xs">
-                    <summary class="cursor-pointer text-primary-700 hover:underline font-medium">What does this mean?</summary>
-                    <p class="mt-2 text-surface-500 leading-relaxed">
-                        How often the model correctly identifies a document's category when tested on samples it never saw during training — not just guessing on familiar material. It's checked by rotating which documents get held back as a quiz, five rounds in a row, so every sample gets quizzed exactly once before the final score is settled.
-                    </p>
-                </details>
-            @else
-                <p class="text-sm text-surface-400">No trained model yet — upload samples to get started.</p>
-            @endif
-        </div>
-
-        <div class="bg-white rounded-xl shadow-card border border-surface-200 overflow-hidden">
-            <div class="px-5 py-3 border-b border-surface-200"><h3 class="text-xs font-semibold text-surface-900 uppercase tracking-wide">Training History</h3></div>
-            <ul class="divide-y divide-surface-100 text-sm">
-                @foreach($history as $m)
-                    <li class="px-5 py-3 flex justify-between items-center">
-                        <div>
-                            <p class="font-medium text-surface-800">{{ $m->version }}</p>
-                            <p class="text-xs text-surface-400">{{ $m->last_trained?->format('M j, Y g:i A') }}</p>
-                        </div>
-                        <span class="text-xs font-semibold {{ $m->is_active ? 'text-approved-700' : 'text-surface-400' }}">
-                            {{ $m->is_active ? 'Active' : $m->accuracy_score . '%' }}
-                        </span>
-                    </li>
-                @endforeach
-            </ul>
-        </div>
-
-        {{--
-            Estimated Approval Time models — read-only, no "train now"
-            control here on purpose (see ApprovalTimeMlService's docblock):
-            this one trains itself automatically on a schedule once a
-            category/department combo has enough real decision history.
-        --}}
-        <div class="bg-white rounded-xl shadow-card border border-surface-200 overflow-hidden">
-            <div class="px-5 py-3 border-b border-surface-200">
-                <h3 class="text-xs font-semibold text-surface-900 uppercase tracking-wide">Estimated Approval Time Models</h3>
-                <p class="text-xs text-surface-400 mt-0.5">Trains itself automatically once a category/department pair has {{ $timeEstimateTrainingFloor }}+ real decisions — no action needed here.</p>
-            </div>
-            <ul class="divide-y divide-surface-100 text-sm">
-                @forelse($timeEstimateGroups as $group)
-                    <li class="px-5 py-3">
-                        <div class="flex justify-between items-center">
-                            <p class="font-medium text-surface-800">{{ $group['ml_category'] }} &middot; {{ $group['department'] }}</p>
-                            @if($group['model'])
-                                <span class="text-xs font-semibold text-approved-700">{{ $group['model']->version }}</span>
-                            @else
-                                <span class="text-xs font-semibold text-surface-400">{{ $group['sample_count'] }}/{{ $timeEstimateTrainingFloor }}</span>
-                            @endif
-                        </div>
-                        <p class="text-xs text-surface-400 mt-0.5">
-                            @if($group['model'])
-                                Off by ~{{ \Carbon\CarbonInterval::seconds($group['model']->mae_seconds)->cascade()->forHumans(['short' => true]) }} on average &middot; {{ $group['model']->training_sample_count }} samples &middot; trained {{ $group['model']->trained_at->diffForHumans() }}
-                            @else
-                                Not trained yet — using the plain average estimate until enough history builds up.
-                            @endif
-                        </p>
-                    </li>
-                @empty
-                    <li class="px-5 py-6 text-center text-xs text-surface-400">No real decision history yet.</li>
-                @endforelse
-            </ul>
-        </div>
+    <div id="ml-metrics-panels" class="{{ $activeModel ? 'lg:col-span-3' : '' }}"
+        data-refresh-url="{{ route('admin.ml.metrics.refresh') }}"
+        data-poll-url="{{ route('admin.ml.metrics.poll') }}">
+        @include('admin.partials.ml_metrics_panels')
     </div>
 </div>
 
@@ -251,6 +176,21 @@
         // enableAjaxPagination()'s docblock in app.js for why one shared
         // fragment fetch correctly handles both.
         enableAjaxPagination(panelsEl, opts);
+
+        // Active Model / Training History / Estimated Approval Time panels
+        // — updates the instant either model finishes training (manual
+        // "Train Model" click, AutoTrainClassifier's automatic retrain, or
+        // ApprovalTimeMlService's scheduled run), same live-then-poll
+        // pattern as the review queue above. See App\Events\MlModelTrained.
+        const metricsEl = document.getElementById('ml-metrics-panels');
+        if (metricsEl) {
+            const metricsOpts = {
+                refreshUrl: metricsEl.dataset.refreshUrl,
+                target: metricsEl,
+            };
+            startLiveChannel('admin-dashboard', '.ml.model-trained', metricsOpts);
+            startLivePoll({ ...metricsOpts, pollUrl: metricsEl.dataset.pollUrl });
+        }
     });
 </script>
 @endsection

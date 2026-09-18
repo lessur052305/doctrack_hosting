@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Events\MlModelTrained;
 use App\Models\DocumentRepository;
 use App\Models\MlModelRepository;
 use App\Models\MlStagingSample;
@@ -175,15 +176,18 @@ class ClassificationService
         // 5. Register the new version; deactivate previous ones.
         MlModelRepository::where('is_active', true)->update(['is_active' => false]);
 
-        return MlModelRepository::create([
+        // Cross-validated, not resubstitution — see
+        // estimateAccuracyViaCrossValidation()'s docblock for why this
+        // matters. The FINAL model above is still trained on every staged
+        // sample; only this accuracy estimate uses temporary held-out
+        // folds, discarded once both values below are computed.
+        $cv = $this->estimateAccuracyViaCrossValidation($samplesByCategory);
+
+        $model = MlModelRepository::create([
             'model_name' => 'Support Vector Machine (SVM) + TF-IDF',
             'version' => 'v' . now()->format('Ymd.His'),
-            // Cross-validated, not resubstitution — see
-            // estimateAccuracyViaCrossValidation()'s docblock for why this
-            // matters. The FINAL model above is still trained on every
-            // staged sample; only this accuracy estimate uses temporary
-            // held-out folds, discarded once the score is computed.
-            'accuracy_score' => $this->estimateAccuracyViaCrossValidation($samplesByCategory),
+            'accuracy_score' => $cv['accuracy'],
+            'cv_folds' => $cv['folds'],
             // Disk-relative path (config('filesystems.default')), not an
             // absolute local filesystem path — see classify() below.
             'model_file_path' => $diskModelPath,
@@ -191,6 +195,10 @@ class ClassificationService
             'is_active' => true,
             'last_trained' => now(),
         ]);
+
+        MlModelTrained::dispatch();
+
+        return $model;
     }
 
     /**
@@ -436,7 +444,10 @@ class ClassificationService
      * classifier — folds are a temporary, throwaway split that exists only
      * long enough to produce this one honest number.
      */
-    private function estimateAccuracyViaCrossValidation(array $samplesByCategory): float
+    /**
+     * @return array{accuracy: float, folds: int}
+     */
+    private function estimateAccuracyViaCrossValidation(array $samplesByCategory): array
     {
         $smallestCategory = min(array_map('count', $samplesByCategory));
         // 5 folds when there's enough data for it; never more folds than
@@ -500,6 +511,9 @@ class ClassificationService
             }
         }
 
-        return $totalScored > 0 ? round(($totalCorrect / $totalScored) * 100, 2) : 0.0;
+        return [
+            'accuracy' => $totalScored > 0 ? round(($totalCorrect / $totalScored) * 100, 2) : 0.0,
+            'folds' => $folds,
+        ];
     }
 }
