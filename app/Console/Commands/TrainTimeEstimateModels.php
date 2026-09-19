@@ -14,6 +14,14 @@ use Illuminate\Console\Command;
  * department) combo that currently has enough real decision history gets
  * (re)trained; trainFor() itself decides whether the result is worth
  * activating.
+ *
+ * Safety-net fallback only, not the primary trigger — WorkflowService::
+ * decide() dispatches App\Jobs\RetrainApprovalTimeModel right after every
+ * real approval, scoped to just that one pair, which is both faster
+ * (retrains within seconds, not up to an hour later) and cheaper (no
+ * wasted recomputation on pairs with no new data). This sweep exists only
+ * to catch a pair that crossed the training floor some other way (e.g. a
+ * manually-seeded row) without that event ever firing.
  */
 class TrainTimeEstimateModels extends Command
 {

@@ -37,8 +37,13 @@ class NotificationRecord extends Model
      * recipient() relation so rendering a list of these never N+1s.
      * Approver has no per-document tracking page (they work a shared
      * queue on their dashboard, not a document detail route — see
-     * routes/web.php's approver group), so that case just goes to the
-     * queue rather than a document-specific URL.
+     * routes/web.php's approver group). The plain queue link here is only
+     * ever actually used as a fallback for that case — the real
+     * navigation (land on the right page AND scroll straight to the
+     * document) is built in NotificationController::markRead() via
+     * ApprovalController::pageForDocument(), since it needs live queue
+     * state (which page the document is currently on) that this Model
+     * has no business computing itself.
      */
     public function targetUrl(User $viewer): ?string
     {

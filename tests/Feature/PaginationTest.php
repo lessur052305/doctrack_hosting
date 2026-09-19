@@ -51,27 +51,24 @@ it('paginates Admin Archive at 5 per page, Approver/Originator Archive at 10', f
     $this->actingAs($approver)->get(route('approver.archive'))->assertDontSee('Next');
 });
 
-it('paginates Admin Users at 5 per page', function () {
+it('sends every account in one response for the Admin Users list (Feature: client-side fitted pagination)', function () {
+    // Pagination for this list is no longer a fixed per-page server
+    // count at all — see resources/js/app.js's initFittedPagination().
+    // The server always sends the full matching list; the browser works
+    // out real page boundaries from actual rendered row heights, which
+    // Pest has no layout engine to verify. What IS verifiable at the HTTP
+    // layer: the server never truncates, and the pagination nav (built
+    // entirely by JS after load) never appears in the raw HTML.
     $admin = User::factory()->admin()->create();
-    User::factory()->count(4)->originator()->create(); // + the admin itself = 5, still one page
+    $originators = User::factory()->count(6)->originator()->create();
 
-    $this->actingAs($admin)->get(route('admin.users'))->assertDontSee('Next');
+    $response = $this->actingAs($admin)->get(route('admin.users'));
 
-    User::factory()->originator()->create(); // 6th active user
-    $this->actingAs($admin)->get(route('admin.users'))->assertSee('Next');
-});
-
-it('paginates the Readability Review Queue at 5 per page', function () {
-    $admin = User::factory()->admin()->create();
-    for ($i = 0; $i < 6; $i++) {
-        paginationDoc($admin, ['global_status' => 'processing', 'readability_review_status' => 'pending', 'readability_score' => 50]);
+    $response->assertOk();
+    foreach ($originators as $originator) {
+        $response->assertSee($originator->username);
     }
-
-    $response = $this->actingAs($admin)->get(route('admin.ml.training'));
-    $response->assertOk()->assertSee('Content Readability Review (6)');
-
-    $page2 = $this->actingAs($admin)->get(route('admin.ml.training', ['readability_page' => 2]));
-    $page2->assertOk();
+    $response->assertDontSee('Next');
 });
 
 it('paginates the Auto-Approval Review queue at 2 per page', function () {
@@ -95,32 +92,6 @@ it('paginates the Auto-Approval Review queue at 2 per page', function () {
 
     $page2 = $this->actingAs($admin)->get(route('admin.sla.queue', ['page' => 2]));
     $page2->assertOk()->assertViewHas('reviewContainers', fn ($containers) => $containers->count() === 1);
-});
-
-it('honors both pagination params at once on the ML Training refresh fragment (Feature: AJAX pagination)', function () {
-    // enableAjaxPagination() (resources/js/app.js) fetches the .../refresh
-    // route with the CLICKED link's own full query string, which already
-    // has both page params merged (see AdminController::paginateContainers()).
-    // This proves the server side of that: a combined ?ml_page=2&readability_page=2
-    // request must page each section independently, not just whichever
-    // one a bare single-param request happens to test.
-    $admin = User::factory()->admin()->create();
-    for ($i = 0; $i < 6; $i++) {
-        $word = str_repeat(chr(97 + $i), 4);
-        $text = implode(' ', array_fill(0, 30, $word));
-        paginationDoc($admin, ['title' => "ml-{$i}.txt", 'global_status' => 'processing', 'ml_review_status' => 'pending', 'ml_confidence' => 30.0, 'ocr_text' => $text]);
-        paginationDoc($admin, ['title' => "read-{$i}.txt", 'global_status' => 'processing', 'readability_review_status' => 'pending', 'readability_score' => 50]);
-    }
-
-    $response = $this->actingAs($admin)->get(route('admin.ml.review.refresh', ['ml_page' => 2, 'readability_page' => 2]));
-
-    $response->assertOk();
-    // Page 2 of a 6-item/5-per-page list has exactly 1 item left, for BOTH
-    // sections at once — proves neither param was dropped/overwritten by
-    // the other (each is sorted, so item index 5, i.e. "e"/"f", is what
-    // survives onto page 2 — asserting on presence/absence of a page-1-only
-    // title is what actually proves the paging, not just "page loaded").
-    $response->assertDontSee('ml-0.txt')->assertDontSee('read-0.txt');
 });
 
 it('honors the pagination param on the SLA Queue refresh fragment (Feature: AJAX pagination)', function () {
@@ -150,37 +121,62 @@ it('honors the pagination param on the SLA Queue refresh fragment (Feature: AJAX
 // auto-approves immediately now (see WorkflowService::assignStage()),
 // so there's no longer a "pending, waiting" list of these to paginate.
 
-it('paginates the Admin Audit Trail at 10 per page', function () {
+it('sends every entry in one response for the Admin Audit Trail (Feature: client-side fitted pagination)', function () {
+    // Same reasoning as the other fitted-pagination tests in this file —
+    // see resources/js/app.js's initFittedPagination().
     $admin = User::factory()->admin()->create();
-    for ($i = 0; $i < 10; $i++) {
+    for ($i = 0; $i < 11; $i++) {
         \App\Models\AuditLog::record($admin->user_id, null, 'user_toggle', "PAGINATION TEST audit row {$i}");
     }
-    $this->actingAs($admin)->get(route('admin.audit.logs'))->assertDontSee('Next');
 
-    \App\Models\AuditLog::record($admin->user_id, null, 'user_toggle', 'PAGINATION TEST audit row 11');
-    $this->actingAs($admin)->get(route('admin.audit.logs'))->assertSee('Next');
+    $response = $this->actingAs($admin)->get(route('admin.audit.logs'));
+
+    $response->assertOk();
+    for ($i = 0; $i < 11; $i++) {
+        $response->assertSee("PAGINATION TEST audit row {$i}");
+    }
+    $response->assertDontSee('Next');
 });
 
-it('paginates Document Tracking at 5 per page', function () {
+it('sends every document in one response for Document Tracking (Feature: client-side fitted pagination)', function () {
+    // Same reasoning as the Admin Users / Originator Submissions tests
+    // above — this list's pagination is entirely client-side now (see
+    // resources/js/app.js's initFittedPagination()), so the only thing
+    // left to verify at the HTTP layer is that the server sends the full
+    // list, untruncated.
     $admin = User::factory()->admin()->create();
-    for ($i = 0; $i < 5; $i++) {
-        paginationDoc($admin);
+    $docs = [];
+    for ($i = 0; $i < 6; $i++) {
+        $docs[] = paginationDoc($admin);
     }
-    $this->actingAs($admin)->get(route('admin.documents.index'))->assertDontSee('Next');
 
-    paginationDoc($admin);
-    $this->actingAs($admin)->get(route('admin.documents.index'))->assertSee('Next');
+    $response = $this->actingAs($admin)->get(route('admin.documents.index'));
+
+    $response->assertOk();
+    foreach ($docs as $doc) {
+        $response->assertSee($doc->title);
+    }
+    $response->assertDontSee('Next');
 });
 
-it('paginates the Originator "Upload & Track Documents" list at 5 per page', function () {
+it('sends every document in one response for the Originator "Upload & Track Documents" list (Feature: client-side fitted pagination)', function () {
+    // Same reasoning as the Admin Users test above — this list's
+    // pagination is entirely client-side now (see resources/js/app.js's
+    // initFittedPagination()), so the only thing left to verify at the
+    // HTTP layer is that the server sends the full list, untruncated.
     $originator = User::factory()->originator()->create();
-    for ($i = 0; $i < 5; $i++) {
-        paginationDoc($originator);
+    $docs = [];
+    for ($i = 0; $i < 6; $i++) {
+        $docs[] = paginationDoc($originator);
     }
-    $this->actingAs($originator)->get(route('originator.dashboard'))->assertDontSee('Next');
 
-    paginationDoc($originator);
-    $this->actingAs($originator)->get(route('originator.dashboard'))->assertSee('Next');
+    $response = $this->actingAs($originator)->get(route('originator.dashboard'));
+
+    $response->assertOk();
+    foreach ($docs as $doc) {
+        $response->assertSee($doc->title);
+    }
+    $response->assertDontSee('Next');
 });
 
 it('paginates Admin Violations at 5 per page', function () {

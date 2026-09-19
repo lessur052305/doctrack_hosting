@@ -64,15 +64,16 @@ class ValidationService
     private const MIN_VOCABULARY_SAMPLES = 5;
 
     /**
-     * @return array{is_valid: bool, errors: array<int,string>, readability_score: ?int, readability_only_failure: bool}
+     * @return array{is_valid: bool, errors: array<int,string>, readability_score: ?int, readability_note: ?string}
      *
-     * readability_only_failure is true when every OBJECTIVE check (required
-     * sections present, word count met) passed and the readability
-     * heuristic is the sole reason is_valid is false — see
-     * WorkflowService::ingest(), which uses this to decide whether to hold
-     * the document for admin review (a judgment call) instead of a flat
-     * block (nothing for a human to weigh in on until the objective issue
-     * is fixed).
+     * readability_note carries checkContentQuality()'s explanation whenever
+     * the score is low, but it's informational only — it no longer affects
+     * is_valid. A low readability score usually means the document uses
+     * real vocabulary the model hasn't learned yet (see
+     * ClassificationService::autoTrainIfDue()), not that the document is
+     * invalid; blocking on it meant exactly the documents most worth
+     * learning from never reached anyone. Only the objective checks below
+     * (required sections present, word count met) still gate is_valid.
      */
     public function validate(string $category, string $text): array
     {
@@ -80,7 +81,7 @@ class ValidationService
         $template = self::TEMPLATES[$category] ?? null;
 
         if (!$template) {
-            return ['is_valid' => false, 'errors' => ["Unrecognized document category: {$category}"], 'readability_score' => null, 'readability_only_failure' => false];
+            return ['is_valid' => false, 'errors' => ["Unrecognized document category: {$category}"], 'readability_score' => null, 'readability_note' => null];
         }
 
         $normalized = strtolower($text);
@@ -107,18 +108,13 @@ class ValidationService
             $errors[] = "Document content is too short ({$wordCount} words; minimum {$template['min_word_count']}). Possible incomplete submission.";
         }
 
-        $objectiveFailure = !empty($errors);
-
-        ['error' => $qualityError, 'score' => $readabilityScore] = $this->checkContentQuality($category, $text);
-        if ($qualityError) {
-            $errors[] = $qualityError;
-        }
+        ['error' => $qualityNote, 'score' => $readabilityScore] = $this->checkContentQuality($category, $text);
 
         return [
             'is_valid' => empty($errors),
             'errors' => $errors,
             'readability_score' => $readabilityScore,
-            'readability_only_failure' => !$objectiveFailure && $qualityError !== null,
+            'readability_note' => $qualityNote,
         ];
     }
 
@@ -135,7 +131,7 @@ class ValidationService
      * obviously blank/garbage upload still doesn't reach a human
      * approver, without pretending to validate something it can't.
      *
-     * @return array{is_valid: bool, errors: array<int,string>, readability_score: ?int, readability_only_failure: bool}
+     * @return array{is_valid: bool, errors: array<int,string>, readability_score: ?int, readability_note: ?string}
      */
     public function validateGeneric(string $text): array
     {
@@ -147,11 +143,30 @@ class ValidationService
                 'is_valid' => false,
                 'errors' => ["Document content is too short ({$wordCount} words; minimum {$minWordCount}). Possible incomplete submission."],
                 'readability_score' => null,
-                'readability_only_failure' => false,
+                'readability_note' => null,
             ];
         }
 
-        return ['is_valid' => true, 'errors' => [], 'readability_score' => null, 'readability_only_failure' => false];
+        return ['is_valid' => true, 'errors' => [], 'readability_score' => null, 'readability_note' => null];
+    }
+
+    /**
+     * A document flagged 'unrelated' (WorkflowService::ingest()) has no
+     * authoritative category — validateGeneric() above deliberately never
+     * scores readability against one. But the classifier still quietly
+     * produces a best-guess category for every document regardless of
+     * routing mode, so this lets the UI show a real readability score
+     * against that guess too, purely for display: proves classification,
+     * readability and validation genuinely run on every document, not just
+     * ones that end up routed through a real category.
+     *
+     * @return array{score: ?int, note: ?string}
+     */
+    public function readabilityAgainst(string $category, string $text): array
+    {
+        ['error' => $note, 'score' => $score] = $this->checkContentQuality($category, $text);
+
+        return ['score' => $score, 'note' => $note];
     }
 
     /**
@@ -167,11 +182,13 @@ class ValidationService
      * ClassificationService already trains the classifier on double as the
      * dataset for this heuristic too, so domain vocabulary (a Job Order's
      * "truck", "brake", "transmission", etc.) is recognized without anyone
-     * maintaining a word list by hand. It also means the vocabulary grows
-     * every time an admin confirms a document from the readability review
-     * queue (see AdminController::confirmReadabilityReview()) — that
-     * confirm action stages the document into MlStagingSample exactly like
-     * confirming a low-confidence classification already does.
+     * maintaining a word list by hand. That vocabulary also grows
+     * automatically as more documents route through and get folded into
+     * training (see ClassificationService::autoTrainIfDue()) — this score
+     * is informational only now, never a gate (see validate()'s docblock),
+     * specifically so a low score from unfamiliar-but-real vocabulary
+     * doesn't stop the very documents that would teach the model that
+     * vocabulary from ever reaching training.
      *
      * @return array{error: ?string, score: ?int}
      */
@@ -197,7 +214,7 @@ class ValidationService
         }
 
         return [
-            'error' => "Document content did not pass a basic readability check (only {$score}% recognizable words for this category). Possible garbled scan or non-English submission.",
+            'error' => "Scored low ({$score}% recognizable words for '{$category}') — likely contains vocabulary this category's model hasn't learned yet, or a garbled scan/non-English submission.",
             'score' => $score,
         ];
     }
@@ -208,10 +225,10 @@ class ValidationService
      *
      * Deliberately not cached — the category counts here (tens, not
      * thousands, of samples) make re-querying and re-tokenizing on every
-     * call cheap, and AdminController::confirmReadabilityReview() needs
-     * two genuinely fresh reads within one request (vocabulary size
-     * before and after staging a new sample) to show the before/after
-     * readability score — a cache would need explicit invalidation to
+     * call cheap, and this needs a genuinely fresh read every time a
+     * document is scored (the vocabulary grows continuously as more
+     * documents route through — see ClassificationService::
+     * autoTrainIfDue()) — a cache would need explicit invalidation to
      * support that, for no real performance win at this scale.
      *
      * Tokenized the same way as ClassificationService::preprocess()
@@ -238,12 +255,6 @@ class ValidationService
         }
 
         return $vocabulary;
-    }
-
-    /** How many distinct words are currently recognized for a category — used to report vocabulary growth after a readability-review confirm (see AdminController::confirmReadabilityReview()). */
-    public static function vocabularySize(string $category): int
-    {
-        return count(self::categoryVocabulary($category) ?? []);
     }
 
     public static function knownCategories(): array

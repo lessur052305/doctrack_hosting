@@ -6,9 +6,19 @@
     "Unverified" badge/Resend-verification action disappear live the
     moment someone actually clicks their link, instead of only on a
     manual reload — see AuthController::verifyEmail() firing UserVerified.
+
+    Capped to the device's own viewport height (Feature: pagination, not
+    scrolling or overflow, absorbs a long account list). Height is set by
+    JS (sizeCappedCard() in resources/js/app.js, called from admin/users.
+    blade.php) rather than a static class — this whole card gets swapped
+    wholesale on every live refresh (the target is #users-table, the outer
+    div in admin/users.blade.php), so admin/users.blade.php's onSwap
+    re-runs it every time rather than it living as a one-time class that
+    would just be lost with the rest of this element on the next swap.
 --}}
-<div class="bg-white rounded-xl shadow-card border border-surface-200 overflow-hidden">
-    <div class="px-6 py-3 border-b border-surface-200 flex items-center justify-between">
+<div id="users-list"
+    class="bg-white rounded-xl shadow-card border border-surface-200 overflow-hidden flex flex-col">
+    <div class="px-6 py-3 border-b border-surface-200 flex items-center justify-between flex-shrink-0">
         <span class="text-xs text-surface-400">
             @if(!$showInactive && $inactiveCount > 0)
                 {{ $inactiveCount }} inactive account{{ $inactiveCount === 1 ? '' : 's' }} hidden
@@ -20,7 +30,12 @@
             <a href="{{ url()->current() }}?show_inactive=1" class="text-xs font-medium text-primary-700 hover:underline">Show inactive accounts</a>
         @endif
     </div>
-    <div class="overflow-x-auto">
+    {{-- flex-1 + overflow-hidden here (not on the pagination nav below) —
+         js-adaptive-rows-area is the stable hook initFittedPagination()
+         (see resources/js/app.js) measures against to work out every
+         page's real boundary — see originator/partials/submissions.blade.php's
+         identical reasoning. --}}
+    <div class="overflow-x-auto flex-1 overflow-y-hidden js-adaptive-rows-area">
     <table class="w-full table-fixed text-sm">
         <thead class="bg-surface-50 text-surface-500 text-xs uppercase tracking-wide">
             <tr>
@@ -35,7 +50,12 @@
         </thead>
         <tbody class="divide-y divide-surface-100">
             @foreach($users as $u)
-                <tr class="hover:bg-surface-50">
+                {{-- data-row-group lets initFittedPagination() treat this
+                     row as one logical item when working out page
+                     boundaries — a single <tr> per user today, but this
+                     keeps the same convention as submissions.blade.php's
+                     document + validation-issues row pair. --}}
+                <tr class="user-row hover:bg-surface-50" data-row-group="{{ $u->user_id }}">
                     <td class="px-3 py-3 text-surface-500 truncate">#{{ $u->user_id }}</td>
                     <td class="px-3 py-3">
                         <p class="font-medium text-surface-800 truncate">{{ $u->full_name }}</p>
@@ -106,10 +126,15 @@
                     <td class="px-3 py-3">
                         <div class="flex flex-col items-center gap-1">
                             @if($u->role === 'approver')
-                                <a href="{{ route('admin.users.stages.edit', $u) }}"
+                                {{-- Opens the shared popup modal instead of
+                                     navigating to its own page — see
+                                     AdminController::editApproverStages()'s
+                                     matching comment. --}}
+                                <button type="button"
+                                    onclick="openKpiDrilldown('manage-stages', '{{ addslashes($u->full_name) }} — Category &amp; Stages', '{{ route('admin.users.stages.edit', $u) }}')"
                                     class="inline-flex items-center bg-primary-50 hover:bg-primary-100 text-primary-700 font-medium text-[11px] px-2 py-1 rounded-lg transition-colors">
                                     Manage Stages
-                                </a>
+                                </button>
                             @endif
                             @unless($u->hasVerifiedEmail())
                                 <form method="POST" action="{{ route('admin.users.resend-verification', $u) }}">
@@ -164,8 +189,15 @@
         </tbody>
     </table>
     </div>
-    <p class="px-6 py-2 text-xs text-surface-400 border-t border-surface-200 bg-surface-50">
+    <p class="px-6 py-2 text-xs text-surface-400 border-t border-surface-200 bg-surface-50 flex-shrink-0">
         An approver's category and specific stage assignments can be changed anytime via "Manage Category & Stages" — this only affects future document routing, never assignments they already hold. Originators are never category-restricted.
     </p>
-    <div class="px-6 py-4 border-t border-surface-200">{{ $users->links() }}</div>
+    {{-- Feature: client-side "fitted" pagination — see resources/js/app.js's
+         initFittedPagination() for the full mechanism. This container is
+         entirely built by that JS (same original nav look as
+         resources/views/vendor/pagination/tailwind.blade.php, hand-built
+         here since a real LengthAwarePaginator no longer drives it — the
+         whole list is already in the DOM above and page boundaries are
+         computed from real measured heights). --}}
+    <div id="users-list-pagination" class="px-6 py-4 border-t border-surface-200 flex-shrink-0"></div>
 </div>

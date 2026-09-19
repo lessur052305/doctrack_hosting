@@ -3,7 +3,6 @@
 use App\Models\DocumentAssignment;
 use App\Models\DocumentRepository;
 use App\Models\DocumentReviewSession;
-use App\Models\MlStagingSample;
 use App\Models\User;
 use App\Models\WorkflowStage;
 
@@ -204,20 +203,4 @@ it('renders the Approve/Reject buttons enabled with no countdown once enough rev
     $response->assertSee('data-review-remaining="0"', false);
     $response->assertDontSee('class="review-countdown-label"', false);
     $response->assertDontSee('Open "View original file" above to begin', false);
-});
-
-it('blocks confirming a readability review document with no review time', function () {
-    $admin = User::factory()->admin()->create();
-    $originator = User::factory()->originator()->create();
-    for ($i = 0; $i < 5; $i++) {
-        MlStagingSample::create(['category' => 'Job Order', 'original_filename' => "s{$i}.txt", 'extracted_text' => 'a job order sample with shared vocabulary words repeated here']);
-    }
-    $document = minReviewDoc($originator, ['readability_review_status' => 'pending', 'readability_score' => 55, 'global_status' => 'processing']);
-
-    $response = $this->actingAs($admin)->post(route('admin.ml.review.readability', $document), [
-        'action' => 'confirm',
-    ]);
-
-    $response->assertStatus(422);
-    expect($document->fresh()->readability_review_status)->toBe('pending');
 });

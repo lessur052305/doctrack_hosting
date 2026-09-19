@@ -26,7 +26,16 @@ class DocumentRepositoryPolicy
 {
     public function viewTracking(User $user, DocumentRepository $document): bool
     {
-        return $document->originator_id === $user->user_id || $user->isAdmin();
+        // Widened to include an assigned approver (originally owner-or-
+        // admin only) — Feature: the shared Document Tracker modal
+        // (x-document-tracker, opened via documents.trackerModal) reuses
+        // this same check for Approver Decision History and Archive, both
+        // already scoped to documents an approver legitimately decided
+        // on; without this they'd be authorized to see the ROW but 403
+        // when actually opening its tracker.
+        return $document->originator_id === $user->user_id
+            || $user->isAdmin()
+            || $this->isAssignedApprover($user, $document);
     }
 
     public function viewFile(User $user, DocumentRepository $document): bool

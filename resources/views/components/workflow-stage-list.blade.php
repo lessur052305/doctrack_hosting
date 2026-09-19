@@ -1,4 +1,4 @@
-@props(['document', 'highlightAssignmentId' => null])
+@props(['document', 'highlightAssignmentId' => null, 'showDueDate' => true])
 
 {{--
     Full workflow-stage pipeline for this document's category (Feature:
@@ -36,6 +36,12 @@
     if they're still coming ("Not yet reached" forever). Below, this
     shows ONLY the document's own one-off stage(s) in that case instead
     of the category-wide list — see desired_routing's branch.
+
+    $showDueDate (default true): pass false from a caller whose own card
+    header already shows a "Due {date}" line (approver review popup,
+    admin SLA queue) — this component's own "Due:" line would otherwise
+    duplicate it. The originator tracking page has no other due-date
+    display, so it keeps the default.
 --}}
 @php
     // A document with no ml_category yet (still processing, or extraction/
@@ -125,7 +131,7 @@
 {{-- Due is shown independently of whether an estimate could be computed
      — it's a known fact about the document either way, not a derived
      guess, so it shouldn't disappear just because $forecast is null. --}}
-@if(!$isResolved && ($forecast || $document->due_date))
+@if(!$isResolved && ($forecast || ($showDueDate && $document->due_date)))
     @php
         if ($forecast) {
             // Business-hours-aware, not plain wall-clock addition — the same
@@ -152,7 +158,7 @@
         @if($forecast)
             <span><span class="font-medium text-surface-600">Est. Approval by:</span> {{ $estApprovalBy->format('M j, Y, g:i A') }}</span>
         @endif
-        @if($document->due_date)
+        @if($showDueDate && $document->due_date)
             <span><span class="font-medium text-surface-600">Due:</span> {{ $document->due_date->format('M j, Y, g:i A') }}</span>
         @endif
     </p>

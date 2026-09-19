@@ -3,12 +3,89 @@
 @section('page-title', 'Upload & Track Documents')
 
 @section('content')
-<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
-    {{-- Drag-and-drop ingestion card --}}
-    <div class="lg:col-span-1">
-        <div class="bg-white rounded-xl shadow-card border border-surface-200 p-6">
-            <h2 class="text-sm font-semibold text-surface-900 tracking-tight mb-1">New Submission</h2>
+{{-- Feature: capped to the device's own viewport height — never taller,
+     so the card itself is never what forces the page to scroll. flex
+     flex-col + the list area below as the only flex-1 child is what lets
+     the header/search/filter take their natural height while the list
+     absorbs (or is absorbed into) whatever's left, instead of the whole
+     card just growing with its content.
+
+     Height is set by JS (sizeCappedCard() in resources/js/app.js), not a
+     static h-[calc(100vh-Xrem)] — a flash message or validation-error
+     banner (see layouts/app.blade.php) can also sit above this card, and
+     a fixed calc() has no way to know that happened; live-measuring the
+     real remaining space instead means this always fits no matter what
+     else rendered above it, without ever forcing <main> into the very
+     overflow this feature exists to prevent. --}}
+<div id="submissions-card" class="bg-white rounded-xl shadow-card border border-surface-200 overflow-hidden flex flex-col">
+    <div class="px-6 py-4 border-b border-surface-200 flex items-center justify-between flex-shrink-0">
+        <div class="flex items-baseline gap-2">
+            <h2 class="text-sm font-semibold text-surface-900 tracking-tight">Your Submissions</h2>
+            <span id="submissions-total" class="text-xs text-surface-400 tabular-nums">{{ $documents->count() }} total</span>
+        </div>
+        <button type="button" id="new-submission-open"
+            class="inline-flex items-center gap-2 bg-gradient-to-b from-primary-600 to-primary-700 hover:from-primary-700 hover:to-primary-800 text-white text-sm font-medium px-4 py-2.5 rounded-lg shadow-sm transition-all">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/>
+            </svg>
+            New Submission
+        </button>
+    </div>
+
+    <form method="GET" class="px-6 py-4 border-b border-surface-200 space-y-3 flex-shrink-0">
+        <div class="relative">
+            <svg class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-surface-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z"/>
+            </svg>
+            <input type="text" id="document-search" name="document" value="{{ request('document') }}"
+                placeholder="Search document" autocomplete="off"
+                class="w-full rounded-lg border-surface-300 text-sm pl-9 pr-3 py-2 focus:border-primary-500 focus:ring-primary-500">
+        </div>
+        <div class="flex flex-wrap items-center gap-3">
+            <select name="status" onchange="this.form.submit()" class="rounded-lg border-surface-300 text-xs px-3 py-2">
+                <option value="">All Statuses</option>
+                @foreach(['processing' => 'Processing', 'classified_validated' => 'Awaiting Approval', 'approved' => 'Approved', 'auto_approved' => 'Auto-Approved', 'rejected' => 'Rejected'] as $value => $label)
+                    <option value="{{ $value }}" {{ request('status') === $value ? 'selected' : '' }}>{{ $label }}</option>
+                @endforeach
+            </select>
+            <select name="category" onchange="this.form.submit()" class="rounded-lg border-surface-300 text-xs px-3 py-2">
+                <option value="">All Categories</option>
+                @foreach($categories as $c)
+                    <option value="{{ $c }}" {{ request('category') === $c ? 'selected' : '' }}>{{ $c }}</option>
+                @endforeach
+            </select>
+            <button class="text-xs font-medium bg-primary-700 hover:bg-primary-800 text-white px-4 py-2 rounded-lg shadow-sm transition-colors">Filter</button>
+            @if(request('document') || request('status') || request('category'))
+                <a href="{{ route('originator.dashboard') }}" class="text-xs font-medium text-surface-500 hover:underline">Clear</a>
+            @endif
+        </div>
+    </form>
+
+    <div id="submissions-list" class="flex-1 min-h-0 overflow-hidden flex flex-col"
+        data-user-id="{{ auth()->id() }}" data-poll-url="{{ route('originator.documents.poll') }}"
+        data-refresh-url="{{ route('originator.documents.refresh') }}">
+        @include('originator.partials.submissions')
+    </div>
+</div>
+
+{{-- New Submission popup (Feature: the upload form no longer sits permanently
+     on the page — opened on demand via the button above, closed via X,
+     Escape, or clicking outside it). Statically rendered (just hidden by
+     default), not fetched — the existing drag-drop/file-input script below
+     needs these exact elements to exist in the DOM from page load. --}}
+<div id="new-submission-overlay" class="hidden fixed inset-0 z-50 bg-surface-900/70 flex items-center justify-center p-4" onclick="if(event.target === this) closeNewSubmissionModal()">
+    <div class="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden" onclick="event.stopPropagation()">
+        <div class="flex items-center justify-between px-6 py-4 border-b border-surface-200 flex-shrink-0">
+            <h2 class="text-sm font-semibold text-surface-900 tracking-tight">New Submission</h2>
+            <button type="button" onclick="closeNewSubmissionModal()" class="text-surface-400 hover:text-surface-700" aria-label="Close">
+                <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+            </button>
+        </div>
+
+        <div class="p-6 overflow-y-auto">
             <p class="text-xs text-surface-500 mb-4">The system will classify, validate, and route your document(s) automatically. Select more than one file to submit them together as a single grouped approval request.</p>
 
             <form method="POST" action="{{ route('originator.documents.store') }}" enctype="multipart/form-data" id="upload-form">
@@ -49,21 +126,30 @@
                      WorkflowService::routeToCustomApprovers()). Collapsed by
                      default — the standard process is what almost every
                      upload should use; this is an opt-in exception, not
-                     something to make more prominent than the normal path. --}}
+                     something to make more prominent than the normal path.
+                     Styled as a real button (bg/border) rather than plain
+                     underlined text, so it reads as clearly clickable.
+                     Picking 'custom' or 'unrelated' here does NOT open any
+                     picker — approver selection for both only ever happens
+                     AFTER the document is uploaded and classified, via the
+                     "Select Approver(s)" link on the submissions table
+                     (DocumentController::selectApprovers()). --}}
                 <details class="mt-3 group">
-                    <summary class="text-xs font-medium text-primary-700 hover:underline cursor-pointer select-none">Need a different approval process?</summary>
+                    <summary class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-surface-100 hover:bg-surface-200 text-xs font-medium text-surface-700 cursor-pointer select-none transition-colors">
+                        Need a different approval process?
+                    </summary>
                     <div class="mt-2 space-y-2 pl-1">
                         <label class="flex items-start gap-2 cursor-pointer">
                             <input type="radio" name="routing_mode" value="auto" checked class="mt-0.5 border-surface-300 text-primary-600 focus:ring-primary-500">
-                            <span class="text-xs text-surface-600"><span class="font-medium text-surface-800">Standard process</span> — classified and routed through the full approval pipeline automatically.</span>
+                            <span class="text-xs text-surface-600"><span class="font-medium text-surface-800">Standard process</span> — classified and routed automatically.</span>
                         </label>
                         <label class="flex items-start gap-2 cursor-pointer">
                             <input type="radio" name="routing_mode" value="custom" class="mt-0.5 border-surface-300 text-primary-600 focus:ring-primary-500">
-                            <span class="text-xs text-surface-600"><span class="font-medium text-surface-800">Choose the approver(s) yourself</span> — for a document that doesn't need the full pipeline this time (e.g. only needs one specific person's sign-off). Still classified and validated normally; you'll pick who reviews it right after this uploads.</span>
+                            <span class="text-xs text-surface-600"><span class="font-medium text-surface-800">Choose the approver(s) yourself</span> — skip the standard pipeline, pick exactly who reviews this.</span>
                         </label>
                         <label class="flex items-start gap-2 cursor-pointer">
                             <input type="radio" name="routing_mode" value="unrelated" class="mt-0.5 border-surface-300 text-primary-600 focus:ring-primary-500">
-                            <span class="text-xs text-surface-600"><span class="font-medium text-surface-800">This doesn't belong to any of our categories</span> — for a real document that just isn't a Job Order, Purchase Requisition, etc. Skips category-specific validation; you'll pick who reviews it right after this uploads.</span>
+                            <span class="text-xs text-surface-600"><span class="font-medium text-surface-800">This doesn't belong to any of our categories</span> — not a Job Order, Purchase Requisition, etc. — pick who reviews it.</span>
                         </label>
                     </div>
                 </details>
@@ -75,52 +161,20 @@
             </form>
         </div>
     </div>
-
-    {{-- Live tracking list --}}
-    <div class="lg:col-span-2">
-        <div class="bg-white rounded-xl shadow-card border border-surface-200 overflow-hidden">
-            <div class="px-6 py-4 border-b border-surface-200 flex items-center justify-between">
-                <h2 class="text-sm font-semibold text-surface-900 tracking-tight">Your Submissions</h2>
-                <span id="submissions-total" class="text-xs text-surface-400 tabular-nums">{{ $documents->total() }} total</span>
-            </div>
-
-            <form method="GET" class="px-6 py-4 border-b border-surface-200 space-y-3">
-                <div class="relative">
-                    <svg class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-surface-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z"/>
-                    </svg>
-                    <input type="text" id="document-search" name="document" value="{{ request('document') }}"
-                        placeholder="Search document" autocomplete="off"
-                        class="w-full rounded-lg border-surface-300 text-sm pl-9 pr-3 py-2 focus:border-primary-500 focus:ring-primary-500">
-                </div>
-                <div class="flex flex-wrap items-center gap-3">
-                    <select name="status" onchange="this.form.submit()" class="rounded-lg border-surface-300 text-xs px-3 py-2">
-                        <option value="">All Statuses</option>
-                        @foreach(['processing' => 'Processing', 'classified_validated' => 'Awaiting Approval', 'approved' => 'Approved', 'auto_approved' => 'Auto-Approved', 'rejected' => 'Rejected'] as $value => $label)
-                            <option value="{{ $value }}" {{ request('status') === $value ? 'selected' : '' }}>{{ $label }}</option>
-                        @endforeach
-                    </select>
-                    <select name="category" onchange="this.form.submit()" class="rounded-lg border-surface-300 text-xs px-3 py-2">
-                        <option value="">All Categories</option>
-                        @foreach($categories as $c)
-                            <option value="{{ $c }}" {{ request('category') === $c ? 'selected' : '' }}>{{ $c }}</option>
-                        @endforeach
-                    </select>
-                    <button class="text-xs font-medium bg-primary-700 hover:bg-primary-800 text-white px-4 py-2 rounded-lg shadow-sm transition-colors">Filter</button>
-                    @if(request('document') || request('status') || request('category'))
-                        <a href="{{ route('originator.dashboard') }}" class="text-xs font-medium text-surface-500 hover:underline">Clear</a>
-                    @endif
-                </div>
-            </form>
-
-            <div id="submissions-list" data-user-id="{{ auth()->id() }}" data-poll-url="{{ route('originator.documents.poll') }}" data-refresh-url="{{ route('originator.documents.refresh') }}">
-                @include('originator.partials.submissions')
-            </div>
-        </div>
-    </div>
 </div>
 
 <script>
+    // New Submission popup open/close.
+    document.getElementById('new-submission-open').addEventListener('click', function () {
+        document.getElementById('new-submission-overlay').classList.remove('hidden');
+    });
+    function closeNewSubmissionModal() {
+        document.getElementById('new-submission-overlay').classList.add('hidden');
+    }
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closeNewSubmissionModal();
+    });
+
     // Real-time, client-side filter over the rows already rendered on this
     // page — instant, no round trip. Pressing Enter still submits the
     // surrounding <form> normally, running the "document" filter
@@ -138,6 +192,13 @@
         let visibleCount = 0;
 
         rows.forEach((row) => {
+            // A row pagination has hidden on another page (see
+            // resources/js/app.js's showPage()) stays exactly as
+            // pagination left it — this filter only ever narrows the
+            // CURRENT page's rows further, never reaches across pages
+            // (that's what "Press Enter to search every page" below is
+            // for).
+            if (row.dataset.fittedOffPage === '1') return;
             const matches = term === '' || row.dataset.documentTitle.includes(term);
             row.classList.toggle('hidden', !matches);
             if (matches) visibleCount++;
@@ -201,6 +262,24 @@
         const listEl = document.getElementById('submissions-list');
         if (!listEl) return;
 
+        // See resources/js/app.js's sizeCappedCard() docblock — measured
+        // once here (after the flash message above, if any, has already
+        // rendered) and again on resize; nothing above this card changes
+        // after that, so a live swap doesn't need to re-measure it.
+        const submissionsCard = document.getElementById('submissions-card');
+        sizeCappedCard(submissionsCard);
+        window.addEventListener('resize', () => sizeCappedCard(submissionsCard));
+
+        // Fitted pagination — see resources/js/app.js's
+        // initFittedPagination() for the full mechanism (shared with the
+        // admin User Accounts page). Called from inside this same
+        // DOMContentLoaded handler (not at the top level) for the same
+        // reason startLiveChannel/startLivePoll below are — see this
+        // block's own opening comment. refit() is re-run after a live
+        // swap below, since that replaces this fragment's rows/pagination
+        // container out from under the running instance.
+        const fittedPagination = initFittedPagination('submissions-list', '.submission-row');
+
         const opts = {
             refreshUrl: listEl.dataset.refreshUrl,
             target: listEl,
@@ -210,6 +289,11 @@
                 if (total !== undefined) {
                     document.getElementById('submissions-total').textContent = total + ' total';
                 }
+                // refit() first, THEN re-apply the search term — refit()
+                // resets every row's page/hidden state from scratch, so
+                // running it after the filter would just wipe out
+                // whatever the filter had just done.
+                fittedPagination.refit();
                 applySubmissionFilter();
             },
         };

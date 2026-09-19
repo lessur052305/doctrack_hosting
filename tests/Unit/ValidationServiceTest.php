@@ -115,11 +115,13 @@ test('skips the readability check entirely when a category has too few staged sa
         ->and($result['readability_score'])->toBeNull();
 });
 
-test('a document that is mostly garbled/unrecognizable text fails the readability check and is held for review, not hard-blocked', function () {
+test('a document that is mostly garbled/unrecognizable text scores low on readability but still passes validation', function () {
     stageJobOrderVocabulary();
 
     // Padded past min_word_count with keyboard-mashing so the readability
     // check — not the word-count gate — is what's actually being tested.
+    // Readability is informational only now (see validate()'s docblock),
+    // so this stays is_valid even though the score is low.
     $text = "JOB ORDER\nJob Order No: JO-2026-0002\nDate Requested: July 16, 2026\n"
         . "Requested By: X\nDescription of Work: "
         . "xkzq vbnm qzxc wplo zxvb mnbv qwop lkjh zxcv bnml qazw sxed cvfr tgby "
@@ -127,10 +129,10 @@ test('a document that is mostly garbled/unrecognizable text fails the readabilit
 
     $result = app(ValidationService::class)->validate('Job Order', $text);
 
-    expect($result['is_valid'])->toBeFalse()
-        ->and($result['readability_only_failure'])->toBeTrue()
+    expect($result['is_valid'])->toBeTrue()
+        ->and($result['readability_note'])->not->toBeNull()
         ->and($result['readability_score'])->not->toBeNull()
-        ->and(collect($result['errors'])->contains(fn ($e) => str_contains($e, 'basic readability check')))->toBeTrue();
+        ->and($result['readability_note'])->toContain('Scored low');
 });
 
 test('an ordinary business document clears the readability check even with domain jargon and proper nouns', function () {
@@ -145,6 +147,5 @@ test('an ordinary business document clears the readability check even with domai
     $result = app(ValidationService::class)->validate('Job Order', $text);
 
     expect($result['is_valid'])->toBeTrue()
-        ->and($result['readability_only_failure'])->toBeFalse()
-        ->and(collect($result['errors'])->contains(fn ($e) => str_contains($e, 'basic readability check')))->toBeFalse();
+        ->and($result['readability_note'])->toBeNull();
 });

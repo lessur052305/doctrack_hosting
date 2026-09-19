@@ -177,7 +177,7 @@
                 @if($doc)
                     <tr id="history-movements-{{ $doc->document_id }}" class="hidden bg-surface-50/60">
                         <td colspan="4" class="px-6 py-3">
-                            <div class="border border-surface-200 rounded-lg overflow-hidden bg-white">
+                            <div class="border border-surface-200 rounded-lg overflow-hidden bg-white flex flex-col">
                                 <div class="px-4 py-2 border-b border-surface-100 flex items-center justify-between">
                                     <span class="text-xs font-medium text-surface-500">Your decisions on this document</span>
                                     <button type="button" onclick="event.stopPropagation(); openDocumentViewer('{{ route('documents.file', $doc) }}', '{{ $doc->mime_type }}', '{{ addslashes($doc->original_filename ?? $doc->title) }}', {{ $doc->document_id }})"
@@ -209,10 +209,20 @@
                                         </li>
                                     @endforeach
                                 </ul>
-                                <div class="px-4 py-2 border-t border-surface-100 bg-surface-50/50 text-xs font-medium text-surface-500">
-                                    Full movement history
+                                {{-- Opens the shared Document Tracker popup
+                                     instead of expanding the full table
+                                     inline right here — see admin/partials/
+                                     audit-row.blade.php's matching comment
+                                     for why a popup. This "Your decisions"
+                                     section above stays inline either way,
+                                     since it's approver-specific, not part
+                                     of the general Document Tracker. --}}
+                                <div class="px-4 py-2.5 border-t border-surface-100">
+                                    <button type="button" onclick="event.stopPropagation(); openKpiDrilldown('document-tracker', '{{ addslashes($doc->title) }}', '{{ route('documents.trackerModal', $doc) }}')"
+                                        class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary-50 hover:bg-primary-100 text-primary-700 text-xs font-medium transition-colors">
+                                        View Document Tracker &rarr;
+                                    </button>
                                 </div>
-                                <x-document-movement-timeline :document="$doc" />
                             </div>
                         </td>
                     </tr>

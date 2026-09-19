@@ -3,8 +3,13 @@
 @section('page-title', 'Document Tracking')
 
 @section('content')
-<div class="bg-white rounded-xl shadow-card border border-surface-200 overflow-hidden">
-    <form method="GET" class="px-6 py-4 border-b border-surface-200 space-y-3">
+{{-- Capped to the device's own viewport height (Feature: pagination, not
+     scrolling, absorbs a long document list). Height is set by JS (see
+     resources/js/app.js's sizeCappedCard()), not a static class — this
+     is a stable wrapper a live swap never replaces (only #doc-tracking-
+     results inside it is), so it's measured once on load, not per-swap. --}}
+<div id="doc-tracking-card" class="bg-white rounded-xl shadow-card border border-surface-200 overflow-hidden flex flex-col">
+    <form method="GET" class="px-6 py-4 border-b border-surface-200 space-y-3 flex-shrink-0">
         <div class="relative">
             <svg class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-surface-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z"/>
@@ -50,7 +55,8 @@
         </div>
     </form>
 
-    <div id="doc-tracking-results" data-poll-url="{{ route('admin.documents.index.poll') }}" data-refresh-url="{{ route('admin.documents.index.refresh') }}">
+    <div id="doc-tracking-results" class="flex-1 min-h-0 overflow-hidden flex flex-col"
+        data-poll-url="{{ route('admin.documents.index.poll') }}" data-refresh-url="{{ route('admin.documents.index.refresh') }}">
         @include('admin.partials.documents-results')
     </div>
 </div>
@@ -66,6 +72,20 @@
 
         const resultsEl = document.getElementById('doc-tracking-results');
         if (!resultsEl) return;
+
+        // See resources/js/app.js's sizeCappedCard() docblock.
+        const docTrackingCard = document.getElementById('doc-tracking-card');
+        sizeCappedCard(docTrackingCard);
+        window.addEventListener('resize', () => sizeCappedCard(docTrackingCard));
+
+        // Fitted pagination — see resources/js/app.js's
+        // initFittedPagination() for the full mechanism (shared with the
+        // originator "Your Submissions" and Admin "User Accounts" pages).
+        // refit() is re-run after both the debounced search below AND the
+        // live-channel/poll swap further down, since either replaces this
+        // fragment's rows/pagination container out from under the running
+        // instance.
+        const fittedPagination = initFittedPagination('doc-tracking-results', '.doc-tracking-row');
 
         // Debounced live search — the search box is the one control that
         // can't just "auto-submit on change" like the dropdowns, since a
@@ -94,7 +114,7 @@
             const query = params.toString();
             fetch(`${resultsEl.dataset.refreshUrl}${query ? '?' + query : ''}`, { headers: { Accept: 'text/html' } })
                 .then((res) => (res.ok ? res.text() : Promise.reject(res)))
-                .then((html) => { resultsEl.innerHTML = html; })
+                .then((html) => { resultsEl.innerHTML = html; fittedPagination.refit(); })
                 .catch(() => {});
 
             const newUrl = window.location.pathname + (query ? '?' + query : '');
@@ -122,6 +142,7 @@
             // fragment during that window, and a live swap mid-keystroke
             // would just get overwritten a moment later anyway.
             isBusy: () => document.activeElement === searchInput,
+            onSwap: () => fittedPagination.refit(),
         };
 
         startLiveChannel('admin-dashboard', '.admin.activity-logged', opts);

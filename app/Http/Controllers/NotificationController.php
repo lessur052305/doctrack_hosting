@@ -74,10 +74,27 @@ class NotificationController extends Controller
 
     /**
      * Marks just this one notification read and sends the user to
-     * whatever it's about (NotificationRecord::targetUrl()) — the bell
-     * dropdown and the full notifications list both submit here as a
-     * plain form post, so clicking a notification IS how it gets marked
-     * read, not a separate "Mark read" control next to it.
+     * whatever it's about — the bell dropdown and the full notifications
+     * list both submit here as a plain form post, so clicking a
+     * notification IS how it gets marked read, not a separate "Mark read"
+     * control next to it.
+     *
+     * An approver has no per-document tracking page — they work a shared,
+     * paginated queue (see ApprovalController::buildQueue()) rather than a
+     * document detail route — so a plain route('approver.dashboard')
+     * (NotificationRecord::targetUrl()'s fallback) just dumps them at the
+     * top of page 1 with no indication of where the actual document is,
+     * possibly several pages deep. This instead finds which page the
+     * document is CURRENTLY on (ApprovalController::pageForDocument(),
+     * same ordering the queue itself renders with) and appends a
+     * #document-{id} anchor to it — the fragment id already rendered on
+     * every document card in queue.blade.php — so the browser lands on
+     * the right page AND scrolls straight to that document, same "click,
+     * land exactly there" pattern the ML Training page's jump-nav uses,
+     * with a computed page number standing in for that page's fixed
+     * single-page anchor since this list is paginated. Falls back to the
+     * plain queue link if the document is no longer in this approver's
+     * queue at all (already resolved and no longer in-flight).
      */
     public function markRead(Request $request, NotificationRecord $notification)
     {
@@ -85,7 +102,19 @@ class NotificationController extends Controller
 
         $notification->update(['is_read' => true]);
 
-        return redirect($notification->targetUrl($request->user()) ?? route('notifications.index'));
+        $user = $request->user();
+
+        if ($user->isApprover() && $notification->document_id) {
+            $page = app(ApprovalController::class)->pageForDocument($user->user_id, $notification->document_id);
+
+            if ($page !== null) {
+                $url = route('approver.dashboard', $page > 1 ? ['page' => $page] : []);
+
+                return redirect($url . '#document-' . $notification->document_id);
+            }
+        }
+
+        return redirect($notification->targetUrl($user) ?? route('notifications.index'));
     }
 
     /**

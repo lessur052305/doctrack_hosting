@@ -46,29 +46,14 @@ it('Archive refresh fragment points Next/Previous at the real archive page, not 
     $response->assertDontSee('archive/refresh?', false);
 });
 
-it('Admin Users refresh fragment points Next/Previous at the real users page, not the refresh route', function () {
-    $admin = User::factory()->admin()->create();
-    User::factory()->count(5)->originator()->create();
-
-    $response = $this->actingAs($admin)->get(route('admin.users.refresh'));
-
-    $response->assertOk();
-    $response->assertSee(route('admin.users'), false);
-    $response->assertDontSee('users/refresh?', false);
-});
-
-it('Readability Review Queue refresh fragment points Next/Previous at the real ML training page, not the refresh route', function () {
-    $admin = User::factory()->admin()->create();
-    for ($i = 0; $i < 6; $i++) {
-        refreshPathDoc($admin, ['global_status' => 'processing', 'readability_review_status' => 'pending', 'readability_score' => 50]);
-    }
-
-    $response = $this->actingAs($admin)->get(route('admin.ml.review.refresh'));
-
-    $response->assertOk();
-    $response->assertSee(route('admin.ml.training'), false);
-    $response->assertDontSee('ml-training/review/refresh?', false);
-});
+// Admin Users pagination used to be covered here the same way as the
+// other lists below, but its Next/Previous links no longer exist at all
+// — that list's pagination is now entirely client-side (see
+// resources/js/app.js's initFittedPagination()), built from JS-rendered
+// buttons with no href, so the wrong-base-path bug this file guards
+// against is structurally impossible for it now. See PaginationTest.php's
+// "sends every account in one response" test for this list's current
+// coverage instead.
 
 it('Approver Queue refresh fragment points Next/Previous at the real dashboard, not the refresh route', function () {
     $approver = User::factory()->approver('Job Order')->create();
@@ -120,15 +105,8 @@ it('Notifications refresh (bell) does not affect the paginated index page path',
     $response->assertSee(route('notifications.index'), false);
 });
 
-it('Originator dashboard refresh fragment points Next/Previous at the real dashboard, not the refresh route', function () {
-    $originator = User::factory()->originator()->create();
-    for ($i = 0; $i < 6; $i++) {
-        refreshPathDoc($originator);
-    }
-
-    $response = $this->actingAs($originator)->get(route('originator.documents.refresh'));
-
-    $response->assertOk();
-    $response->assertSee(route('originator.dashboard'), false);
-    $response->assertDontSee('documents/refresh?', false);
-});
+// Same as Admin Users above — the Originator "Your Submissions" list's
+// pagination is also entirely client-side now, with no server-rendered
+// Next/Previous href to point at the wrong route. See PaginationTest.php's
+// "sends every document in one response" test for this list's current
+// coverage instead.

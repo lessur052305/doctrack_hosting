@@ -8,8 +8,14 @@
     into the fragment itself, not the triggering event's payload, since a
     WebSocket push and a poll response don't share the same JSON shape).
 --}}
-<span data-total-count="{{ $documents->total() }}" class="hidden"></span>
-<div class="overflow-x-auto">
+<span data-total-count="{{ $documents->count() }}" class="hidden"></span>
+{{-- flex-1 + overflow-hidden here (not on the pagination div below) — the
+     parent #submissions-list is capped to the device's screen height (see
+     dashboard.blade.php); this is what resources/js/app.js's
+     initFittedPagination() measures against to decide how many documents
+     actually fit, hiding the rest — see that function's own docblock for
+     the full mechanism. --}}
+<div class="overflow-x-auto flex-1 overflow-y-hidden js-adaptive-rows-area">
 <table class="w-full min-w-[640px] text-sm">
     <thead class="bg-surface-50 text-surface-500 text-xs uppercase tracking-wide">
         <tr>
@@ -23,7 +29,10 @@
     </thead>
     <tbody id="submission-rows" class="divide-y divide-surface-100">
         @forelse($documents as $doc)
-            <tr class="submission-row hover:bg-surface-50 transition-colors" data-document-title="{{ strtolower($doc->title) }}">
+            {{-- data-row-group ties this row to its own "Validation issues"
+                 row right below (same document_id on both) — initFittedPagination()
+                 always shows or hides the two together, one logical item. --}}
+            <tr class="submission-row hover:bg-surface-50 transition-colors" data-document-title="{{ strtolower($doc->title) }}" data-row-group="{{ $doc->document_id }}">
                 <td class="px-6 py-4 font-medium text-surface-800 max-w-xs truncate">
                     {{ $doc->title }}
                     @if($doc->version_number > 1)
@@ -60,7 +69,7 @@
                 </td>
             </tr>
             @if(!$doc->is_validated && $doc->global_status === 'processing')
-            <tr class="submission-row bg-rejected-50/50" data-document-title="{{ strtolower($doc->title) }}">
+            <tr class="submission-row bg-rejected-50/50" data-document-title="{{ strtolower($doc->title) }}" data-row-group="{{ $doc->document_id }}">
                 <td colspan="6" class="px-6 pb-3 text-xs text-rejected-700">
                     Validation issues: {{ implode(' · ', $doc->validation_errors ?? []) }}
                 </td>
@@ -84,6 +93,10 @@
 </table>
 </div>
 
-@if($documents->hasPages())
-    <div class="px-6 py-4 border-t border-surface-200">{{ $documents->links() }}</div>
-@endif
+{{-- Feature: client-side "fitted" pagination — see resources/js/app.js's
+     initFittedPagination() for the full mechanism. Not Laravel's own
+     $documents->links() — the whole list is already in the DOM above (no
+     server-side page size at all now), and this container is entirely
+     built by that JS using the exact same original nav look as
+     resources/views/vendor/pagination/tailwind.blade.php. --}}
+<div id="submissions-list-pagination" class="px-6 py-4 border-t border-surface-200 flex-shrink-0"></div>

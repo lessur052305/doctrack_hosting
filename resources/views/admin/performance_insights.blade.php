@@ -6,17 +6,20 @@
 <div class="space-y-6">
     {{-- Always-visible metrics description (Feature: explain how these
          rankings are produced without hiding it behind a click) — the
-         four bullets mirror PerformanceInsightsService::rank()'s actual
-         logic exactly (MIN_DECISIONS floor, business-hours-aware average,
-         sorted ascending), so this never drifts from what the numbers
-         really are. --}}
+         bullets mirror PerformanceInsightsService::rank()'s actual logic
+         exactly (MIN_DECISIONS floor, business-hours-aware average, sorted
+         either direction — see fastestApprovers()/slowestApprovers() and
+         friends), so this never drifts from what the numbers really are.
+         Worded direction-neutral throughout (not just "fastest") now that
+         the toggle below makes Slowest an equally real view, not a
+         secondary one. --}}
     <div class="rounded-lg bg-processing-50 border border-processing-500/30 text-processing-700 px-4 py-3 text-xs space-y-1">
         <p class="font-semibold">How these rankings are calculated:</p>
         <ul class="list-disc list-inside space-y-0.5">
             <li>Based on real completed decisions — actual approvals and rejections people made.</li>
             <li>Each person/department/category's speed is the average real working time (business hours, 9 AM–5 PM) it took them to decide.</li>
-            <li>Requires a minimum number of decisions on record before appearing in a ranking, so one lucky fast decision doesn't misrepresent someone as "fastest."</li>
-            <li>Ranked fastest to slowest by that average.</li>
+            <li>Requires a minimum number of decisions on record before appearing in a ranking, so one lucky decision doesn't misrepresent someone as "fastest" or "slowest."</li>
+            <li>Sorted by that average — toggle Fastest / Slowest below to see either end of the same ranking.</li>
         </ul>
     </div>
 
@@ -33,9 +36,44 @@
         const resultsEl = document.getElementById('performance-insights-results');
         if (!resultsEl) return;
 
+        // Fastest/Slowest toggle — see admin/partials/
+        // performance-insights-results.blade.php for why both directions
+        // are already in the DOM (no request on click). currentMode lives
+        // in this outer closure (not reset per-swap) so a live update
+        // below re-applies whichever side was showing instead of silently
+        // snapping back to Fastest.
+        let currentMode = 'fastest';
+
+        function applyMode(mode) {
+            currentMode = mode;
+            resultsEl.querySelectorAll('[data-perf-mode-panel]').forEach((panel) => {
+                panel.classList.toggle('hidden', panel.dataset.perfModePanel !== mode);
+            });
+            resultsEl.querySelectorAll('[data-perf-mode-btn]').forEach((btn) => {
+                const active = btn.dataset.perfModeBtn === mode;
+                btn.classList.toggle('bg-primary-700', active);
+                btn.classList.toggle('text-white', active);
+                btn.classList.toggle('text-surface-600', !active);
+                btn.classList.toggle('hover:bg-surface-100', !active);
+                btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+            });
+        }
+
+        // Delegated, not bound directly to the buttons — this whole
+        // fragment (toggle included) gets replaced wholesale on every
+        // live swap below, same reasoning as every other delegated
+        // listener in this app (see originator/dashboard.blade.php's
+        // matching comment).
+        resultsEl.addEventListener('click', function (e) {
+            const btn = e.target.closest('[data-perf-mode-btn]');
+            if (!btn) return;
+            applyMode(btn.dataset.perfModeBtn);
+        });
+
         const opts = {
             refreshUrl: resultsEl.dataset.refreshUrl,
             target: resultsEl,
+            onSwap: () => applyMode(currentMode),
         };
 
         startLiveChannel('admin-dashboard', '.admin.activity-logged', opts);

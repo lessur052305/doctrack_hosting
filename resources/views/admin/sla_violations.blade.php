@@ -136,13 +136,18 @@
              you've picked a category, same pattern as the Document
              Archive. --}}
         <h2 class="text-sm font-semibold text-surface-900 mb-3">Browse by Category</h2>
-        <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-6">
+        {{-- Feature: bigger folders that actually fill the screen — same
+             treatment as resources/views/archive/index.blade.php's
+             identical folder markup; see that file for why 2 fixed
+             columns + a taller body instead of the old responsive
+             2/3/4-column, h-32 pairing. --}}
+        <div class="grid grid-cols-2 gap-8">
             @foreach($folders as $folder)
                 <a href="{{ url()->current() }}?category={{ urlencode($folder->category) }}" class="group block">
-                    <div class="w-24 h-6 ml-5 rounded-t-lg bg-gradient-to-br from-primary-300 to-primary-500 group-hover:from-primary-400 group-hover:to-primary-600 transition-colors"></div>
-                    <div class="-mt-px h-32 rounded-b-xl rounded-tr-xl bg-gradient-to-br from-primary-400 to-primary-600 group-hover:from-primary-500 group-hover:to-primary-700 shadow-lg group-hover:shadow-xl group-hover:-translate-y-0.5 transition-all flex flex-col items-center justify-center text-center px-4">
-                        <h3 class="text-sm font-semibold text-white drop-shadow-sm">{{ $folder->category }}</h3>
-                        <p class="text-sm text-primary-100 mt-0.5">{{ $folder->total }} violation{{ $folder->total === 1 ? '' : 's' }}</p>
+                    <div class="w-40 h-10 ml-8 rounded-t-lg bg-gradient-to-br from-primary-300 to-primary-500 group-hover:from-primary-400 group-hover:to-primary-600 transition-colors"></div>
+                    <div class="-mt-px h-64 rounded-b-xl rounded-tr-xl bg-gradient-to-br from-primary-400 to-primary-600 group-hover:from-primary-500 group-hover:to-primary-700 shadow-lg group-hover:shadow-xl group-hover:-translate-y-0.5 transition-all flex flex-col items-center justify-center text-center px-4">
+                        <h3 class="text-xl font-semibold text-white drop-shadow-sm">{{ $folder->category }}</h3>
+                        <p class="text-base text-primary-100 mt-1">{{ $folder->total }} violation{{ $folder->total === 1 ? '' : 's' }}</p>
                     </div>
                 </a>
             @endforeach

@@ -243,7 +243,12 @@ test('approving every stage finalizes the document as approved', function () {
 
 test('rejecting one stage terminates the whole document and auto-closes every other pending stage', function () {
     $originator = User::factory()->originator()->create();
-    $approver = User::factory()->approver('Job Order')->create();
+    // level: 'head' — this single approver needs to hold BOTH stages here
+    // (Technical Review AND Final Approval) for the test to exercise cascade-
+    // close across a real second pending stage; Final Approval now requires
+    // it (see WorkflowService::eligibleApproversForStage()'s head-only rule)
+    // or this approver would never be seated on it at all.
+    $approver = User::factory()->approver('Job Order')->create(['level' => 'head']);
     $workflow = app(WorkflowService::class);
 
     $document = classifiedJobOrder($originator);

@@ -89,20 +89,29 @@
                     @endif
                     <p class="text-sm text-surface-500 mt-1">
                         Category: <span class="font-medium text-surface-700">{{ $document->display_category ?? 'Other' }}</span>
-                        {{-- Confidence is confidence IN the classifier's
-                             guess — showing it next to "Other" would read
-                             as contradicting itself, since
-                             that guess isn't what's displayed anymore
-                             (see DocumentRepository::display_category). --}}
-                        @if($document->desired_routing !== 'unrelated')
-                            @if($document->ml_rechecked_at)
-                                &middot; <span class="text-surface-400">Recheck Confidence: {{ $document->ml_confidence }}% &rarr; {{ $document->ml_recheck_confidence }}%</span>
-                            @elseif($document->ml_confidence)
-                                &middot; Confidence: {{ $document->ml_confidence }}%
+                        {{-- Classification, readability and validation genuinely
+                             run on every document, "unrelated" ones included —
+                             see WorkflowService::ingest() — so this shows the
+                             classifier's guess either way. For an "unrelated"
+                             document that guess is never authoritative (see
+                             DocumentRepository::display_category), so it's
+                             worded as a "best guess" here instead of a bare
+                             "Confidence:" label, to avoid it reading as
+                             contradicting the "Other" category shown above. --}}
+                        @if($document->desired_routing === 'unrelated')
+                            @if($document->ml_category && $document->ml_confidence !== null)
+                                &middot; <span class="text-surface-400">Classifier's best guess: {{ $document->ml_category }} ({{ $document->ml_confidence }}%) — not used, since this was marked as not belonging to any category</span>
                             @endif
+                        @elseif($document->ml_rechecked_at)
+                            &middot; <span class="text-surface-400">Recheck Confidence: {{ $document->ml_confidence }}% &rarr; {{ $document->ml_recheck_confidence }}%</span>
+                        @elseif($document->ml_confidence)
+                            &middot; Confidence: {{ $document->ml_confidence }}%
                         @endif
                         @if($document->readability_score !== null)
                             &middot; Readability: {{ $document->readability_score }}%
+                            @if($document->readability_score < config('ml.min_real_word_ratio', 0.7) * 100)
+                                <span class="text-surface-400">(scored low — likely vocabulary the model hasn't learned yet, not an error)</span>
+                            @endif
                         @endif
                         @if($document->used_ocr_fallback)
                             &middot; <span class="text-processing-700">OCR fallback used</span>
@@ -126,7 +135,12 @@
             @if($document->global_status === 'rejected' && !$document->nextVersion)
                 <div class="mt-6 pt-6 border-t border-surface-200">
                     <details class="text-sm">
-                        <summary class="cursor-pointer font-medium text-primary-700 hover:underline">Resubmit a revised version</summary>
+                        {{-- bg + padding, not just colored underlined text —
+                             matches the "Need a different approval process?"
+                             toggle below (and buttons elsewhere in the app)
+                             so this reads as a clickable control at a
+                             glance, not a plain caption. --}}
+                        <summary class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-primary-50 hover:bg-primary-100 text-primary-700 font-medium cursor-pointer select-none transition-colors">Resubmit a revised version</summary>
                         <form method="POST" action="{{ route('originator.documents.resubmit', $document) }}" enctype="multipart/form-data" class="mt-3 space-y-3 max-w-sm">
                             @csrf
                             <div>
@@ -179,62 +193,17 @@
              (sizeDocumentTracker() in tracking.blade.php), recalculated on
              load/resize/live-refresh — a fixed CSS max-height can't do this
              correctly since the header card above varies in height. --}}
+        {{-- flex-1 + min-h-0: lets <x-document-tracker>'s own inner scroll
+             area claim exactly the space left over after the header card
+             above it, instead of growing past the viewport and forcing
+             <main> (this app's real scroll container — see
+             layouts/app.blade.php) to scroll the whole page. The precise
+             height is set by JS (sizeDocumentTracker() in
+             tracking.blade.php), recalculated on load/resize/live-refresh
+             — a fixed CSS max-height can't do this correctly since the
+             header card above varies in height. --}}
         <div id="document-tracker-card" class="bg-white rounded-xl shadow-card border border-surface-200 overflow-hidden flex-1 min-h-0 flex flex-col">
-            <div class="px-6 py-4 border-b border-surface-200 shrink-0">
-                <h3 class="text-sm font-semibold text-surface-900">Document Tracker</h3>
-            </div>
-            @php $movementTimeline = \App\Services\DocumentMovementTimeline::build($document); @endphp
-            {{-- Scrolls internally instead of the whole page — a long
-                 tracker no longer forces scrolling past everything else on
-                 the page just to read more of it. id targeted by
-                 sizeDocumentTracker() in tracking.blade.php. --}}
-            <div id="document-tracker-scroll" class="overflow-x-auto overflow-y-auto">
-                <table class="w-full text-sm border-collapse">
-                    {{-- No explicit z-index — sticky already paints above the
-                         table's own scrolling rows from normal stacking order
-                         alone; adding one here previously created a stacking
-                         context that won against the notification dropdown
-                         elsewhere on the page (z-30), making Document Tracker
-                         labels incorrectly appear on top of it. --}}
-                    <thead class="sticky top-0 bg-white">
-                        <tr class="border-b-2 border-surface-200 text-left text-xs uppercase tracking-wide text-surface-400">
-                            <th class="px-6 py-2 font-medium border-r border-surface-200">Timestamp</th>
-                            <th class="px-4 py-2 font-medium border-r border-surface-200">Action</th>
-                            <th class="px-4 py-2 font-medium border-r border-surface-200">Employee</th>
-                            <th class="px-6 py-2 font-medium">Description</th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-surface-200">
-                        @forelse($movementTimeline as $event)
-                            <tr>
-                                <td class="px-6 py-3 text-sm text-surface-400 whitespace-nowrap align-top border-r border-surface-200">{{ $event['timestamp']->format('M j, Y g:i A') }}</td>
-                                <td class="px-4 py-3 align-top border-r border-surface-200">
-                                    <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-semibold whitespace-nowrap
-                                        {{ $event['kind'] === 'session_group' ? 'bg-primary-50 text-primary-700' : 'bg-surface-100 text-surface-600' }}">
-                                        {{ $event['label'] }}
-                                    </span>
-                                </td>
-                                <td class="px-4 py-3 text-surface-700 font-medium align-top whitespace-nowrap border-r border-surface-200">{{ $event['actor'] }}</td>
-                                <td class="px-6 py-3 text-surface-500 align-top">
-                                    @if($event['kind'] === 'session_group')
-                                        {{-- One row per person, every individual pass
-                                             shown plainly underneath — see
-                                             DocumentMovementTimeline::build()'s docblock. --}}
-                                        {{ $event['note'] }}
-                                        <p class="mt-1 text-sm text-surface-400">{{ $event['passes_detail'] }}</p>
-                                    @else
-                                        {{ $event['note'] }}
-                                    @endif
-                                </td>
-                            </tr>
-                        @empty
-                            <tr>
-                                <td colspan="4" class="px-6 py-6 text-center text-sm text-surface-400">No recorded activity yet.</td>
-                            </tr>
-                        @endforelse
-                    </tbody>
-                </table>
-            </div>
+            <x-document-tracker :document="$document" :fill="true" />
         </div>
     </div>
 

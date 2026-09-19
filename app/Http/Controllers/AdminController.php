@@ -68,8 +68,6 @@ class AdminController extends Controller
             })->count(),
             'rejected' => DocumentRepository::where('global_status', 'rejected')->count(),
             'active_users' => User::where('is_active', true)->count(),
-            'ml_review_count' => DocumentRepository::where('ml_review_status', 'pending')->count(),
-            'readability_review_count' => DocumentRepository::where('readability_review_status', 'pending')->count(),
             'violations_count' => SlaViolation::count(),
         ];
     }
@@ -800,7 +798,7 @@ class AdminController extends Controller
         ]);
     }
 
-    /** @return array{users: \Illuminate\Contracts\Pagination\LengthAwarePaginator, showInactive: bool, inactiveCount: int} */
+    /** @return array{users: \Illuminate\Support\Collection, showInactive: bool, inactiveCount: int} */
     private function usersTableData(Request $request): array
     {
         $showInactive = $request->boolean('show_inactive');
@@ -811,11 +809,13 @@ class AdminController extends Controller
         }
 
         return [
-            // Real page route, not the implicit current-request path —
-            // also built from within usersRefresh() (the live-poll
-            // fragment route); see paginateContainers()'s docblock for
-            // the full reasoning.
-            'users' => $query->paginate(5)->withQueryString()->withPath(route('admin.users')),
+            // Feature: client-side row fitting — see resources/js/app.js's
+            // initFittedPagination() and DocumentController::dashboard()'s
+            // matching docblock. Every matching account is sent in one
+            // response; the browser measures the whole list and works out
+            // every page's real boundary itself, including numbered
+            // page-jump targets.
+            'users' => $query->get(),
             'showInactive' => $showInactive,
             'inactiveCount' => User::where('is_active', false)->count(),
         ];
@@ -903,7 +903,14 @@ class AdminController extends Controller
         return back()->with('status', "Verification email re-sent to {$user->email}.");
     }
 
-    /** Admin-only: view/edit which specific stages an approver is restricted to. */
+    /**
+     * Admin-only: view/edit which specific stages an approver is
+     * restricted to. Feature: the "Manage Stages" popup — fetched into
+     * components/kpi-drilldown-modal.blade.php by the "Manage Stages"
+     * button in admin/partials/users_table.blade.php, same mechanism as
+     * the Document Tracker and Import Legacy Document popups, rather than
+     * its own dedicated page.
+     */
     public function editApproverStages(User $user)
     {
         abort_unless($user->role === 'approver', 422, 'Only approver accounts have stage assignments.');
@@ -918,7 +925,7 @@ class AdminController extends Controller
         // still sitting in this approver's queue before they decide.
         $pendingInOldCategory = DocumentAssignment::pendingFor($user->user_id)->count();
 
-        return view('admin.approver_stages', compact('user', 'stagesByCategory', 'assignedStageIds', 'pendingInOldCategory'));
+        return view('admin.partials.manage-stages-form', compact('user', 'stagesByCategory', 'assignedStageIds', 'pendingInOldCategory'));
     }
 
     /**
@@ -1124,14 +1131,13 @@ class AdminController extends Controller
 
         return view('admin.ml_training', array_merge(compact(
             'categories', 'stagedSamples', 'minPerCategory', 'batchUploadLimit'
-        ), $this->mlMetricsData(), $this->mlReviewQueueData($request)));
+        ), $this->mlMetricsData()));
     }
 
     /**
      * Fragment refresh for the Active Model / Training History / Estimated
      * Approval Time panels — see App\Events\MlModelTrained's docblock for
-     * what triggers it. Same live-channel/poll pattern as
-     * mlReviewQueueRefresh()/mlReviewQueuePoll() below.
+     * what triggers it.
      */
     public function mlMetricsRefresh()
     {
@@ -1146,15 +1152,22 @@ class AdminController extends Controller
      */
     public function mlMetricsPoll()
     {
+        // training_queue_total doubles as this fragment's poll signal for
+        // the Training Queue section too — a document being routed doesn't
+        // fire MlModelTrained (no model finished training), but it does
+        // change this count, and startLivePoll() compares the whole JSON
+        // blob, so adding it here is enough for the poll fallback to catch
+        // it without a separate endpoint.
         return response()->json([
             'active_model_id' => MlModelRepository::active()?->model_id,
             'latest_trained' => MlModelRepository::max('last_trained'),
             'latest_time_estimate_trained' => \App\Models\MlTimeEstimateModel::max('trained_at'),
+            'training_queue_total' => $this->classifier->trainingQueueStatus()['total_eligible'],
         ]);
     }
 
     /**
-     * @return array{activeModel: ?MlModelRepository, history: \Illuminate\Support\Collection, timeEstimateGroups: \Illuminate\Support\Collection, timeEstimateTrainingFloor: int}
+     * @return array{activeModel: ?MlModelRepository, history: \Illuminate\Support\Collection, timeEstimateGroups: \Illuminate\Support\Collection, timeEstimateTrainingFloor: int, trainingQueue: array}
      */
     private function mlMetricsData(): array
     {
@@ -1166,79 +1179,28 @@ class AdminController extends Controller
             // automatically on a schedule instead.
             'timeEstimateGroups' => $this->timeMl->statusForAllGroups(),
             'timeEstimateTrainingFloor' => \App\Services\ApprovalTimeMlService::MIN_TRAINING_SAMPLES,
-        ];
-    }
-
-    /**
-     * Fragment refresh for the Content Readability Review panel — same
-     * live-channel/poll pattern already used elsewhere (e.g.
-     * ArchiveController::refresh(), AdminController::violationsRefresh()).
-     * A new held document doesn't reach this page via any normal status
-     * change on an EXISTING row (DocumentRepository::booted() only fires
-     * on an update, never a create), so without this an admin sitting on
-     * this page would only see a newly-held document after manually
-     * reloading.
-     */
-    public function mlReviewQueueRefresh(Request $request)
-    {
-        return view('admin.partials.ml_review_panels', array_merge(
-            $this->mlReviewQueueData($request),
-            ['categories' => ValidationService::knownCategories()]
-        ));
-    }
-
-    /**
-     * Lightweight JSON signal for the poll fallback — see overviewPoll()'s
-     * docblock for the same reasoning.
-     */
-    public function mlReviewQueuePoll()
-    {
-        return response()->json([
-            'readability_pending_ids' => DocumentRepository::where('readability_review_status', 'pending')->pluck('document_id')->all(),
-        ]);
-    }
-
-    /**
-     * @return array{readabilityQueue: LengthAwarePaginator}
-     */
-    private function mlReviewQueueData(Request $request): array
-    {
-        $perPage = 5;
-
-        // Deliberately no near-duplicate grouping here — a readability hold
-        // is a much rarer event than classification ever was (only fires
-        // once a category has enough staged vocabulary to score against at
-        // all), so the extra complexity of bulk-resolving copies hasn't
-        // been worth building.
-        $readabilityQueueFull = DocumentRepository::where('readability_review_status', 'pending')
-            ->orderBy('readability_score')
-            ->with('originator')
-            ->get();
-        $readabilityQueue = $this->paginateContainers($readabilityQueueFull, $request, $perPage, route('admin.ml.training'), 'readability_page');
-
-        return [
-            'readabilityQueue' => $readabilityQueue,
+            // Feature: admin can see documents piling up for auto-retraining
+            // — see ClassificationService::trainingQueueStatus()'s docblock.
+            'trainingQueue' => $this->classifier->trainingQueueStatus(),
         ];
     }
 
     /**
      * Wraps an already-built Collection in a LengthAwarePaginator — shared
      * by every admin queue that groups results into containers before
-     * paginating (ML Review, Readability Review, SLA Queue's auto-approved
-     * section, Unassigned Documents). $pageName lets two independently
-     * paginated lists coexist on the same page/URL (e.g. ML Review +
-     * Readability Review both live on ml_training.blade.php) without their
-     * ?page= query params colliding.
+     * paginating (SLA Queue's auto-approved section, Unassigned
+     * Documents). $pageName lets two independently paginated lists
+     * coexist on the same page/URL without their ?page= query params
+     * colliding.
      *
-     * $path is the REAL page route (e.g. route('admin.ml.training')) —
+     * $path is the REAL page route (e.g. route('admin.sla.queue')) —
      * deliberately never $request->url(), since every one of these lists
      * is also rendered via a separate .../refresh route for the live-poll
-     * JS to swap in place (see e.g. mlReviewQueueRefresh()). Building the
-     * path from the current request would bake THAT fragment URL into the
-     * Next/Previous links whenever a live swap happens to be what
-     * generated this page's markup — clicking one then navigates straight
-     * to the bare fragment endpoint (no layout, no CSS) instead of the
-     * real page.
+     * JS to swap in place. Building the path from the current request
+     * would bake THAT fragment URL into the Next/Previous links whenever a
+     * live swap happens to be what generated this page's markup —
+     * clicking one then navigates straight to the bare fragment endpoint
+     * (no layout, no CSS) instead of the real page.
      */
     private function paginateContainers(\Illuminate\Support\Collection $items, Request $request, int $perPage, string $path, string $pageName = 'page'): LengthAwarePaginator
     {
@@ -1251,130 +1213,6 @@ class AdminController extends Controller
             $page,
             ['path' => $path, 'query' => $request->query(), 'pageName' => $pageName]
         );
-    }
-
-    /**
-     * Admin confirms or rejects a document held ONLY because its
-     * readability score fell below the vocabulary threshold (required
-     * sections present, word count met — see WorkflowService::ingest() and
-     * ValidationService::validate()'s readability_only_failure flag).
-     *
-     * 'confirm' stages the document into the same MlStagingSample pool the
-     * classifier trains from — an admin confirming this content IS
-     * legitimate for its category is exactly what teaches the vocabulary
-     * those words for every future document, not just this one.
-     *
-     * 'reject' sets global_status to 'rejected' — the same terminal state
-     * a rejected-by-approver document reaches, so it reuses the
-     * originator's existing resubmit flow.
-     */
-    public function reviewReadability(Request $request, DocumentRepository $document)
-    {
-        abort_unless($document->readability_review_status === 'pending', 404);
-
-        $validated = $request->validate([
-            'action' => ['required', 'in:confirm,reject'],
-        ]);
-
-        $admin = $request->user();
-
-        $minSeconds = config('review.min_review_seconds', 10);
-        $secondsReviewed = DocumentReviewSession::secondsSpentSoFar($document->document_id, $admin->user_id);
-        abort_if($secondsReviewed < $minSeconds, 422,
-            "You need to view the document for at least {$minSeconds} seconds before deciding — {$secondsReviewed}s recorded so far.");
-
-        if ($validated['action'] === 'reject') {
-            $this->rejectReadabilityReview($document, $admin);
-
-            return back()->with('status', "Rejected '{$document->title}' — the originator has been notified to resubmit.");
-        }
-
-        $oldScore = $document->readability_score;
-        $this->confirmReadabilityReview($document, $admin);
-
-        return back()->with('status', "Confirmed '{$document->title}' — readability score improved from {$oldScore}% to {$document->readability_score}%.");
-    }
-
-    private function rejectReadabilityReview(DocumentRepository $document, User $admin): void
-    {
-        DocumentReviewSession::closeFor($document, $admin);
-
-        $document->readability_review_status = 'dismissed';
-        $document->global_status = 'rejected';
-        $document->save();
-
-        AuditLog::record($admin->user_id, $document->document_id, 'readability_review_reject',
-            "Rejected '{$document->title}' during content readability review (scored {$document->readability_score}% for " .
-            "'{$document->ml_category}'). Not routed for approval.");
-
-        NotificationRecord::send($document->originator_id, $document->document_id,
-            "Your document '{$document->title}' did not pass an admin's content readability review and was not routed for approval. " .
-            'Please review it and resubmit a corrected version.');
-    }
-
-    private function confirmReadabilityReview(DocumentRepository $document, User $admin): void
-    {
-        DocumentReviewSession::closeFor($document, $admin);
-
-        $category = $document->ml_category;
-        $oldScore = $document->readability_score;
-        $vocabularyBefore = ValidationService::vocabularySize($category);
-
-        $duplicateWarning = null;
-        foreach (MlStagingSample::where('category', $category)->get(['original_filename', 'extracted_text']) as $existing) {
-            $similarity = $this->classifier->wordOverlapSimilarity((string) $document->ocr_text, $existing->extracted_text);
-            if ($similarity >= self::NEAR_DUPLICATE_THRESHOLD) {
-                $duplicateWarning = sprintf(
-                    '"%s" looks like a near-duplicate of already-staged "%s" (%d%% word overlap) — staged anyway, but consider whether a more varied example would help more.',
-                    $document->title,
-                    $existing->original_filename,
-                    round($similarity * 100)
-                );
-                break;
-            }
-        }
-
-        MlStagingSample::create([
-            'category' => $category,
-            'original_filename' => $document->original_filename ?? $document->title,
-            'extracted_text' => (string) $document->ocr_text,
-            'staged_by' => $admin->user_id,
-        ]);
-
-        // Recomputed AFTER staging, against the now-grown vocabulary — this
-        // document's own words are trivially all "known" now (it just
-        // taught them to itself), which is expected: the meaningful part
-        // is that every FUTURE document sharing this vocabulary benefits
-        // too, tracked via vocabularyBefore/After below.
-        $revalidation = $this->validator->validate($category, (string) $document->ocr_text);
-        $vocabularyAfter = ValidationService::vocabularySize($category);
-
-        $document->readability_review_status = 'confirmed';
-        $document->readability_score = $revalidation['readability_score'];
-        $document->is_validated = true;
-        $document->validation_errors = $revalidation['errors'];
-        $document->global_status = 'classified_validated';
-        $document->save();
-
-        // Classification confidence is no longer a separate blocking gate
-        // (see WorkflowService::ingest()'s $isAmbiguous docblock) — a
-        // readability-only hold is the sole remaining reason a document
-        // could still be sitting here, so confirming it always routes.
-        $this->workflow->routeOrAwaitApproverSelection($document);
-
-        event(new DocumentStatusChanged($document));
-
-        $newWords = $vocabularyAfter - $vocabularyBefore;
-        AuditLog::record($admin->user_id, $document->document_id, 'readability_review_confirm',
-            "Confirmed '{$document->title}' during content readability review — score improved from {$oldScore}% to " .
-            "{$document->readability_score}% ({$newWords} new term(s) added to the '{$category}' vocabulary). Routed for approval.");
-
-        NotificationRecord::send($document->originator_id, $document->document_id,
-            "Your document '{$document->title}' passed an admin's content readability review and has been routed for approval.");
-
-        if ($duplicateWarning) {
-            session()->flash('warning', [$duplicateWarning]);
-        }
     }
 
     /**
@@ -2177,6 +2015,14 @@ class AdminController extends Controller
             'fastestApprovers' => $this->performance->fastestApprovers(),
             'fastestDepartments' => $this->performance->fastestDepartments(),
             'fastestCategories' => $this->performance->fastestCategories(),
+            // Feature: a Fastest/Slowest toggle — both directions are
+            // fetched up front (same cheap grouped-average queries, just
+            // sorted the other way) so the toggle swaps instantly on the
+            // client with no extra request. See
+            // admin/partials/performance-insights-results.blade.php.
+            'slowestApprovers' => $this->performance->slowestApprovers(),
+            'slowestDepartments' => $this->performance->slowestDepartments(),
+            'slowestCategories' => $this->performance->slowestCategories(),
         ];
     }
 
@@ -2463,33 +2309,16 @@ class AdminController extends Controller
         return $documentRows->concat($systemRows)->sortByDesc('sort_at')->values();
     }
 
-    private function paginateAuditRows(Request $request): \Illuminate\Pagination\LengthAwarePaginator
-    {
-        $rows = $this->buildAuditRows($request);
-
-        // 10, not a larger page size — chosen specifically so a full page
-        // of rows fits inside audit-table-scroll's computed height with
-        // no internal scrolling needed either, on top of the page itself
-        // never scrolling (see sizeAuditTable() in audit_logs.blade.php).
-        $perPage = 10;
-        $page = (int) $request->input('page', 1);
-
-        return new \Illuminate\Pagination\LengthAwarePaginator(
-            $rows->forPage($page, $perPage)->values(),
-            $rows->count(),
-            $perPage,
-            $page,
-            // Real page route, not $request->url() — this is also built
-            // from within auditLogsRefresh() (the live-poll fragment
-            // route); see paginateContainers()'s docblock for the full
-            // reasoning.
-            ['path' => route('admin.audit.logs'), 'query' => $request->query()]
-        );
-    }
-
     public function auditLogs(Request $request)
     {
-        $logs = $this->paginateAuditRows($request);
+        // Feature: client-side row fitting — see resources/js/app.js's
+        // initFittedPagination() and DocumentController::dashboard()'s
+        // matching docblock. buildAuditRows() already materializes the
+        // full merged, filtered, sorted collection in memory (it isn't a
+        // single Eloquent query), so there's nothing to change there —
+        // this just stops truncating it to a fixed page size before
+        // handing it to the view.
+        $logs = $this->buildAuditRows($request);
 
         // A curated whitelist, not every distinct action_type this table
         // has ever recorded (~35+ raw values — SLA config edits, ML
@@ -2524,7 +2353,7 @@ class AdminController extends Controller
      */
     public function auditLogsRefresh(Request $request)
     {
-        $logs = $this->paginateAuditRows($request);
+        $logs = $this->buildAuditRows($request);
 
         return view('admin.partials.audit-results', compact('logs'));
     }
@@ -2576,12 +2405,12 @@ class AdminController extends Controller
 
     public function documents(Request $request)
     {
-        $documents = $this->buildDocumentTrackingQuery($request)->paginate(5)->withQueryString()
-            // Real page route, not the implicit current-request path —
-            // this is also built from within documentsRefresh() (the
-            // live-poll fragment route); see paginateContainers()'s
-            // docblock for the full reasoning.
-            ->withPath(route('admin.documents.index'));
+        // Feature: client-side row fitting — see resources/js/app.js's
+        // initFittedPagination() and DocumentController::dashboard()'s
+        // matching docblock. Every matching document is sent in one
+        // response; the browser measures the whole list and works out
+        // every page's real boundary itself.
+        $documents = $this->buildDocumentTrackingQuery($request)->get();
 
         $categories = WorkflowStage::configured()->select('document_category')->distinct()->orderBy('document_category')->pluck('document_category');
         $originators = User::where('role', 'originator')->orderBy('full_name')->get(['user_id', 'full_name']);
@@ -2597,12 +2426,7 @@ class AdminController extends Controller
      */
     public function documentsRefresh(Request $request)
     {
-        $documents = $this->buildDocumentTrackingQuery($request)->paginate(5)->withQueryString()
-            // Real page route, not the implicit current-request path —
-            // this is also built from within documentsRefresh() (the
-            // live-poll fragment route); see paginateContainers()'s
-            // docblock for the full reasoning.
-            ->withPath(route('admin.documents.index'));
+        $documents = $this->buildDocumentTrackingQuery($request)->get();
 
         return view('admin.partials.documents-results', compact('documents'));
     }

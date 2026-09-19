@@ -3,8 +3,13 @@
 @section('page-title', 'Audit Logs')
 
 @section('content')
-<div class="bg-white rounded-xl shadow-card border border-surface-200 overflow-hidden">
-    <form method="GET" class="px-6 py-4 border-b border-surface-200 space-y-3">
+{{-- Capped to the device's own viewport height (Feature: pagination, not
+     internal scrolling, absorbs a long audit trail). Height is set by JS
+     (see resources/js/app.js's sizeCappedCard()) — a stable wrapper a
+     live swap never replaces (only #audit-results inside it is), so it's
+     measured once on load, not per-swap. --}}
+<div id="audit-card" class="bg-white rounded-xl shadow-card border border-surface-200 overflow-hidden flex flex-col">
+    <form method="GET" class="px-6 py-4 border-b border-surface-200 space-y-3 flex-shrink-0">
         <div class="relative">
             <svg class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-surface-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z"/>
@@ -47,36 +52,45 @@
         </div>
     </form>
 
-    <div id="audit-results" data-poll-url="{{ route('admin.audit.logs.poll') }}" data-refresh-url="{{ route('admin.audit.logs.refresh') }}">
+    <div id="audit-results" class="flex-1 min-h-0 overflow-hidden flex flex-col"
+        data-poll-url="{{ route('admin.audit.logs.poll') }}" data-refresh-url="{{ route('admin.audit.logs.refresh') }}">
         @include('admin.partials.audit-results')
     </div>
 </div>
 
 <script>
-    // The results table scrolls internally instead of the whole page —
-    // same technique already proven on Document Tracker and the Control
-    // Center's Recent Activity: measure the real remaining space down to
-    // <main>'s own bottom edge and fill exactly that, rather than a fixed
-    // guess. The pagination footer below the table has to stay visible
-    // no matter what, so its own height is subtracted out of the budget
-    // too — otherwise the table's scroll area would claim space the
-    // footer actually needs, pushing the footer (and the page) to
-    // overflow instead.
-    function sizeAuditTable() {
-        const scrollEl = document.getElementById('audit-table-scroll');
-        const footerEl = document.getElementById('audit-pagination-footer');
-        const mainEl = document.querySelector('main');
-        if (!scrollEl || !mainEl) return;
-
-        const mainPaddingBottom = parseFloat(getComputedStyle(mainEl).paddingBottom) || 0;
-        const footerHeight = footerEl ? footerEl.getBoundingClientRect().height : 0;
-        const available = mainEl.getBoundingClientRect().bottom - mainPaddingBottom - footerHeight - scrollEl.getBoundingClientRect().top;
-        scrollEl.style.maxHeight = Math.max(available - 8, 160) + 'px';
-    }
-
     document.addEventListener('DOMContentLoaded', function () {
-        sizeAuditTable();
-        window.addEventListener('resize', sizeAuditTable);
+        // See resources/js/app.js's sizeCappedCard() docblock.
+        const auditCard = document.getElementById('audit-card');
+        sizeCappedCard(auditCard);
+        window.addEventListener('resize', () => sizeCappedCard(auditCard));
+
+        // Fitted pagination — see resources/js/app.js's
+        // initFittedPagination() for the full mechanism (shared with
+        // Document Tracking/User Accounts/Your Submissions). Replaces the
+        // old sizeAuditTable() internal-scroll-area approach, which — like
+        // every other fixed-per-page-plus-scroll workaround in this app's
+        // history — either scrolled a page that could have shown more, or
+        // still didn't fit and needed the internal scrollbar anyway.
+        const fittedPagination = initFittedPagination('audit-results', '.audit-row');
+
+        // Feature: return to the same page after clicking "View" into a
+        // document's Tracking page and coming back — pagination here is
+        // entirely client-side (no ?page= in the URL to restore from), so
+        // the row's "View" link stashes the page it was on into
+        // sessionStorage right before navigating away (see
+        // admin/partials/audit-row.blade.php's "View" link); consumed
+        // (read once, then cleared) here so
+        // it only ever fires on a genuine return trip, not every ordinary
+        // visit to this page. Best-effort — if the list changed in the
+        // meantime, "page 10" may show slightly different rows than it did
+        // before, which is an acceptable trade-off of not tracking a fixed
+        // server-side page at all anymore.
+        const returnPage = parseInt(sessionStorage.getItem('auditLogsReturnPage'), 10);
+        if (returnPage) {
+            sessionStorage.removeItem('auditLogsReturnPage');
+            fittedPagination.goToPage(returnPage);
+        }
 
         // Auto-submits the surrounding <form> the moment any of the four
         // server-side filters change (Action, Employees, From, To) —
@@ -108,6 +122,11 @@
             let visibleCount = 0;
 
             rows.forEach((row) => {
+                // A row pagination has hidden on another page (see
+                // resources/js/app.js's showPage()) stays exactly as
+                // pagination left it — same reasoning as originator/
+                // dashboard.blade.php's applySubmissionFilter().
+                if (row.dataset.fittedOffPage === '1') return;
                 const matches = term === ''
                     || row.dataset.documentTitle.includes(term)
                     || (idTerm !== '' && row.dataset.documentId === idTerm);
@@ -138,8 +157,12 @@
             target: resultsEl,
             preserveQueryString: true,
             onSwap: function (signalData) {
+                // refit() first, THEN re-apply the search term — refit()
+                // resets every row's page/hidden state from scratch, so
+                // running it after the filter would just wipe out
+                // whatever the filter had just done.
+                fittedPagination.refit();
                 applyDocumentFilter(signalData);
-                sizeAuditTable();
             },
         };
 

@@ -349,7 +349,10 @@ it('expands a document row to show the full movement timeline', function () {
 
     $response->assertOk();
     $response->assertSee('history-movements-' . $assignment->document_id, false);
-    $response->assertSee('Full movement history');
+    // The old "Full movement history" caption is gone — <x-document-tracker>
+    // (see resources/views/components/document-tracker.blade.php) supplies
+    // its own "Document Tracker" label now.
+    $response->assertSee('Document Tracker');
 });
 
 it('merges a self-triggered rejection cascade into ONE summary badge instead of two identical ones', function () {

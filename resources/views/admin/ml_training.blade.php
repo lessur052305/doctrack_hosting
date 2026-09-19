@@ -3,7 +3,31 @@
 @section('page-title', 'Machine Learning Training')
 
 @section('content')
-<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+{{-- Jump nav — the classifier and approval-time cards below can each run
+     fairly long (training history, the training queue, per-group approval
+     stats), so this gives a direct way to reach either one instead of
+     hunting through the page. Fixed near the top, centered as a horizontal
+     row; only two destinations, so no active-section tracking/highlighting
+     — that's complexity you wouldn't notice the benefit of with just two
+     stops. Plain anchor links — layouts/app.blade.php's scroll-smooth on
+     <main> (the actual scrolling element on every page, not the window)
+     already makes these glide instead of jump-cutting. --}}
+<div class="fixed top-20 left-1/2 -translate-x-1/2 z-20 flex flex-row gap-2">
+    <a href="#ml-classification-card"
+        class="px-4 py-2 rounded-full bg-white shadow-card border border-surface-200 text-xs font-semibold text-surface-700 hover:text-primary-700 hover:border-primary-300 transition-colors text-center leading-tight">
+        Classification
+    </a>
+    <a href="#ml-approval-time-card"
+        class="px-4 py-2 rounded-full bg-white shadow-card border border-surface-200 text-xs font-semibold text-surface-700 hover:text-primary-700 hover:border-primary-300 transition-colors text-center leading-tight">
+        Approval Time
+    </a>
+</div>
+
+{{-- mt-12 clears the fixed jump-nav row above, which sits outside
+     normal document flow (position: fixed) and would otherwise overlap
+     this page's own top content. --}}
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-12">
 
     @if(session('warning'))
         <div class="lg:col-span-3 rounded-xl bg-processing-50 border border-processing-500/25 text-processing-700 px-4 py-3 text-sm shadow-sm">
@@ -19,18 +43,12 @@
         </div>
     @endif
 
-    <div id="ml-review-panels" class="contents"
-        data-refresh-url="{{ route('admin.ml.review.refresh') }}"
-        data-poll-url="{{ route('admin.ml.review.poll') }}">
-        @include('admin.partials.ml_review_panels')
-    </div>
-
-    {{-- One-time-only bootstrap — see WorkflowService::ingest()'s
-         $isAmbiguous docblock: automatic classification needs SOME
-         trained model to check a document against in the first place,
-         so this one manual step can't be automated away, unlike every
-         retrain after it (see AutoTrainClassifier). Disappears for good
-         the moment a model actually exists. --}}
+    {{-- One-time-only bootstrap — classification is fully automatic (see
+         WorkflowService::ingest()), but that still needs SOME trained
+         model to check a document against in the first place, so this one
+         manual step can't be automated away, unlike every retrain after
+         it (see AutoTrainClassifier). Disappears for good the moment a
+         model actually exists. --}}
     @unless($activeModel)
     <div class="lg:col-span-2">
         <div class="bg-white rounded-xl shadow-card border border-surface-200 p-6">
@@ -150,38 +168,15 @@
 </div>
 
 <script>
-    // Same live-update pattern as the admin dashboard's overview widget
-    // (see admin/dashboard.blade.php) — a new low-confidence upload, or
-    // another admin confirming/rejecting one, shows up here instantly via
-    // Reverb instead of waiting for a manual reload.
+    // Active Model / Training History / Estimated Approval Time / Training
+    // Queue panels — updates the instant either model finishes training
+    // (manual "Train Model" click, AutoTrainClassifier's automatic
+    // retrain, or ApprovalTimeMlService's scheduled/event-driven run — see
+    // App\Events\MlModelTrained), AND the instant any document's status
+    // changes (see App\Events\DocumentStatusChanged) — a document getting
+    // routed is exactly what grows the Training Queue count below, even
+    // when no model has actually retrained yet.
     document.addEventListener('DOMContentLoaded', function () {
-        const panelsEl = document.getElementById('ml-review-panels');
-        if (!panelsEl) return;
-
-        const opts = {
-            refreshUrl: panelsEl.dataset.refreshUrl,
-            target: panelsEl,
-            // Was missing before — a poll/channel swap was silently
-            // resetting whichever page of ML Review / Readability Review
-            // you had open back to page 1, since it fetched refreshUrl
-            // with no query string at all.
-            preserveQueryString: true,
-        };
-
-        startLiveChannel('admin-dashboard', '.document.status-changed', opts);
-        startLivePoll({ ...opts, pollUrl: panelsEl.dataset.pollUrl });
-
-        // Both Awaiting ML Review and Content Readability Review
-        // pagination live inside this one container — see
-        // enableAjaxPagination()'s docblock in app.js for why one shared
-        // fragment fetch correctly handles both.
-        enableAjaxPagination(panelsEl, opts);
-
-        // Active Model / Training History / Estimated Approval Time panels
-        // — updates the instant either model finishes training (manual
-        // "Train Model" click, AutoTrainClassifier's automatic retrain, or
-        // ApprovalTimeMlService's scheduled run), same live-then-poll
-        // pattern as the review queue above. See App\Events\MlModelTrained.
         const metricsEl = document.getElementById('ml-metrics-panels');
         if (metricsEl) {
             const metricsOpts = {
@@ -189,6 +184,7 @@
                 target: metricsEl,
             };
             startLiveChannel('admin-dashboard', '.ml.model-trained', metricsOpts);
+            startLiveChannel('admin-dashboard', '.document.status-changed', metricsOpts);
             startLivePoll({ ...metricsOpts, pollUrl: metricsEl.dataset.pollUrl });
         }
     });

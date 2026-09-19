@@ -180,7 +180,17 @@ class ApprovalController extends Controller
             ->whereHas('document', fn ($q) => $q->whereNotIn('global_status', ['approved', 'auto_approved', 'rejected']));
     }
 
-    private function buildQueue(Request $request, int $userId): array
+    /**
+     * The full, unfiltered, correctly-ordered container list for one
+     * approver's queue — everything buildQueue() below does BEFORE its
+     * priority/document search filters and pagination get applied.
+     * Extracted so pageForDocument() (Feature: notification click scrolls
+     * straight to the document instead of dumping the approver at the top
+     * of their queue — see NotificationController::markRead()) can find a
+     * document's position using the exact same ordering the queue itself
+     * renders with, rather than a second, potentially-drifting query.
+     */
+    private function unfilteredContainers(int $userId): \Illuminate\Support\Collection
     {
         $pending = $this->pendingQueryFor($userId)
             ->with(['document.batch', 'document.originator', 'document.assignments.approver', 'stage'])
@@ -188,21 +198,13 @@ class ApprovalController extends Controller
             ->orderBy('sla_expires_at')
             ->get();
 
-        // Raw assignment count (same unit poll() returns), not the number
-        // of grouped containers below — passed to the view as the polling
-        // JS's starting baseline so "N new" comparisons are apples-to-apples.
-        // Deliberately excludes the resolved-but-in-flight rows merged in
-        // below — this counts only what still needs THIS approver's own
-        // action, not everything visible in the queue.
-        $initialPendingCount = $pending->count();
-
         $resolvedInFlight = $this->resolvedButInFlightQueryFor($userId, $pending->pluck('document_id')->unique())
             ->with(['document.batch', 'document.originator', 'document.assignments.approver', 'stage'])
             ->get();
 
         $relevant = $pending->concat($resolvedInFlight);
 
-        $containers = $relevant
+        return $relevant
             ->groupBy(fn (DocumentAssignment $a) => $a->document->batch_id ? 'batch-' . $a->document->batch_id : 'doc-' . $a->document_id)
             ->map(function ($groupAssignments) {
                 $first = $groupAssignments->first();
@@ -225,6 +227,38 @@ class ApprovalController extends Controller
             ->sortBy(fn ($c) => $c->due_date)
             ->sortBy(fn ($c) => $this->containerPriorityRank($c))
             ->values();
+    }
+
+    /**
+     * Which page (at the queue's own 10/page — see buildQueue()) a given
+     * document currently sits on in this approver's OWN, unfiltered queue
+     * — null if it isn't in there at all (already fully resolved and no
+     * longer in-flight, or never assigned to this approver). Deliberately
+     * ignores any priority/document filter a viewer might currently have
+     * active — a notification link should always find the document
+     * regardless of what the approver happened to have typed into the
+     * search box last.
+     */
+    public function pageForDocument(int $userId, int $documentId, int $perPage = 10): ?int
+    {
+        $containers = $this->unfilteredContainers($userId);
+
+        $index = $containers->search(fn ($c) => $c->documents->has($documentId));
+
+        return $index === false ? null : intdiv($index, $perPage) + 1;
+    }
+
+    private function buildQueue(Request $request, int $userId): array
+    {
+        $containers = $this->unfilteredContainers($userId);
+
+        // Raw assignment count (same unit poll() returns), not the number
+        // of grouped containers below — passed to the view as the polling
+        // JS's starting baseline so "N new" comparisons are apples-to-apples.
+        // Deliberately excludes the resolved-but-in-flight rows merged in
+        // below — this counts only what still needs THIS approver's own
+        // action, not everything visible in the queue.
+        $initialPendingCount = $this->pendingQueryFor($userId)->count();
 
         if ($request->filled('priority')) {
             $wanted = $request->string('priority');

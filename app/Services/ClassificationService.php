@@ -202,6 +202,55 @@ class ClassificationService
     }
 
     /**
+     * Read-only visibility into autoTrainIfDue()'s own eligibility query —
+     * lets the ML Training admin page show the actual queue building up
+     * toward the next auto-retrain (Feature: admin can see documents
+     * piling up for auto-retraining) instead of that trigger being
+     * invisible until it fires. Mirrors the exact same query autoTrainIfDue()
+     * uses, so "X of Y needed" here is never out of sync with what will
+     * really trigger a retrain.
+     *
+     * @return array{total_eligible: int, batch_size: int, by_category: \Illuminate\Support\Collection<string,int>, queue: \Illuminate\Support\Collection<int,DocumentRepository>, due_by_age_at: ?Carbon}
+     */
+    public function trainingQueueStatus(): array
+    {
+        $categories = ValidationService::knownCategories();
+
+        // whereHas('assignments') — see autoTrainIfDue()'s identical clause
+        // for why: a document rejected below the random-chance confidence
+        // floor never gets routed (no assignment rows), so its guessed
+        // category was never trustworthy enough to display here as "queued
+        // to teach the model" either.
+        $eligibleByCategory = collect($categories)->mapWithKeys(fn ($category) => [
+            $category => DocumentRepository::where('ml_category', $category)
+                ->where('desired_routing', '!=', 'unrelated')
+                ->whereNotNull('ocr_text')
+                ->whereNull('used_for_training_at')
+                ->whereHas('assignments')
+                ->orderBy('created_at')
+                ->get(['document_id', 'title', 'ml_category', 'created_at']),
+        ]);
+
+        $allEligible = $eligibleByCategory->collapse()->sortBy('created_at')->values();
+        $lastTrained = MlModelRepository::max('last_trained');
+        $maxAgeHours = (int) config('ml.auto_train_max_age_hours', 24);
+
+        return [
+            'total_eligible' => $allEligible->count(),
+            'batch_size' => (int) config('ml.auto_train_batch_size', 5),
+            'by_category' => $eligibleByCategory->map->count(),
+            'queue' => $allEligible->take(20),
+            // Only meaningful once something is actually waiting — with an
+            // empty queue there's nothing for the age fallback to fire on
+            // regardless of how much time has passed (see autoTrainIfDue()'s
+            // $dueByAge, which is gated on $totalEligible > 0 the same way).
+            'due_by_age_at' => ($lastTrained && $allEligible->isNotEmpty())
+                ? Carbon::parse($lastTrained)->addHours($maxAgeHours)
+                : null,
+        ];
+    }
+
+    /**
      * The fully-automatic counterpart to train() (Feature: no manual admin
      * review/retrain) — checked every few minutes by AutoTrainClassifier
      * (config('ml.auto_train_check_interval_minutes')), but only actually
@@ -210,10 +259,9 @@ class ClassificationService
      *     documents have piled up since the last training, OR
      *   - config('ml.auto_train_max_age_hours') has passed since the last
      *     training with at least ONE new document waiting.
-     * "Confidently-classified" mirrors WorkflowService::ingest()'s
-     * $isAmbiguous tiering exactly (high confidence, or a clear margin at
-     * moderate confidence) — the same documents that were trusted enough
-     * to auto-route are trusted enough to teach the model.
+     * Eligibility has no confidence/margin floor of its own (see the
+     * eligibility query below) — any routed document, however unsure the
+     * original guess was, is trusted to teach the model.
      *
      * Requires a model to already be active — this can't bootstrap the
      * very first model from nothing (see AdminController::trainModel(),
@@ -249,13 +297,36 @@ class ClassificationService
         // Oldest-first per category, so a long-waiting document isn't
         // perpetually crowded out by newer ones once the population cap
         // below starts limiting how many get included in one run.
+        //
+        // No confidence/margin floor here (there used to be one) —
+        // WorkflowService::ingest() now routes a document as long as its
+        // confidence beats the random-chance floor, specifically so
+        // documents with real-but-unfamiliar vocabulary reach training
+        // instead of dead-ending. Excluding those same documents from
+        // training here would have quietly undone that: the whole point
+        // is that the model gets to learn the vocabulary it scored low on
+        // — see the re-scoring step below, which shows exactly that
+        // improvement once it happens.
+        //
+        // whereHas('assignments') is the real gate, not global_status: a
+        // document whose confidence fell BELOW the random-chance floor is
+        // rejected in ingest() without ever being routed (zero assignment
+        // rows) — its guessed ml_category was never trustworthy enough to
+        // act on, so it must not be trusted enough to TEACH the model
+        // either (found via a real bug — a since-rejected 20%-confidence
+        // document was silently eligible here before this check existed).
+        // This deliberately still keeps a document an approver later
+        // rejected on its business merits (global_status also 'rejected',
+        // but only AFTER routing — see WorkflowService::completeStage()):
+        // that one passed the confidence floor and validation and reached
+        // a real assignment, so its category label is trustworthy even
+        // though the underlying request was denied.
         $eligibleByCategory = collect($categories)->mapWithKeys(fn ($category) => [
             $category => DocumentRepository::where('ml_category', $category)
                 ->where('desired_routing', '!=', 'unrelated')
                 ->whereNotNull('ocr_text')
                 ->whereNull('used_for_training_at')
-                ->where(fn ($q) => $q->where('ml_confidence', '>=', config('ml.review_confidence_threshold', 70))
-                    ->orWhere('ml_margin', '>=', config('ml.margin_threshold', 20)))
+                ->whereHas('assignments')
                 ->orderBy('created_at')
                 ->get(),
         ]);
@@ -316,6 +387,33 @@ class ClassificationService
         // isn't retried forever on every subsequent check; it stays part
         // of the corpus for the NEXT run alongside whatever's new by then.
         $usedDocuments->each(fn (DocumentRepository $doc) => $doc->update(['used_for_training_at' => now()]));
+
+        // Re-score this batch against the model that's actually active now
+        // — only when the retrain was KEPT (a genuinely improved model).
+        // A rolled-back attempt reactivates the same model these documents
+        // were already scored against, so re-running classify() would just
+        // reproduce the same numbers; nothing new to show. This is the
+        // visible proof that feeding low-confidence, real-vocabulary
+        // documents into training actually pays off — see
+        // resources/views/originator/partials/tracking-content.blade.php's
+        // "Recheck Confidence: X% → Y%" line, which reads these same
+        // ml_recheck_* columns (previously written by a now-retired manual
+        // admin action, revived here for this automatic use instead).
+        if ($kept) {
+            $usedDocuments->each(function (DocumentRepository $doc) {
+                try {
+                    $recheck = $this->classify((string) $doc->ocr_text);
+                } catch (\Throwable) {
+                    return; // best-effort — never let a re-score failure disturb an already-routed document
+                }
+
+                $doc->update([
+                    'ml_recheck_category' => $recheck['category'],
+                    'ml_recheck_confidence' => $recheck['confidence'],
+                    'ml_rechecked_at' => now(),
+                ]);
+            });
+        }
 
         return [
             'kept' => $kept,

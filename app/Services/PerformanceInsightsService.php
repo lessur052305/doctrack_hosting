@@ -57,6 +57,40 @@ class PerformanceInsightsService
     }
 
     /**
+     * Feature: a Fastest/Slowest toggle on the Performance Insights page —
+     * same MIN_DECISIONS-filtered averages as the fastest* methods above,
+     * just sorted the other way (see rank()'s $descending param), so
+     * "slowest" is never a different, less-trustworthy calculation, only
+     * the opposite end of the exact same ranking.
+     */
+    public function slowestApprovers(int $limit = 10): Collection
+    {
+        return $this->rank(
+            $this->decisions()->groupBy('user_id'),
+            fn (Collection $rows) => $rows->first()->approver_name,
+            $limit, true
+        );
+    }
+
+    public function slowestDepartments(int $limit = 10): Collection
+    {
+        return $this->rank(
+            $this->decisions()->filter(fn ($row) => $row->department)->groupBy('department'),
+            fn (Collection $rows) => $rows->first()->department,
+            $limit, true
+        );
+    }
+
+    public function slowestCategories(int $limit = 10): Collection
+    {
+        return $this->rank(
+            $this->decisions()->groupBy('ml_category'),
+            fn (Collection $rows) => $rows->first()->ml_category,
+            $limit, true
+        );
+    }
+
+    /**
      * Every real (human, non-auto-approved) decision ever made, with the
      * business-hours-aware elapsed time already computed per row — same
      * "sum only real working seconds" reasoning as every other elapsed-time
@@ -95,7 +129,7 @@ class PerformanceInsightsService
     }
 
     /** @param  \Closure(Collection): string  $labelFor */
-    private function rank(Collection $grouped, \Closure $labelFor, int $limit): Collection
+    private function rank(Collection $grouped, \Closure $labelFor, int $limit, bool $descending = false): Collection
     {
         return $grouped
             // Requires MIN_DECISIONS GENUINELY non-zero readings, not just
@@ -116,7 +150,7 @@ class PerformanceInsightsService
                 'avg_seconds' => (int) round($rows->avg('elapsed_seconds')),
                 'decisions_count' => $rows->count(),
             ])
-            ->sortBy('avg_seconds')
+            ->when($descending, fn (Collection $c) => $c->sortByDesc('avg_seconds'), fn (Collection $c) => $c->sortBy('avg_seconds'))
             ->take($limit)
             ->values();
     }

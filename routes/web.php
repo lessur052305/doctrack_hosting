@@ -175,11 +175,8 @@ Route::middleware('auth')->group(function () {
         Route::post('/ml-training/stage/{category}', [AdminController::class, 'stageTrainingSamples'])->middleware('throttle:mutations')->name('ml.training.stage');
         Route::delete('/ml-training/stage/{category}', [AdminController::class, 'clearTrainingStaging'])->name('ml.training.stage.clear');
         Route::delete('/ml-training/samples/{sample}', [AdminController::class, 'destroyTrainingSample'])->name('ml.training.sample.destroy');
-        Route::get('/ml-training/review/refresh', [AdminController::class, 'mlReviewQueueRefresh'])->name('ml.review.refresh');
-        Route::get('/ml-training/review/poll', [AdminController::class, 'mlReviewQueuePoll'])->name('ml.review.poll');
         Route::get('/ml-training/metrics/refresh', [AdminController::class, 'mlMetricsRefresh'])->name('ml.metrics.refresh');
         Route::get('/ml-training/metrics/poll', [AdminController::class, 'mlMetricsPoll'])->name('ml.metrics.poll');
-        Route::post('/ml-training/readability-review/{document}', [AdminController::class, 'reviewReadability'])->name('ml.review.readability');
 
         Route::get('/sla-queue', [AdminController::class, 'slaQueue'])->name('sla.queue');
         Route::get('/sla-queue/refresh', [AdminController::class, 'slaQueueRefresh'])->middleware('throttle:polling')->name('sla.queue.refresh');
@@ -252,6 +249,11 @@ Route::middleware('auth')->group(function () {
 
         Route::get('/archive', [ArchiveController::class, 'index'])->name('archive');
         Route::post('/archive/legacy', [ArchiveController::class, 'storeLegacy'])->middleware('throttle:mutations')->name('archive.legacy');
+        // Feature: "Import Legacy Document" as a button + popup instead of
+        // a permanently-visible collapsible bar — fetched into
+        // components/kpi-drilldown-modal.blade.php by the "+ Import Legacy
+        // Document" button in archive/partials/results.blade.php's header.
+        Route::get('/archive/legacy-form', [ArchiveController::class, 'legacyForm'])->name('archive.legacy.form');
     });
 
     // Archive download and live-search refresh are shared across all three
@@ -274,6 +276,18 @@ Route::middleware('auth')->group(function () {
     // Admin may also inspect any document's tracking page for support purposes.
     Route::middleware('role:admin,originator')->get('/documents/{document}/track', [DocumentController::class, 'show'])
         ->name('documents.track');
+
+    // Feature: the shared Document Tracker popup — fetched into
+    // components/kpi-drilldown-modal.blade.php's openKpiDrilldown() from
+    // Audit Logs, Approver Decision History, and Archive, all three of
+    // which used to expand this inline with no guaranteed room to show
+    // it in. role:admin,originator,approver + the viewTracking policy
+    // (see DocumentRepositoryPolicy) is the same combination viewFile
+    // below already uses — an approver only passes it for a document
+    // they're actually assigned to, not any document by id.
+    Route::middleware('role:admin,originator,approver')
+        ->get('/documents/{document}/tracker-modal', [DocumentController::class, 'trackerModal'])
+        ->name('documents.trackerModal');
 
     // Inline (not force-download) original-file viewer, embedded in the
     // Approver dashboard and reachable by the originator/admin too.

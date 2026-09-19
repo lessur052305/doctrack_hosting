@@ -51,7 +51,7 @@
             </p>
 
             <div class="mb-4">
-                <x-workflow-stage-list :document="$doc" />
+                <x-workflow-stage-list :document="$doc" :show-due-date="false" />
             </div>
 
             <ul class="mb-4 divide-y divide-surface-100 border border-surface-100 rounded-lg overflow-hidden">

@@ -20,9 +20,20 @@
         const wrapperEl = document.getElementById('calendar-wrapper');
         if (!wrapperEl) return;
 
+        // See resources/js/app.js's sizeCappedCard() docblock. #calendar-
+        // card is the swap fragment's own root (a fresh element after
+        // every live swap — see admin/partials/calendar-grid.blade.php),
+        // so this has to re-run every swap too, not just once on load.
+        function resizeCalendarCard() {
+            sizeCappedCard(document.getElementById('calendar-card'));
+        }
+        resizeCalendarCard();
+        window.addEventListener('resize', resizeCalendarCard);
+
         const opts = {
             refreshUrl: wrapperEl.dataset.refreshUrl,
             target: wrapperEl,
+            onSwap: resizeCalendarCard,
         };
 
         startLiveChannel('admin-dashboard', '.admin.activity-logged', opts);

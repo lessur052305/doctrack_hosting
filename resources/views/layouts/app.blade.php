@@ -5,6 +5,28 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>@yield('title', 'Document Classification & Tracking System')</title>
     <meta name="csrf-token" content="{{ csrf_token() }}">
+    <script>
+        // Stashes and immediately clears a "#document-N" URL fragment
+        // (Feature: notification click centers the document — see
+        // resources/js/app.js's matching DOMContentLoaded listener) before
+        // the browser gets any chance to act on it natively. Has to run
+        // this early (synchronously, at the very top of <head>, not inside
+        // a DOMContentLoaded listener in app.js): the browser can perform
+        // its own default fragment scroll (always top-aligned, never
+        // centered) and clear location.hash as part of that at any point
+        // once the matching element exists in the DOM — whether that
+        // happens before or after app.js's own DOMContentLoaded handler
+        // gets a turn to run is a race that depends on how fast the page's
+        // scripts happen to load, which isn't consistent from one load to
+        // the next. Reading+clearing the hash here, before the <body> (and
+        // so the target element) even exists yet, means the browser never
+        // has anything to act on natively in the first place — removing
+        // the race entirely instead of trying to win it.
+        window.__pendingScrollHash = location.hash.match(/^#(document-\d+)$/)?.[1] ?? null;
+        if (window.__pendingScrollHash) {
+            history.replaceState(null, '', location.pathname + location.search);
+        }
+    </script>
     {{--
         Business-hours config for the client-side real-remaining ticker
         (see the script block below) — cheap (one small holiday query),
@@ -109,7 +131,13 @@
     <div class="h-full flex flex-col overflow-hidden">
 
         {{-- Top bar --}}
-        <header class="flex-shrink-0 z-10 bg-white/85 backdrop-blur-md border-b border-surface-200/80 shadow-[0_1px_0_0_rgb(15_23_42_/_0.02)] h-16 flex items-center px-4 sm:px-8">
+        {{-- min-h-16 (not a fixed h-16) — the approver identity block in
+             x-user-badge below is three lines (department/category/stage,
+             name, position), taller than the plain role pill this header
+             was originally sized for; letting the header grow to fit it
+             keeps every role's badge fully visible instead of clipping or
+             spilling out the bottom edge. --}}
+        <header class="flex-shrink-0 z-10 bg-white/85 backdrop-blur-md border-b border-surface-200/80 shadow-[0_1px_0_0_rgb(15_23_42_/_0.02)] min-h-16 py-2 flex items-center px-4 sm:px-8">
             <button id="sidebar-toggle" type="button" class="-ml-1 mr-3 p-2 rounded-lg text-surface-500 hover:bg-surface-100 hover:text-surface-900" aria-label="Toggle menu" aria-expanded="false" aria-controls="sidebar">
                 <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16"/>
@@ -119,7 +147,7 @@
             <div class="ml-auto flex items-center gap-4">
                 @auth
                     <x-notification-bell />
-                    <span class="text-xs px-2.5 py-1 rounded-full bg-primary-50 text-primary-700 ring-1 ring-inset ring-primary-500/15 font-medium capitalize">{{ auth()->user()->role }}</span>
+                    <x-user-badge />
                 @endauth
             </div>
         </header>
@@ -160,7 +188,7 @@
             </div>
         @endauth
 
-        <main class="flex-1 overflow-y-auto p-4 sm:p-8 space-y-6">
+        <main class="flex-1 overflow-y-auto scroll-smooth p-4 sm:p-8 space-y-6">
             @if(session('status'))
                 <div class="rounded-xl bg-approved-50 border border-approved-500/25 text-approved-700 px-4 py-3 text-sm font-medium shadow-sm flex items-center gap-2.5 transition-opacity duration-300" role="status">
                     <svg class="w-5 h-5 flex-shrink-0 text-approved-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>

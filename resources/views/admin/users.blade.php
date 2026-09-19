@@ -116,10 +116,36 @@
         const tableEl = document.getElementById('users-table');
         if (!tableEl) return;
 
+        // Fitted pagination — see resources/js/app.js's
+        // initFittedPagination() for the full mechanism (shared with the
+        // originator "Your Submissions" page). Targets #users-list (the
+        // card itself, inside the fragment), not #users-table (the outer
+        // live-refresh wrapper below) — that's what carries the actual
+        // capped height. refit() is re-run after a live swap below, since
+        // that replaces this fragment's rows/pagination container out from
+        // under the running instance.
+        const fittedPagination = initFittedPagination('users-list', '.user-row');
+
+        // See resources/js/app.js's sizeCappedCard() docblock. Unlike
+        // most of this app's other capped cards, #users-list is the
+        // fragment's own root — a live swap replaces it wholesale (fresh
+        // element, no inline style), so this has to re-run every swap too,
+        // not just once on load like originator/dashboard.blade.php's
+        // #submissions-card (a stable wrapper the swap never touches).
+        function resizeUsersCard() {
+            sizeCappedCard(document.getElementById('users-list'));
+        }
+        resizeUsersCard();
+        window.addEventListener('resize', resizeUsersCard);
+
         const opts = {
             refreshUrl: tableEl.dataset.refreshUrl,
             target: tableEl,
             preserveQueryString: true, // keep ?show_inactive=1 across a live swap
+            onSwap: () => {
+                resizeUsersCard();
+                fittedPagination.refit();
+            },
         };
 
         startLiveChannel('admin-dashboard', '.user.verified', opts);

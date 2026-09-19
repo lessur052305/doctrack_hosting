@@ -17,12 +17,12 @@ beforeEach(fn () => Carbon\Carbon::setTestNow(Carbon\Carbon::parse('2026-08-12 1
 
 /**
  * Coverage for WorkflowService::ingest()'s automatic tiering (Feature: no
- * manual admin review) — replaces the old confidence-only hold. A document
- * is trusted and routed automatically whenever EITHER its confidence is
- * high, OR its margin over the runner-up category is wide enough even at
- * moderate confidence; it's only rejected as genuinely ambiguous when
- * BOTH are weak. See WorkflowService::ingest()'s $isAmbiguous docblock and
- * ClassificationService::predictConfidenceAndMargin().
+ * manual admin review anywhere in this decision) — a document is trusted
+ * and routed automatically as long as the classifier's confidence beats
+ * the random-chance floor for however many categories are trained (1/N —
+ * with the 3 categories seeded below, ~33.33%). Margin and readability are
+ * recorded but never block routing — see WorkflowService::ingest()'s
+ * $belowChanceFloor docblock and ValidationService::validate()'s.
  */
 function tieringDoc(float $confidence, float $margin, string $content): array
 {
@@ -61,19 +61,24 @@ test('high confidence routes automatically and adds nothing ambiguous to the rec
         ->and(DocumentAssignment::where('document_id', $document->document_id)->count())->toBe(1);
 });
 
-test('moderate confidence with a clear margin over the runner-up is still trusted and routed automatically', function () {
-    // Below review_confidence_threshold (70) on its own, but a wide
-    // enough lead over the runner-up category that the guess is still
-    // trustworthy — this is the new capability the old confidence-only
-    // gate couldn't express.
-    ['document' => $document] = tieringDoc(confidence: 45.0, margin: 25.0, content: tieringContent());
+test('confidence just above the random-chance floor still routes automatically, even with a razor-thin margin', function () {
+    // 3 trained categories (Job Order, Purchase Requisition, Service
+    // Report) => chance floor is 100/3 ≈ 33.33%. 35% clears it despite an
+    // almost-flat margin — margin no longer gates anything, only
+    // confidence-vs-chance-floor does. This is exactly the case that used
+    // to get rejected as "ambiguous" purely for having a thin lead, even
+    // though the guess itself was perfectly informative.
+    ['document' => $document] = tieringDoc(confidence: 35.0, margin: 2.0, content: tieringContent());
 
     expect($document->global_status)->toBe('classified_validated')
+        ->and($document->ml_margin)->toBe(2.0)
         ->and(DocumentAssignment::where('document_id', $document->document_id)->count())->toBe(1);
 });
 
-test('moderate confidence with a flat margin is rejected as ambiguous, not routed', function () {
-    ['document' => $document, 'originator' => $originator] = tieringDoc(confidence: 45.0, margin: 8.0, content: tieringContent());
+test('confidence below the random-chance floor is rejected, not routed', function () {
+    // 20% is worse than guessing among 3 categories (~33.33%) — the model
+    // genuinely has no real opinion here, regardless of margin.
+    ['document' => $document, 'originator' => $originator] = tieringDoc(confidence: 20.0, margin: 5.0, content: tieringContent());
 
     expect($document->global_status)->toBe('rejected')
         ->and(DocumentAssignment::where('document_id', $document->document_id)->count())->toBe(0)
@@ -83,16 +88,16 @@ test('moderate confidence with a flat margin is rejected as ambiguous, not route
             ->exists())->toBeTrue();
 });
 
-test('a genuinely ambiguous document can be resubmitted with an explicit routing_mode choice', function () {
-    ['document' => $document, 'originator' => $originator] = tieringDoc(confidence: 40.0, margin: 5.0, content: tieringContent());
+test('a document rejected for being below the chance floor can be resubmitted with an explicit routing_mode choice', function () {
+    ['document' => $document, 'originator' => $originator] = tieringDoc(confidence: 20.0, margin: 5.0, content: tieringContent());
     expect($document->global_status)->toBe('rejected');
 
     // 'unrelated' specifically — since the classifier is still mocked to
-    // the same ambiguous result, this proves the originator's own
-    // routing_mode choice is what gets them past the ambiguity this
-    // time (routing_mode 'unrelated' is exempt from the classification-
-    // ambiguity check entirely — see ingest()'s $isAmbiguous docblock),
-    // not a lucky re-roll of the classifier's guess.
+    // the same low-confidence result, this proves the originator's own
+    // routing_mode choice is what gets them past the chance-floor check
+    // this time ('unrelated' is exempt from it entirely — see ingest()'s
+    // $belowChanceFloor docblock), not a lucky re-roll of the classifier's
+    // guess.
     $response = $this->actingAs($originator)->post(route('originator.documents.resubmit', $document), [
         'file' => UploadedFile::fake()->createWithContent('revised.txt', tieringContent()),
         'due_date' => now()->addDay()->format('Y-m-d\TH:i'),

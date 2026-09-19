@@ -51,13 +51,20 @@ class DocumentController extends Controller
     /** Originator dashboard: drag-drop upload + live tracking list (DFD 3.1-3.4, 4.0). */
     public function dashboard(Request $request)
     {
+        // Feature: client-side row fitting — see resources/js/app.js's
+        // initFittedPagination(). The server sends every matching document
+        // in one response (never truncated/batched) so the browser — the
+        // only thing that knows its own real pixel height — can measure
+        // the whole list up front and work out every page's exact real
+        // boundary itself, including which page a direct page-number click
+        // lands on. A server-side page size, even a generous one, can only
+        // ever know one page ahead, which is what forced the pagination
+        // component to lose its numbered page links in an earlier version
+        // of this feature. Fine at this app's real scale (one originator's
+        // own documents); would need revisiting only if that list ever
+        // grew into the thousands.
         $documents = $this->documentsQuery($request, $request->user()->user_id)
-            ->latest('upload_date')->paginate(5)->withQueryString()
-            // Real page route, not the implicit current-request path —
-            // this is also built from within refresh() (the live-poll
-            // fragment route); see AdminController::paginateContainers()'s
-            // docblock for the full reasoning.
-            ->withPath(route('originator.dashboard'));
+            ->latest('upload_date')->get();
 
         $categories = ValidationService::knownCategories();
 
@@ -74,12 +81,7 @@ class DocumentController extends Controller
     public function refresh(Request $request)
     {
         $documents = $this->documentsQuery($request, $request->user()->user_id)
-            ->latest('upload_date')->paginate(5)->withQueryString()
-            // Real page route, not the implicit current-request path —
-            // this is also built from within refresh() (the live-poll
-            // fragment route); see AdminController::paginateContainers()'s
-            // docblock for the full reasoning.
-            ->withPath(route('originator.dashboard'));
+            ->latest('upload_date')->get();
 
         return view('originator.partials.submissions', compact('documents'));
     }
@@ -257,16 +259,39 @@ class DocumentController extends Controller
     }
 
     /**
+     * Feature: the shared Document Tracker popup (see routes/web.php's
+     * documents.trackerModal) — fetched into components/kpi-drilldown-
+     * modal.blade.php by Audit Logs, Approver Decision History, and
+     * Archive. Same viewTracking authorization as show() above; this just
+     * skips loading everything show() needs for the full page (approval
+     * stages, revision annotations, ...) since the modal only ever
+     * renders <x-document-tracker>.
+     */
+    public function trackerModal(DocumentRepository $document)
+    {
+        $this->authorize('viewTracking', $document);
+
+        $document->load('auditLogs.user');
+
+        return view('components.document-tracker-modal-body', compact('document'));
+    }
+
+    /**
      * Feature: originator-directed routing — the "pick approver(s)"
-     * follow-up step for a document uploaded with routing_mode 'custom'
-     * or 'unrelated' (see WorkflowService::ingest()), shown once
+     * follow-up step for a document uploaded with routing_mode 'custom' or
+     * 'unrelated' (see WorkflowService::ingest()), shown once
      * classification/validation have actually cleared and
-     * pending_custom_routing_at is set. The eligible pool differs by
-     * which mode was chosen: a known-category document offers only
-     * approvers actually eligible for that category (WorkflowService::
-     * eligibleApproversForCategory()); a document flagged as not
-     * belonging to any category has no real category to scope by, so
-     * every active approver is offered instead.
+     * pending_custom_routing_at is set.
+     *
+     * The eligible pool AND its layout differ by which mode was chosen:
+     *   - 'custom' (a known category): scoped to that category's actually
+     *     eligible approvers, grouped Category -> Stage -> Approver (Feature:
+     *     originator sees exactly who covers which stage, not just a flat
+     *     list) — built from WorkflowService::eligibleApproversForStage(),
+     *     called once per configured stage rather than the deduped, stage-
+     *     agnostic union eligibleApproversForCategory() normally returns.
+     *   - 'unrelated' (no real category to scope by): every active
+     *     approver, grouped by department only.
      *
      * Renders a fragment, not a full page — fetched into the shared
      * openKpiDrilldown() modal (see components/kpi-drilldown-modal.
@@ -280,30 +305,55 @@ class DocumentController extends Controller
 
         abort_unless($document->pending_custom_routing_at !== null, 404);
 
-        $approvers = $document->desired_routing === 'unrelated'
-            ? User::where('role', 'approver')->where('is_active', true)->orderBy('full_name')->get()
-            : $this->workflow->eligibleApproversForCategory($document->ml_category)->sortBy('full_name')->values();
+        if ($document->desired_routing === 'unrelated') {
+            $groupedApprovers = $this->groupApproversByDepartment(
+                User::where('role', 'approver')->where('is_active', true)->orderBy('full_name')->get()
+            );
 
-        // Which specific stage(s) each approver is tied to (Feature:
-        // originator can route to the right person for the right stage,
-        // not just the right department/level) — a non-persisted
-        // attribute set here, once per approver, rather than a query per
-        // row in the view.
+            return view('originator.partials.select-approvers-panel', [
+                'document' => $document,
+                'groupedApprovers' => $groupedApprovers,
+                'stageGroups' => null,
+            ]);
+        }
+
+        $stageGroups = WorkflowStage::configured()->forCategory($document->ml_category)
+            ->where('is_archived', false)->orderBy('sequence_order')->get()
+            ->map(fn (WorkflowStage $stage) => (object) [
+                'stage' => $stage,
+                'approvers' => $this->workflow->eligibleApproversForStage($document->ml_category, $stage)
+                    ->sortBy(fn (User $a) => ($a->level === 'head' ? '0_' : '1_') . $a->full_name)->values(),
+            ])
+            // A stage nobody is currently eligible for has nothing to pick
+            // here — omitted rather than shown as an empty, unpickable group.
+            ->filter(fn ($group) => $group->approvers->isNotEmpty())
+            ->values();
+
+        return view('originator.partials.select-approvers-panel', [
+            'document' => $document,
+            'groupedApprovers' => null,
+            'stageGroups' => $stageGroups,
+        ]);
+    }
+
+    /**
+     * Grouped by department, head(s) sorted before staff within each
+     * (Feature: originator can tell at a glance who to route a "just needs
+     * the head's sign-off" document to — see User::LEVELS' docblock:
+     * 'head' specifically means "sits on this category's Final Approval
+     * stage," exactly that person). Used by selectApprovers()'s
+     * 'unrelated' branch.
+     *
+     * @param  \Illuminate\Support\Collection<int, User>  $approvers
+     */
+    private function groupApproversByDepartment($approvers): \Illuminate\Support\Collection
+    {
         $approvers->each(fn (User $approver) => $approver->stages_label = $this->stagesLabelFor($approver));
 
-        // Grouped by department, head(s) sorted before staff within each
-        // (Feature: originator can tell at a glance who to route a "just
-        // needs the head's sign-off" document to — see User::LEVELS'
-        // docblock: 'head' specifically means "sits on this category's
-        // Final Approval stage," exactly that person). A flat,
-        // alphabetical-only list buried the one distinction this
-        // grouping exists to surface.
-        $groupedApprovers = $approvers
+        return $approvers
             ->groupBy(fn (User $approver) => $approver->department ?: 'No Department')
             ->map(fn ($group) => $group->sortBy(fn (User $a) => ($a->level === 'head' ? '0_' : '1_') . $a->full_name)->values())
             ->sortKeys();
-
-        return view('originator.partials.select-approvers-panel', compact('document', 'approvers', 'groupedApprovers'));
     }
 
     /**
@@ -428,10 +478,11 @@ class DocumentController extends Controller
             // Feature: originator-directed routing — same option store()
             // offers on a fresh upload (see WorkflowService::ingest()'s
             // $routingMode docblock). Matters most here for a document
-            // rejected as an ambiguous classification (see ingest()'s
-            // $isAmbiguous branch): the originator can pick a category
-            // themselves via 'custom', rather than leaving the classifier
-            // to guess again and land in the same ambiguous spot.
+            // rejected for confidence below the random-chance floor (see
+            // ingest()'s $belowChanceFloor branch): the originator can
+            // pick a category themselves via 'custom', rather than
+            // leaving the classifier to guess again and land below the
+            // floor a second time.
             'routing_mode' => ['sometimes', 'in:auto,custom,unrelated'],
         ]);
 

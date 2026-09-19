@@ -308,26 +308,29 @@ class WorkflowService
             $document->ml_margin = $result['margin'];
             $document->model_id = $result['model_id'];
 
-            // Automatic tiering (Feature: no manual admin review) — plain
-            // confidence alone can't tell "moderate confidence because of
-            // unfamiliar vocabulary, but still clearly this category"
-            // (e.g. 45/30/25 — a real lead) apart from "genuinely
-            // ambiguous, doesn't confidently match anything" (e.g.
-            // 35/33/32 — no real leader). MARGIN over the runner-up
-            // category is what makes that distinction — see
-            // ClassificationService::predictConfidenceAndMargin()'s
-            // docblock. A document is only genuinely ambiguous when BOTH
-            // its confidence AND its margin are weak; either one alone
-            // being strong is enough to trust it automatically.
+            // Fully automatic (no manual admin review step exists for
+            // classification or readability anymore — see git history for
+            // the admin-review-queue version this replaced). The only
+            // thing that still stops a document on the classifier's say-so
+            // is confidence below the random-chance floor for however many
+            // categories are trained (1/N — with 3 categories, ~33.3%):
+            // below that, the model's pick carries no more information
+            // than guessing, so there's genuinely nothing to route on.
+            // Above it, even a low-but-real lead is trusted and routed —
+            // margin and readability are recorded for insight but never
+            // block anything (see ValidationService::validate()'s
+            // docblock for why: both get suppressed by the exact
+            // vocabulary-hasn't-been-learned-yet documents that most need
+            // to reach training, so gating on either would defeat the
+            // point of the automatic retraining loop below).
             //
             // Never applies to an 'unrelated' document (Feature:
             // originator-directed routing) — ml_category there is only
             // ever the classifier's best guess for reference, never
-            // authoritative, so there's no "which category" question to
-            // resolve for one of these in the first place.
-            $isAmbiguous = $routingMode !== 'unrelated'
-                && $result['confidence'] < config('ml.review_confidence_threshold', 70)
-                && $result['margin'] < config('ml.margin_threshold', 20);
+            // authoritative, so there's no confidence bar to clear in the
+            // first place.
+            $chanceFloor = round(100 / max(1, count(ValidationService::knownCategories())), 2);
+            $belowChanceFloor = $routingMode !== 'unrelated' && $result['confidence'] < $chanceFloor;
 
             AuditLog::record(null, $document->document_id, 'classify',
                 "Classified as '{$result['category']}' (confidence {$result['confidence']}%)" .
@@ -337,42 +340,32 @@ class WorkflowService
             // category to validate against (required_sections/readability
             // are both defined per category) — see ValidationService::
             // validateGeneric()'s docblock for the bare sanity check that
-            // applies instead.
-            $validation = $routingMode === 'unrelated'
-                ? $this->validator->validateGeneric($extraction['text'])
-                : $this->validator->validate($result['category'], $extraction['text']);
+            // applies instead. It still gets a real readability score
+            // against the classifier's best guess, purely for display —
+            // see readabilityAgainst()'s docblock — proving classification
+            // and readability genuinely run on every document, not just
+            // ones routed through a real category.
+            if ($routingMode === 'unrelated') {
+                $validation = $this->validator->validateGeneric($extraction['text']);
+                $readability = $this->validator->readabilityAgainst($result['category'], $extraction['text']);
+                $validation['readability_score'] = $readability['score'];
+                $validation['readability_note'] = $readability['note'];
+            } else {
+                $validation = $this->validator->validate($result['category'], $extraction['text']);
+            }
             $document->is_validated = $validation['is_valid'];
             $document->validation_errors = $validation['errors'];
             $document->readability_score = $validation['readability_score'];
 
-            // Readability failing ALONE (required sections present, word
-            // count met) is a judgment call, not a definite defect — held
-            // for admin review, rather than a flat block with no recourse.
-            // Any OTHER validation failure (missing section, too short) is
-            // objective and stays a hard block: there's nothing for a
-            // human to weigh in on until that's fixed, so no review is
-            // offered. Never set when the classification is ALSO
-            // ambiguous, though — that rejects the document outright
-            // regardless (see $canRoute below), so a readability hold
-            // would just sit orphaned in the admin queue forever with
-            // nothing left to route even once resolved.
-            $needsReadabilityReview = !$isAmbiguous && $validation['readability_only_failure'];
-            if ($needsReadabilityReview) {
-                $document->readability_review_status = 'pending';
-            }
-
-            // An ambiguous classification is rejected outright, regardless
-            // of what validation found — routing it to approvers on a
-            // guessed category nobody's confident in risks the wrong
-            // people deciding it, with no clean way to undo an approval
-            // after the fact (see completeStage()). The originator
-            // resubmits and chooses how it should be routed instead — see
+            // A confidence guess below the chance floor is rejected
+            // outright, regardless of what validation found — there's no
+            // real category to route on. The originator resubmits and
+            // chooses how it should be routed instead — see
             // DocumentController::resubmit()'s routing_mode option.
-            $canRoute = !$isAmbiguous && ($validation['is_valid'] || $needsReadabilityReview);
-            $readyToRoute = $canRoute && !$needsReadabilityReview;
+            $canRoute = !$belowChanceFloor && $validation['is_valid'];
 
             $document->global_status = match (true) {
-                $isAmbiguous => 'rejected',
+                $belowChanceFloor => 'rejected',
                 $canRoute => 'classified_validated',
                 default => 'processing',
             };
@@ -381,11 +374,10 @@ class WorkflowService
             AuditLog::record(null, $document->document_id, 'validate',
                 $validation['is_valid'] ? 'Validation passed.' : 'Validation failed: ' . implode('; ', $validation['errors']));
 
-            if ($isAmbiguous) {
+            if ($belowChanceFloor) {
                 AuditLog::record(null, $document->document_id, 'classification_ambiguous',
-                    "Classification too ambiguous to trust automatically — best guess '{$result['category']}' at " .
-                    "{$result['confidence']}% confidence, only {$result['margin']} points ahead of the runner-up " .
-                    '(needs at least ' . config('ml.margin_threshold', 20) . '). Rejected pending the originator\'s resubmission.');
+                    "Couldn't confidently classify this document — best guess was '{$result['category']}' at " .
+                    "{$result['confidence']}%, too low to trust. Rejected pending the originator's resubmission.");
 
                 NotificationRecord::send($originator->user_id, $document->document_id,
                     "Your document '{$document->title}' doesn't clearly match any of our trained categories " .
@@ -398,17 +390,8 @@ class WorkflowService
                 // originator's own tracking page wouldn't pick up this
                 // rejection live.
                 event(new DocumentStatusChanged($document));
-            } elseif ($readyToRoute) {
+            } elseif ($canRoute) {
                 $this->routeOrAwaitApproverSelection($document);
-            } elseif ($needsReadabilityReview) {
-                NotificationRecord::send($originator->user_id, $document->document_id,
-                    "Your document '{$document->title}' passed classification and its required sections, but its content " .
-                    "didn't clearly match known vocabulary for '{$result['category']}' (readability score " .
-                    "{$validation['readability_score']}%). An admin will review it before it's routed for approval.");
-                $this->notifyAdminsDocumentNeedsReview($document,
-                    "'{$document->title}' needs admin review — content readability score was low " .
-                    "({$validation['readability_score']}%).");
-                event(new DocumentStatusChanged($document));
             } else {
                 NotificationRecord::send($originator->user_id, $document->document_id,
                     "Your document '{$document->title}' failed validation: " . implode('; ', $validation['errors']));
@@ -456,8 +439,7 @@ class WorkflowService
         $document->save();
 
         AuditLog::record(null, $document->document_id, 'extraction_failed',
-            "Text extraction produced no usable content for '{$document->title}' " .
-            "(mime: {$document->mime_type}). Classification and validation were skipped.");
+            'Could not read any usable content from this file, so classification and validation were skipped.');
 
         NotificationRecord::send($originator->user_id, $document->document_id,
             "Your document '{$document->title}' could not be read by the system. " . $document->validation_errors[0]);
@@ -488,7 +470,7 @@ class WorkflowService
         $document->save();
 
         AuditLog::record(null, $document->document_id, 'security_blocked',
-            "'{$document->title}' was blocked by an automated security scan before reaching classification or review.");
+            'Blocked by an automated security scan before it reached classification or review.');
 
         NotificationRecord::send($originator->user_id, $document->document_id,
             "Your document '{$document->title}' could not be accepted — it failed an automatic security scan and was blocked " .
@@ -614,21 +596,20 @@ class WorkflowService
     }
 
     /**
-     * A document can sit in an Admin review queue for an unpredictable
-     * amount of time before ever reaching routeToWorkflow() — either the
-     * ML classifier wasn't confident (see AdminController::
-     * confirmMlReview()) or the content failed the readability check (see
-     * confirmReadabilityReview()). due_date was only ever validated
-     * against the ORIGINAL upload moment (see DocumentController::store()'s
-     * business-hours check), so if review processing ate into the runway,
-     * the approver about to be assigned could inherit a deadline that's
-     * already unrealistically close — or even already passed — through no
-     * fault of their own or the originator's. Restores the exact same
-     * minimum buffer upload itself guarantees, rather than silently
-     * handing the approver a broken countdown. A no-op for the normal
-     * (non-held) path, since routeToWorkflow() runs there within the same
-     * request as the already-validated upload — there's never a realistic
-     * gap to close in that case.
+     * A document flagged for originator-directed routing ('custom' or
+     * 'unrelated' — see ingest()'s $routingMode docblock) can sit waiting
+     * on the originator's own approver pick for an unpredictable amount of
+     * time before ever reaching routeToWorkflow(). due_date was only ever
+     * validated against the ORIGINAL upload moment (see
+     * DocumentController::store()'s business-hours check), so if that wait
+     * ate into the runway, the approver about to be assigned could inherit
+     * a deadline that's already unrealistically close — or even already
+     * passed — through no fault of their own or the originator's. Restores
+     * the exact same minimum buffer upload itself guarantees, rather than
+     * silently handing the approver a broken countdown. A no-op for the
+     * fully automatic path, since routeToWorkflow() runs there within the
+     * same request as the already-validated upload — there's never a
+     * realistic gap to close in that case.
      */
     private function extendDueDateIfReviewQueueAteTheBuffer(DocumentRepository $document): void
     {
@@ -677,16 +658,43 @@ class WorkflowService
      * department are ever offered/accepted there); this exists as a
      * second, independent guarantee at the point routing actually happens,
      * not because the first check is expected to fail.
+     *
+     * Public (not just used internally by eligibleApproversForCategory()
+     * above) — DocumentController::selectApprovers() also calls this
+     * directly, once per configured stage, to build the Category -> Stage
+     * -> Approver picker for originator-directed "custom" routing, instead
+     * of the deduped, stage-agnostic union eligibleApproversForCategory()
+     * returns.
+     *
+     * Head-only on a stage literally named "Final Approval" (Feature: only
+     * a department head signs off on final approval — see User::LEVELS'
+     * docblock: "head = sits on a category's Final Approval stage," which
+     * this now actually enforces instead of just describing). Matched by
+     * name, deliberately NOT "whichever stage happens to be last in the
+     * category's sequence" — that broader position-based reading was
+     * tried first and measurably wrong: plenty of test (and potentially
+     * real) categories have exactly one stage for an unrelated reason,
+     * which would make that one stage "final" by construction and
+     * silently require a head for it too, well beyond what was actually
+     * being asked for. Matching the real, literal stage name every
+     * category's true final stage already carries today stays narrowly
+     * scoped to the actual concern. Every other stage is unaffected;
+     * level has never gated those.
      */
-    private function eligibleApproversForStage(string $category, WorkflowStage $stage): Collection
+    public function eligibleApproversForStage(string $category, WorkflowStage $stage): Collection
     {
         $stageDepartments = $stage->departmentNames();
+        $isFinalApprovalStage = $stage->stage_name === 'Final Approval';
 
         return User::where('role', 'approver')
             ->where('is_active', true)
             ->where('assigned_category', $category)
             ->get()
-            ->filter(function (User $approver) use ($stage, $stageDepartments) {
+            ->filter(function (User $approver) use ($stage, $stageDepartments, $isFinalApprovalStage) {
+                if ($isFinalApprovalStage && $approver->level !== 'head') {
+                    return false;
+                }
+
                 if ($stageDepartments !== [] && !in_array($approver->department, $stageDepartments, true)) {
                     return false;
                 }
@@ -942,9 +950,9 @@ class WorkflowService
         }
 
         $this->createAssignmentsForApprovers($document, $stage, $approvers, $slaExpiresAt,
-            "Stage '{$stage->stage_name}': assigned to all {$approvers->count()} eligible approver(s) " .
-            "(category '{$document->ml_category}') — {$approvers->pluck('full_name')->implode(', ')}. " .
-            "SLA window expires {$slaExpiresAt->toDayDateTimeString()} for each; the stage completes once every one has responded.");
+            "Stage '{$stage->stage_name}' assigned to {$approvers->count()} eligible approver(s) " .
+            "({$document->ml_category}) — {$approvers->pluck('full_name')->implode(', ')}. " .
+            "Each must respond by {$slaExpiresAt->toDayDateTimeString()}.");
 
         return null;
     }
@@ -965,7 +973,7 @@ class WorkflowService
     private function autoApproveNoEligibleApprover(DocumentAssignment $assignment, string $reason): void
     {
         AuditLog::record(null, $assignment->document_id, 'auto_approve_no_approver',
-            "Stage '{$assignment->stage->stage_name}' on '{$assignment->document->title}' has no eligible approver — " .
+            "Stage '{$assignment->stage->stage_name}' has no eligible approver — " .
             "{$reason} Auto-approved immediately; an Admin will still review it.");
 
         app(SlaService::class)->autoApproveNoEligibleApprover($assignment);
@@ -1094,11 +1102,18 @@ class WorkflowService
 
         $slaExpiresAt = $this->computeApproverSlaExpiry($document);
 
+        // Document title left out here (unlike a plain description on its
+        // own) — everywhere this shows, the title is already visible right
+        // next to it: the document's own header on its tracker page, or the
+        // Document column of the global Admin Audit Trail row it's nested
+        // under. Repeating it just added noise.
+        $votingNote = $approvers->count() > 1
+            ? ' Approval needs every one of them to agree; a rejection needs a majority.'
+            : '';
         $this->createAssignmentsForApprovers($document, $stage, $approvers, $slaExpiresAt,
-            "'{$document->title}' routed directly by {$originator->full_name} to {$approvers->count()} hand-picked " .
-            "approver(s), bypassing the standard pipeline — {$approvers->pluck('full_name')->implode(', ')}. " .
-            "SLA window expires {$slaExpiresAt->toDayDateTimeString()} for each; approval still needs every one of " .
-            'them, a rejection still needs a majority.');
+            "Routed directly by {$originator->full_name} to {$approvers->count()} selected " .
+            "approver(s), skipping the standard approval steps — {$approvers->pluck('full_name')->implode(', ')}. " .
+            "Must be approved by {$slaExpiresAt->toDayDateTimeString()}.{$votingNote}");
 
         $document->pending_custom_routing_at = null;
         $document->custom_routed = true;
@@ -1221,8 +1236,8 @@ class WorkflowService
             $assignment->save();
 
             AuditLog::record(null, $assignment->document_id, 'assignment_withdrawn',
-                "Seat on stage '{$assignment->stage->stage_name}' for '{$assignment->document->title}' withdrawn — " .
-                "{$oldApprover->full_name}'s account was deactivated and another approver already covers this stage." .
+                "{$oldApprover->full_name}'s spot on stage '{$assignment->stage->stage_name}' was removed — " .
+                'their account was deactivated and another approver already covers this stage.' .
                 ($reason ? " Reason: \"{$reason}\"" : ''));
 
             $this->completeStage($assignment, 'approved');
@@ -1270,7 +1285,7 @@ class WorkflowService
     {
         $this->applyAdminDecision($assignment, $admin, $decision, $comments,
             "Admin {$admin->full_name} decided stage '{$assignment->stage->stage_name}' directly, overriding " .
-            ($assignment->approver->full_name ?? 'the assigned approver') . " -> {$decision}." .
+            ($assignment->approver->full_name ?? 'the assigned approver') . " — marked as {$decision}." .
             ($comments ? " Notes: {$comments}" : ''));
     }
 
@@ -1327,8 +1342,8 @@ class WorkflowService
             "previously assigned to {$oldApprover->full_name}." . ($reason ? " Reason: \"{$reason}\"" : ''));
 
         AuditLog::record(null, $assignment->document_id, 'assignment_reassigned',
-            "Reassigned stage '{$assignment->stage->stage_name}' on '{$assignment->document->title}' from " .
-            "{$oldApprover->full_name} to {$newApprover->full_name} due to account deactivation." .
+            "Stage '{$assignment->stage->stage_name}' reassigned from {$oldApprover->full_name} to " .
+            "{$newApprover->full_name} — their account was deactivated." .
             ($reason ? " Reason: \"{$reason}\"" : ''));
 
         // DocumentAssignment::booted()'s updated() hook only broadcasts on an
@@ -1387,6 +1402,21 @@ class WorkflowService
                 ($comments ? " Comments: \"{$comments}\"" : '') . $progressNote);
 
             $this->completeStage($assignment, $decision);
+
+            // Event-driven retraining for the Estimated Approval Time model
+            // (ApprovalTimeMlService) — a real human approval is exactly
+            // the new data point that model learns from (rejections don't
+            // count, see that service's rows() docblock), so retrain THIS
+            // one (category, department) pair right now instead of waiting
+            // for the hourly sweep (TrainTimeEstimateModels) to notice.
+            // ->afterCommit() defers the actual queue push until this
+            // transaction commits, so the job never runs against a row it
+            // can't see yet if the queue worker picks it up faster than
+            // this transaction closes.
+            if ($decision === 'approved' && $document->ml_category && $approver->department) {
+                \App\Jobs\RetrainApprovalTimeModel::dispatch($document->ml_category, $approver->department)
+                    ->afterCommit();
+            }
         });
     }
 
@@ -1415,8 +1445,8 @@ class WorkflowService
             ]);
 
             AuditLog::record($approver->user_id, $document->document_id, 'revision_requested',
-                "Stage '{$stage->stage_name}' — {$approver->full_name} flagged a passage of '{$document->title}' for " .
-                "revision: \"{$data['comment']}\"");
+                "{$approver->full_name} flagged a passage for revision on stage '{$stage->stage_name}': " .
+                "\"{$data['comment']}\"");
 
             NotificationRecord::send($document->originator_id, $document->document_id,
                 "{$approver->full_name} flagged a passage of '{$document->title}' (stage '{$stage->stage_name}') needing " .
@@ -1461,8 +1491,8 @@ class WorkflowService
             $annotation->delete();
 
             AuditLog::record($approver->user_id, $document->document_id, 'revision_withdrawn',
-                "Stage '{$stage->stage_name}' — {$approver->full_name} withdrew their flagged revision request on " .
-                "'{$document->title}': \"{$comment}\"");
+                "{$approver->full_name} withdrew their revision request on stage '{$stage->stage_name}': " .
+                "\"{$comment}\"");
 
             NotificationRecord::send($document->originator_id, $document->document_id,
                 "{$approver->full_name} withdrew their revision request on '{$document->title}' (stage " .
@@ -1628,9 +1658,9 @@ class WorkflowService
                         $stranded->save();
 
                         AuditLog::record(null, $document->document_id, 'reject_stranded',
-                            "Stage '{$stage->stage_name}' on '{$document->title}' — {$stranded->approver->full_name}'s " .
-                            "rejection could no longer take effect after {$voteStatus['approved']} other reviewer(s) " .
-                            'approved; reset to pending so they can decide again.');
+                            "{$stranded->approver->full_name}'s rejection on stage '{$stage->stage_name}' no longer " .
+                            "stands — {$voteStatus['approved']} other reviewer(s) already approved. " .
+                            'Reset to pending so they can decide again.');
 
                         NotificationRecord::send($stranded->user_id, $document->document_id,
                             "Your rejection of '{$document->title}' (stage '{$stage->stage_name}') can no longer take effect — " .

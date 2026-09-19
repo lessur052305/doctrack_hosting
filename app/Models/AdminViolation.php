@@ -35,11 +35,11 @@ use Illuminate\Database\Eloquent\Model;
  *
  *   - 'late_ml_review': RETIRED — a low-confidence classification used to
  *     sit past its own 6-hour review window without Admin confirming/
- *     correcting its category. Classification confidence no longer holds
- *     a document for manual review at all (see WorkflowService::ingest()'s
- *     $isAmbiguous docblock), so this type is never created anymore; kept
- *     here only so any pre-existing historical row of this type still
- *     resolves to something meaningful.
+ *     correcting its category. Classification is fully automatic now
+ *     (see WorkflowService::ingest()'s $belowChanceFloor docblock) —
+ *     nothing holds a document for manual review at all anymore, so this
+ *     type is never created; kept here only so any pre-existing
+ *     historical row of this type still resolves to something meaningful.
  */
 class AdminViolation extends Model
 {

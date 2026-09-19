@@ -308,10 +308,10 @@ class SlaService
     // trackLateMlReviews() (the classification-review counterpart to
     // trackLateReviews() above, keyed on the now-retired ml_review_status/
     // ml_review_due_at) was removed along with the manual classification
-    // review queue itself — see WorkflowService::ingest()'s $isAmbiguous
-    // docblock. Classification is fully automatic now: nothing sets
-    // ml_review_status='pending' anymore, so there was never anything
-    // left for this sweep to find.
+    // and readability review queues — see WorkflowService::ingest()'s
+    // $belowChanceFloor docblock. Both are fully automatic now: nothing
+    // sets ml_review_status or readability_review_status to 'pending'
+    // anymore, so there was never anything left for this sweep to find.
 
     /**
      * A real approver missed their own SLA window — auto-approves

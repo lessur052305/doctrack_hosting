@@ -20,10 +20,10 @@
                             <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
                         </svg>
                     </span>
-                    <span class="text-xs font-semibold text-primary-800">Submitted Document/s - {{ $docCount }}</span>
-                    <span class="text-xs text-surface-500">by {{ $container->originator->full_name }}</span>
+                    <span class="text-sm font-semibold text-primary-800">Submitted Document/s - {{ $docCount }}</span>
+                    <span class="text-sm text-surface-500">by {{ $container->originator->full_name }}</span>
                 </div>
-                <div class="text-xs font-medium {{ $container->due_date && $container->due_date->isPast() ? 'text-rejected-700' : 'text-surface-600' }}">
+                <div class="text-sm font-medium {{ $container->due_date && $container->due_date->isPast() ? 'text-rejected-700' : 'text-surface-600' }}">
                     Due {{ $container->due_date?->format('M j, Y g:i A') ?? '—' }}
                 </div>
             </div>
@@ -79,24 +79,29 @@
                     // anything.
                     $voteStatus = $activeAssignment?->stageRejectionStatus();
                 @endphp
-                <div class="p-6">
+                {{-- id="document-{id}" is the jump target a notification click scrolls
+                     to (see NotificationController::markRead() and
+                     ApprovalController::pageForDocument()) — scroll-mt-4 gives it a
+                     little breathing room on landing, same as the ML Training page's
+                     jump-nav targets. --}}
+                <div id="document-{{ $documentId }}" class="p-6 scroll-mt-4">
                     @if(!$container->is_batch)
                         <div class="flex items-center justify-between mb-2">
-                            <span class="text-xs text-surface-400">Single-document request</span>
-                            <span class="text-xs font-medium {{ $container->due_date && $container->due_date->isPast() ? 'text-rejected-700' : 'text-surface-600' }}">
+                            <span class="text-sm text-surface-400">Single-document request</span>
+                            <span class="text-sm font-medium {{ $container->due_date && $container->due_date->isPast() ? 'text-rejected-700' : 'text-surface-600' }}">
                                 Due {{ $container->due_date?->format('M j, Y g:i A') ?? '—' }}
                             </span>
                         </div>
                     @endif
 
                     <div class="flex items-center gap-2 mb-1">
-                        <h3 class="text-sm font-semibold text-surface-900">{{ $doc->title }}</h3>
-                        <span class="text-xs text-surface-400">· {{ $doc->ml_category }}</span>
+                        <h3 class="text-base font-semibold text-surface-900">{{ $doc->title }}</h3>
+                        <span class="text-sm text-surface-400">· {{ $doc->ml_category }}</span>
                         @if($pLabel)
-                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ring-1 ring-inset {{ $pClass }}">{{ $pLabel }}</span>
+                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-sm font-semibold ring-1 ring-inset {{ $pClass }}">{{ $pLabel }}</span>
                         @endif
                     </div>
-                    <p class="text-xs text-surface-500 mb-2">
+                    <p class="text-sm text-surface-500 mb-2">
                         Submitted by {{ $doc->originator->full_name }} ·
                         <button type="button"
                            onclick="openDocumentViewer('{{ route('documents.file', $doc) }}', '{{ $doc->mime_type }}', '{{ addslashes($doc->original_filename ?? $doc->title) }}', {{ $doc->document_id }})"
@@ -121,7 +126,7 @@
                          see what already happened and what's still to come — not just
                          whichever single stage currently needs a decision. --}}
                     <div class="mb-4">
-                        <x-workflow-stage-list :document="$doc" />
+                        <x-workflow-stage-list :document="$doc" :show-due-date="false" />
                     </div>
 
                     {{-- Full stage pipeline above already highlights which of these belong
@@ -177,7 +182,7 @@
                             <span class="w-7 h-7 rounded-full bg-approved-100 text-approved-700 flex items-center justify-center flex-shrink-0">
                                 <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
                             </span>
-                            <p class="text-xs text-surface-600">
+                            <p class="text-sm text-surface-600">
                                 <span class="font-medium text-approved-700">Your decision is recorded.</span>
                                 Still waiting on other approvers before this document is finalized — see the stage list above for who's left.
                             </p>
@@ -189,9 +194,9 @@
                                  (aligned to the document name), not repeated
                                  here. --}}
                             <div class="flex items-center gap-2 mb-1">
-                                <span class="text-xs text-surface-500 font-medium">Stage: {{ $activeAssignment->stage->stage_name }}</span>
+                                <span class="text-sm text-surface-500 font-medium">Stage: {{ $activeAssignment->stage->stage_name }}</span>
                             </div>
-                            <p class="text-xs text-surface-400">
+                            <p class="text-sm text-surface-400">
                                 SLA expires
                                 <span class="font-semibold text-surface-600">{{ $activeAssignment->sla_expires_at?->format('M j, Y, g:i A') ?? '—' }}</span>
                                 @if($realSecondsRemaining !== null)
@@ -206,20 +211,20 @@
                                     </span>
                                 @endif
                                 @if(!$activeAssignment->escalated_to_admin && !($isWithinBusinessHours ?? true))
-                                    <span class="text-[11px] text-surface-400">⏸ Paused (outside business hours)</span>
+                                    <span class="text-xs text-surface-400">⏸ Paused (outside business hours)</span>
                                 @endif
                             </p>
                             @if($activeAssignment->escalated_to_admin)
-                                <p class="text-xs text-rejected-700 font-medium mt-1">
+                                <p class="text-sm text-rejected-700 font-medium mt-1">
                                     You missed this SLA — it's been escalated to Admin and can no longer be approved or rejected here.
                                     This will drop off your queue {{ $activeAssignment->sla_expires_at->copy()->addHours(24)->diffForHumans() }}.
                                 </p>
                             @elseif($outsideBusinessHoursBlocked)
-                                <p class="text-xs text-processing-700 font-medium mt-1">
+                                <p class="text-sm text-processing-700 font-medium mt-1">
                                     Decisions are currently restricted to business hours (9 AM–5 PM, Mon–Sat) — Approve/Reject will unlock when the next working window opens.
                                 </p>
                             @elseif($voteStatus && !$voteStatus['rejectStillPossible'])
-                                <p class="text-xs text-processing-700 font-medium mt-1">
+                                <p class="text-sm text-processing-700 font-medium mt-1">
                                     This stage already has majority approval ({{ $voteStatus['approved'] }} of {{ $voteStatus['total'] }}) — it can no longer be rejected. You can still approve it, or flag a specific concern with Request Revision.
                                 </p>
                             @endif
@@ -228,14 +233,14 @@
                         @if($activeAssignment->escalated_to_admin)
                             <div class="flex flex-col sm:w-64 gap-2">
                                 <textarea rows="1" placeholder="Optional comments…" disabled
-                                    class="w-full rounded-lg border-surface-200 bg-surface-100 text-xs text-surface-400 px-3 py-2 cursor-not-allowed"></textarea>
+                                    class="w-full rounded-lg border-surface-200 bg-surface-100 text-sm text-surface-400 px-3 py-2 cursor-not-allowed"></textarea>
                                 <div class="flex gap-2">
                                     <button type="button" disabled title="Escalated to Admin — no longer actionable here"
-                                        class="flex-1 bg-surface-200 text-surface-400 text-xs font-semibold py-2 rounded-lg cursor-not-allowed">
+                                        class="flex-1 bg-surface-200 text-surface-400 text-sm font-semibold py-2 rounded-lg cursor-not-allowed">
                                         Approve
                                     </button>
                                     <button type="button" disabled title="Escalated to Admin — no longer actionable here"
-                                        class="flex-1 bg-surface-200 text-surface-400 text-xs font-semibold py-2 rounded-lg cursor-not-allowed">
+                                        class="flex-1 bg-surface-200 text-surface-400 text-sm font-semibold py-2 rounded-lg cursor-not-allowed">
                                         Reject
                                     </button>
                                 </div>
@@ -254,9 +259,9 @@
                                      button toggles .required on click rather than the field being
                                      unconditionally required or optional. --}}
                                 <textarea name="comments" rows="1" placeholder="Comments (required if rejecting)…"
-                                    class="w-full rounded-lg border-surface-300 text-xs focus:border-primary-500 focus:ring-primary-500 px-3 py-2"></textarea>
+                                    class="w-full rounded-lg border-surface-300 text-sm focus:border-primary-500 focus:ring-primary-500 px-3 py-2"></textarea>
                                 @if($reviewSecondsRemaining > 0)
-                                    <p class="review-countdown-label text-[11px] text-processing-700 font-medium">
+                                    <p class="review-countdown-label text-xs text-processing-700 font-medium">
                                         Open "View original file" above to begin your review — {{ $reviewSecondsRemaining }}s needed before you can decide.
                                     </p>
                                 @endif
@@ -264,7 +269,7 @@
                                     <button type="submit" name="decision" value="approved"
                                         {{ ($reviewSecondsRemaining > 0 || $outsideBusinessHoursBlocked) ? 'disabled' : '' }}
                                         onclick="this.form.querySelector('textarea[name=comments]').required = false"
-                                        class="review-decide-btn flex-1 bg-gradient-to-b from-approved-500 to-approved-600 hover:from-approved-600 hover:to-approved-700 text-white text-xs font-semibold py-2 rounded-lg shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:from-approved-500 disabled:hover:to-approved-600">
+                                        class="review-decide-btn flex-1 bg-gradient-to-b from-approved-500 to-approved-600 hover:from-approved-600 hover:to-approved-700 text-white text-sm font-semibold py-2 rounded-lg shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:from-approved-500 disabled:hover:to-approved-600">
                                         Approve
                                     </button>
                                     <button type="submit" name="decision" value="rejected"
@@ -274,7 +279,7 @@
                                             data-permanently-disabled="1"
                                         @endif
                                         onclick="this.form.querySelector('textarea[name=comments]').required = true"
-                                        class="review-decide-btn flex-1 bg-gradient-to-b from-rejected-500 to-rejected-600 hover:from-rejected-600 hover:to-rejected-700 text-white text-xs font-semibold py-2 rounded-lg shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:from-rejected-500 disabled:hover:to-rejected-600">
+                                        class="review-decide-btn flex-1 bg-gradient-to-b from-rejected-500 to-rejected-600 hover:from-rejected-600 hover:to-rejected-700 text-white text-sm font-semibold py-2 rounded-lg shadow-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:from-rejected-500 disabled:hover:to-rejected-600">
                                         Reject
                                     </button>
                                 </div>
@@ -288,7 +293,7 @@
     </div>
 @empty
     <div class="bg-white rounded-xl shadow-card border border-surface-200 p-12 text-center">
-        <p class="text-sm text-surface-500">
+        <p class="text-base text-surface-500">
             @if(request('document') || request('priority'))
                 No pending documents match these filters.
             @else
@@ -298,7 +303,7 @@
     </div>
 @endforelse
 <div id="review-no-matches" class="hidden bg-white rounded-xl shadow-card border border-surface-200 p-12 text-center">
-    <p class="text-sm text-surface-500">No documents on this page match "<span id="review-no-matches-term"></span>". Press Enter to search every page.</p>
+    <p class="text-base text-surface-500">No documents on this page match "<span id="review-no-matches-term"></span>". Press Enter to search every page.</p>
 </div>
 
 @if($containers->hasPages())

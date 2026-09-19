@@ -45,7 +45,12 @@ test('the submissions table shows Other, not the raw guess, for an unrelated doc
     $response->assertOk()->assertSee('Other');
 });
 
-test('the tracking page shows Other and hides the confidence score for an unrelated document', function () {
+test('the tracking page shows Other as the category, plus the classifier\'s non-authoritative best guess, for an unrelated document', function () {
+    // Classification, readability and validation genuinely run on every
+    // document, "unrelated" ones included (see WorkflowService::ingest())
+    // — the tracking page now shows that instead of hiding it, worded as
+    // a "best guess" (not a bare "Confidence:") so it doesn't read as
+    // contradicting the "Other" category shown alongside it.
     $originator = User::factory()->originator()->create();
     $document = unrelatedDisplayDoc($originator, pending: true);
 
@@ -53,7 +58,8 @@ test('the tracking page shows Other and hides the confidence score for an unrela
 
     $response->assertOk()
         ->assertSee('Other')
-        ->assertDontSee('Job Order')
+        ->assertSee('Job Order')
+        ->assertSee('best guess')
         ->assertDontSee('Confidence:');
 });
 

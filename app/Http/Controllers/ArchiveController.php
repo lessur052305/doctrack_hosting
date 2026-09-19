@@ -232,20 +232,18 @@ class ArchiveController extends Controller
             ];
         });
 
-        // Only shown at all once there's something in it — unlike the real
-        // categories above (always shown, even empty, since they're the
-        // fixed set an admin configured), this one only exists because a
-        // document actually landed here.
+        // Always shown, same as the real categories above (even at 0) —
+        // for discoverability: hiding it until the first "unrelated"
+        // document actually cleared approval made it look like the folder
+        // didn't exist at all in the meantime, when originators uploading
+        // that kind of document is a normal, expected occurrence.
         $otherQuery = (clone $base)->where('desired_routing', 'unrelated');
-        $otherTotal = (clone $otherQuery)->count();
-        if ($otherTotal > 0) {
-            $folders->push((object) [
-                'category' => self::OTHER_FOLDER,
-                'total' => $otherTotal,
-                'disputed' => (clone $otherQuery)->whereNotNull('disputed_at')->count(),
-                'auto_approved' => (clone $otherQuery)->where('global_status', 'auto_approved')->whereNull('disputed_at')->count(),
-            ]);
-        }
+        $folders->push((object) [
+            'category' => self::OTHER_FOLDER,
+            'total' => (clone $otherQuery)->count(),
+            'disputed' => (clone $otherQuery)->whereNotNull('disputed_at')->count(),
+            'auto_approved' => (clone $otherQuery)->where('global_status', 'auto_approved')->whereNull('disputed_at')->count(),
+        ]);
 
         return $folders;
     }
@@ -283,6 +281,20 @@ class ArchiveController extends Controller
             "{$user->full_name} downloaded '{$document->title}' from the archive.");
 
         return Storage::download($document->file_path, $document->original_filename ?? $document->title);
+    }
+
+    /**
+     * Feature: the "Import Legacy Document" popup — fetched into
+     * components/kpi-drilldown-modal.blade.php by the "+ Import Legacy
+     * Document" button in archive/partials/results.blade.php's header.
+     * No data needed beyond the category list the form itself already
+     * pulls from ValidationService::knownCategories() — this is just the
+     * form's own markup, split out of the page so it isn't sitting hidden
+     * in every archive page's HTML on every load.
+     */
+    public function legacyForm()
+    {
+        return view('admin.partials.legacy-import-form');
     }
 
     /**

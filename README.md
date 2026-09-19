@@ -159,14 +159,18 @@ real team accounts (real names/Gmail addresses), matching how it's actually been
 throughout development. Idempotent via `updateOrCreate()`/`firstOrCreate()` throughout,
 so `php artisan db:seed` is safe to re-run at any time without duplicate-key errors.
 
-| Role       | Username  | Password     | Category / Department          |
-|------------|-----------|--------------|---------------------------------|
-| Admin      | `rvinz`   | `rvinz123`   | —                                |
-| Originator | `arose`   | `arose123`   | —                                |
-| Approver   | `lvinz`   | `lvinz123`   | Job Order — Engineering, staff   |
-| Approver   | `cperalta`| `cperalta123`| Job Order — Engineering, head    |
-| Approver   | `vlessur` | `vlessur123` | Job Order — Finance, staff       |
-| Approver   | `gfunelas`| `gfunelas123`| Job Order — Finance, head        |
+| Role       | Username         | Password       | Category / Department          |
+|------------|------------------|----------------|----------------------------------|
+| Admin      | `rvinz`          | `rvinz123`     | —                                |
+| Originator | `lvinz`          | `lvinz123`     | —                                |
+| Approver   | `gfunelas`       | `gfunelas123`  | Job Order — Engineering, staff   |
+| Approver   | `vlessur`        | `vlessur123`   | Job Order — Finance, staff       |
+| Approver   | `cperalta`       | `cperalta123`  | Job Order — Engineering, head    |
+| Approver   | `cperalta091022` | `cperalta123`  | Job Order — Finance, head        |
+
+Job Order's Final Approval stage requires **both** department heads to agree (unanimous,
+same as every other multi-seat stage) — that's why there are two separate `cperalta*`
+accounts above, not one.
 
 **On a genuinely fresh device/deployment**, either edit `DatabaseSeeder.php` to use your
 own placeholder accounts first, or be aware that seeding as-is creates accounts under
@@ -346,6 +350,23 @@ endpoints timed out identically, while Brevo's HTTP API (plain HTTPS, port 443) 
 immediately. [Brevo](https://www.brevo.com) is a good free option (300 emails/day, no
 card required) and only needs the individual sender address verified, not a DNS-verified
 domain — see `railway/README.md` for setup details.
+
+### 2.7 Error monitoring (Sentry) — optional, not one of the four required pieces above
+
+`sentry/sentry-laravel` (already in `composer.json`) reports every unhandled exception to
+[Sentry](https://sentry.io) — see `Integration::handles($exceptions)` in
+`bootstrap/app.php`'s `withExceptions()` and `config/sentry.php`. Unlike §2.1–2.5, this
+isn't a running process and there's nothing to install or start: leaving `SENTRY_LARAVEL_DSN`
+blank (the `.env.example` default) makes the SDK a silent no-op, which is the right
+default for local dev — you don't want your own local exceptions cluttering a shared
+Sentry project. Worth turning on for a real deployment, since otherwise the only trace of
+a production error is `storage/logs/laravel.log` on whichever server happens to be running.
+
+To enable it: create a free Sentry account → new Laravel project → Settings → Client Keys
+(DSN) → copy that value into `.env`:
+```
+SENTRY_LARAVEL_DSN=https://...@....ingest.sentry.io/...
+```
 
 ---
 

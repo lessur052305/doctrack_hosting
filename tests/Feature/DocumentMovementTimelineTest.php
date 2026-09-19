@@ -155,7 +155,7 @@ it('renders the nested timeline correctly on the Admin Document Tracking module'
     $response->assertSee('Uploaded');
 });
 
-it('renders the nested timeline correctly on the Audit Logs page', function () {
+it('renders the Document Tracker popup trigger correctly on the Audit Logs page', function () {
     $admin = User::factory()->admin()->create();
     $originator = User::factory()->originator()->create();
     $document = DocumentRepository::create([
@@ -173,5 +173,10 @@ it('renders the nested timeline correctly on the Audit Logs page', function () {
 
     $response->assertOk();
     $response->assertSee('audit-nested-test.txt');
-    $response->assertSee('Click to view full movement history for this document.');
+    // The old "expand inline" trigger text is gone — Audit Logs now opens
+    // the shared Document Tracker popup instead (see
+    // resources/views/components/kpi-drilldown-modal.blade.php and
+    // routes/web.php's documents.trackerModal) rather than expanding the
+    // full table inline with no guaranteed room to show it in.
+    $response->assertSee('Click to view Document Tracker.');
 });

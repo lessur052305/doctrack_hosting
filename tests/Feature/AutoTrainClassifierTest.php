@@ -1,9 +1,11 @@
 <?php
 
+use App\Models\DocumentAssignment;
 use App\Models\DocumentRepository;
 use App\Models\MlModelRepository;
 use App\Models\MlStagingSample;
 use App\Models\User;
+use App\Models\WorkflowStage;
 use App\Services\ClassificationService;
 
 /**
@@ -44,12 +46,20 @@ function bootstrapModel(int $perCategory = 5): MlModelRepository
     return app(ClassificationService::class)->train($samplesByCategory);
 }
 
-/** A confidently-classified, auto-trusted document eligible to teach the model — matches WorkflowService::ingest()'s trusted tier. */
+/**
+ * A confidently-classified, auto-trusted document eligible to teach the
+ * model — matches WorkflowService::ingest()'s trusted tier. Also creates
+ * the DocumentAssignment a real routed document would have —
+ * autoTrainIfDue()'s eligibility query requires one (whereHas('assignments'))
+ * specifically to exclude documents rejected below the confidence floor,
+ * which never get routed at all; without a matching assignment row here,
+ * these otherwise-legitimate test fixtures would be excluded the same way.
+ */
 function eligibleDoc(string $category, array $overrides = []): DocumentRepository
 {
     $originator = User::factory()->originator()->create();
 
-    return DocumentRepository::create(array_merge([
+    $doc = DocumentRepository::create(array_merge([
         'originator_id' => $originator->user_id,
         'title' => 'eligible-' . uniqid() . '.txt',
         'file_path' => 'documents/' . uniqid() . '.txt',
@@ -62,6 +72,24 @@ function eligibleDoc(string $category, array $overrides = []): DocumentRepositor
         'due_date' => now()->addDay(),
         'global_status' => 'classified_validated',
     ], $overrides));
+
+    $stage = WorkflowStage::firstOrCreate(
+        ['document_category' => $category, 'stage_name' => 'Review'],
+        ['sequence_order' => 1]
+    );
+
+    DocumentAssignment::create([
+        'document_id' => $doc->document_id,
+        'user_id' => null,
+        'stage_id' => $stage->stage_id,
+        'due_date' => $doc->due_date,
+        'priority_rank' => 2,
+        'individual_status' => 'approved',
+        'acted_at' => now(),
+        'auto_approved' => true,
+    ]);
+
+    return $doc;
 }
 
 test('returns null when no model has ever been bootstrapped', function () {
@@ -124,13 +152,25 @@ test('excludes documents the originator flagged unrelated, even at high confiden
     expect(app(ClassificationService::class)->autoTrainIfDue())->toBeNull();
 });
 
-test('excludes genuinely ambiguous documents — neither high confidence nor a clear margin', function () {
-    config(['ml.auto_train_batch_size' => 1, 'ml.review_confidence_threshold' => 70, 'ml.margin_threshold' => 20]);
+test('includes low-confidence documents in training too, and re-scores them once the retrain is kept', function () {
+    // No confidence/margin floor on training eligibility anymore — a
+    // document this unsure is exactly the kind that needs its real,
+    // unfamiliar vocabulary folded into the next model. See
+    // autoTrainIfDue()'s docblock on the eligibility query.
+    config(['ml.auto_train_batch_size' => 1]);
     bootstrapModel();
 
-    eligibleDoc('Job Order', ['ml_confidence' => 40.0, 'ml_margin' => 5.0]);
+    $doc = eligibleDoc('Job Order', ['ml_confidence' => 40.0, 'ml_margin' => 5.0]);
 
-    expect(app(ClassificationService::class)->autoTrainIfDue())->toBeNull();
+    $result = app(ClassificationService::class)->autoTrainIfDue();
+
+    expect($result)->not->toBeNull()
+        ->and($result['documentsUsed'])->toBe(1);
+
+    $doc->refresh();
+    expect($doc->ml_rechecked_at)->not->toBeNull()
+        ->and($doc->ml_recheck_confidence)->not->toBeNull()
+        ->and($doc->ml_recheck_category)->not->toBeNull();
 });
 
 test('respects the per-category population cap, oldest-eligible-first', function () {

@@ -72,11 +72,12 @@ class DocumentRepository extends Model
      * override the underlying global_status without replacing it (an
      * admin-held document is still, technically, 'classified_validated';
      * this just tells the UI not to say "Awaiting Approval" for one that
-     * was never actually routed to an approver). The 'pending_review'
-     * branch is dormant for any document created from here on —
-     * classification confidence no longer holds a document for manual
-     * review (see WorkflowService::ingest()'s $isAmbiguous docblock) —
-     * kept only so a pre-existing historical row in that state still
+     * was never actually routed to an approver). Both 'pending_review'
+     * branches below (ml_review_status, readability_review_status) are
+     * dormant for any document created from here on — classification and
+     * readability are both fully automatic now, nothing sets either
+     * column to 'pending' anymore (see WorkflowService::ingest()) — kept
+     * only so a pre-existing historical row in one of those states still
      * displays correctly.
      *
      * Same reasoning for auto_approved: global_status stays 'auto_approved'

@@ -33,7 +33,7 @@ test('the Other folder appears once an unrelated document exists, and is scoped 
     $response->assertOk()->assertSee('weird-memo.txt')->assertDontSee('real-job-order.txt');
 });
 
-test('the Other folder does not appear when there is nothing in it', function () {
+test('the Other folder still appears (at 0) when there is nothing in it yet', function () {
     $originator = User::factory()->originator()->create();
     DocumentRepository::create([
         'originator_id' => $originator->user_id,
@@ -42,7 +42,10 @@ test('the Other folder does not appear when there is nothing in it', function ()
         'global_status' => 'approved', 'desired_routing' => 'auto',
     ]);
 
+    // Always shown, same as the real categories — for discoverability,
+    // not hidden until the first unrelated document happens to clear
+    // approval (see ArchiveController::folderStats()).
     $response = $this->actingAs($originator)->get(route('originator.archive'));
 
-    $response->assertOk()->assertDontSee('Other');
+    $response->assertOk()->assertSee('Other');
 });

@@ -62,9 +62,56 @@
             const res = await fetch(url, { headers: { Accept: 'text/html' } });
             if (!res.ok) throw new Error('Fetch failed');
             body.innerHTML = await res.text();
+            // Content set via innerHTML never runs its own <script> tags
+            // (that's the browser's own behavior, not something worth
+            // fighting) — any drilldown whose markup needs real JS wires
+            // it up here instead, guarded so this is a no-op for every
+            // other drilldown type that's plain static content.
+            if (type === 'manage-stages') initManageStagesForm(body);
         } catch (e) {
             body.innerHTML = '<div class="p-10 text-center text-sm text-rejected-600">Couldn\'t load this list.</div>';
         }
+    }
+
+    /**
+     * Feature: the "Manage Stages" popup (admin/partials/manage-stages-form.blade.php)
+     * — switching Category or Department shows only the matching
+     * stage-group + department-owned options, unchecking anything hidden
+     * (it wouldn't be submitted anyway since it's hidden, but unchecking
+     * keeps the UI honest if the admin flips back and forth before
+     * submitting). Was a plain inline <script> when this form lived on
+     * its own page; scoped to $body (not the whole document) now that
+     * more than one drilldown type can exist, and called explicitly from
+     * openKpiDrilldown() above rather than relying on a <script> tag that
+     * innerHTML would just never execute.
+     */
+    function initManageStagesForm(body) {
+        const categorySelect = body.querySelector('#edit-category');
+        const departmentSelect = body.querySelector('#edit-department');
+        if (!categorySelect || !departmentSelect) return;
+
+        const stageGroups = body.querySelectorAll('.stage-group');
+
+        const refresh = () => {
+            stageGroups.forEach((group) => {
+                const categoryMatches = group.dataset.category === categorySelect.value;
+                group.classList.toggle('hidden', !categoryMatches);
+
+                group.querySelectorAll('.stage-option').forEach((option) => {
+                    const owners = option.dataset.departments ? option.dataset.departments.split(',') : [];
+                    const departmentMatches = owners.length === 0 || owners.includes(departmentSelect.value);
+                    const visible = categoryMatches && departmentMatches;
+                    option.classList.toggle('hidden', !visible);
+                    if (!visible) {
+                        option.querySelector('input[type=checkbox]').checked = false;
+                    }
+                });
+            });
+        };
+
+        categorySelect.addEventListener('change', refresh);
+        departmentSelect.addEventListener('change', refresh);
+        refresh();
     }
 
     document.addEventListener('keydown', (e) => {

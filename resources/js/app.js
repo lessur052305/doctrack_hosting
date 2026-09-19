@@ -198,10 +198,27 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // A same-page anchor (e.g. "#ml-classification-card" — see the ML
+    // Training jump-nav) never fires beforeunload, since the browser
+    // doesn't actually navigate anywhere — just scrolls. Without this
+    // check, trackSlowOp() below would start a timer nothing ever stops,
+    // permanently stuck showing "Reconnecting" until a real page
+    // navigation happens to fire beforeunload and clear it. Mirrors the
+    // identical same-page-anchor guard the fade-transition click handler
+    // just below already has, for the same reason.
+    function isSamePageAnchor(link) {
+        try {
+            const url = new URL(link.href, window.location.href);
+            return url.pathname === window.location.pathname && url.search === window.location.search && url.hash !== '';
+        } catch {
+            return false;
+        }
+    }
+
     document.addEventListener('click', (e) => {
         if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
         const link = e.target.closest('a[href]');
-        if (!link || link.target === '_blank' || link.hasAttribute('download') || !isSameOrigin(link.href)) return;
+        if (!link || link.target === '_blank' || link.hasAttribute('download') || !isSameOrigin(link.href) || isSamePageAnchor(link)) return;
 
         stopNavOp?.();
         stopNavOp = trackSlowOp();
@@ -282,6 +299,37 @@ if (!supportsViewTransitions) {
         }, 150);
     });
 }
+
+// Notification -> document jump (Feature: a notification click centers the
+// document instead of just pinning it to the top — see
+// NotificationController::markRead()/ApprovalController::pageForDocument()
+// for how the #document-{id} fragment/page number is computed). The
+// browser's own default anchor-scroll only supports top-alignment
+// (scroll-mt-* controls that), never centering, so this replaces it with
+// scrollIntoView({block: 'center'}) instead. That single call is also
+// already the right fallback for the first/last document in the queue —
+// there's nothing above the first one or below the last one to center
+// against, so the browser just scrolls as far as it physically can and
+// stops, the same way any scrollIntoView('center') call behaves at either
+// end of a scroll container, no special-casing needed here.
+//
+// Reads window.__pendingScrollHash (stashed by the inline <script> at the
+// top of layouts/app.blade.php's <head>), NOT location.hash — by the time
+// THIS script runs, the browser may or may not have already consumed the
+// hash for its own default (top-aligned) fragment scroll, a race whose
+// outcome depends on how fast the page happened to load. The head script
+// runs early enough to read and clear the hash before the browser ever
+// gets a turn to act on it, removing that race entirely rather than
+// trying to win it.
+document.addEventListener('DOMContentLoaded', () => {
+    const id = window.__pendingScrollHash;
+    if (!id) return;
+
+    const target = document.getElementById(id);
+    if (!target) return;
+
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+});
 
 document.addEventListener('DOMContentLoaded', () => {
     // Approver dashboard SLA countdown ticker.
@@ -520,6 +568,273 @@ function startLivePoll(opts) {
     scheduleNext();
 }
 window.startLivePoll = startLivePoll;
+
+/**
+ * Caps $cardEl's height to whatever real space is actually left inside
+ * <main> below its own top edge, instead of a static CSS
+ * h-[calc(100vh-Xrem)] class (used by Your Submissions, User Accounts,
+ * Document Tracking, Audit Logs, and the Operational Calendar). That
+ * static calc() assumes ONLY the header sits above the card — true on a
+ * quiet page load, false the instant a flash message or validation-error
+ * banner also renders above it (see layouts/app.blade.php), which pushed
+ * the card past the bottom of the screen and forced the whole page
+ * (<main> is overflow-y-auto) into an unwanted scroll instead of the
+ * card simply being a little shorter that one time. Same live-measurement
+ * technique originator/tracking.blade.php's sizeDocumentTracker() already
+ * uses successfully for a similarly variable amount of space above it.
+ * Called once on load and on resize — nothing above these cards ever
+ * changes after that (a flash message is only ever present on the
+ * page's own initial load), so a live-channel/poll swap doesn't need to
+ * re-measure it.
+ *
+ * @param {HTMLElement} cardEl - the element to size; must be a flex/flex-col box with its OTHER dimensions (width, position) already set by CSS
+ */
+function sizeCappedCard(cardEl) {
+    const mainEl = document.querySelector('main');
+    if (!cardEl || !mainEl) return;
+
+    const mainPaddingBottom = parseFloat(getComputedStyle(mainEl).paddingBottom) || 0;
+    const available = mainEl.getBoundingClientRect().bottom - mainPaddingBottom - cardEl.getBoundingClientRect().top;
+    cardEl.style.height = Math.max(available, 200) + 'px';
+}
+window.sizeCappedCard = sizeCappedCard;
+
+/**
+ * Client-side "fitted" pagination (Feature: a long list is paged by
+ * however many rows genuinely fit the device's real screen space, not a
+ * fixed guessed count). Two earlier approaches — a single-shot height
+ * estimate, then a self-correcting reload loop — both still either
+ * clipped a row or left visible leftover whitespace, because a FIXED
+ * row-count can't simultaneously be right for a page of uniform short
+ * rows and a page containing one unusually tall row (an Approver's
+ * stacked badges/buttons on admin/users.blade.php; an extra "Validation
+ * issues" sub-row under a failed-validation document on
+ * originator/dashboard.blade.php). A later attempt at fixing that kept a
+ * server-side batch size and only fixed *that* batch's overflow, which
+ * meant the numbered page-jump links had to be dropped (the server can
+ * only ever know one batch ahead). Neither compromise was acceptable, so
+ * this instead assumes the server has sent the ENTIRE matching list in
+ * one response — true for every list this powers today (one originator's
+ * own documents; the company's account list) — and does all of the
+ * pagination client-side: measure every row once, work out every page's
+ * exact real boundary in one pass, then render the same original
+ * pagination component (resources/views/vendor/pagination/tailwind.blade.php)
+ * by hand, since a real LengthAwarePaginator no longer exists to drive
+ * it. Because the whole list already lives in the DOM, every page —
+ * reached via Next, Previous, or a direct page-number click — is instant
+ * and exactly as full as it can be without overflowing, with zero network
+ * requests.
+ *
+ * A "logical item" can span more than one <tr> (document + its
+ * validation-issues row, say) — every <tr> belonging to one item must
+ * share the same `data-row-group` value so they're always shown/hidden
+ * together.
+ *
+ * @param {string} listElId - the card/fragment root
+ * @param {string} groupSelector - CSS selector matching every row belonging to any logical item
+ * @returns {{refit: Function}} refit() recomputes every page boundary from scratch and returns to page 1 —
+ *   call after any OTHER code (e.g. a live-channel/poll swap) replaces this fragment's rows out from under this instance.
+ */
+function initFittedPagination(listElId, groupSelector) {
+    let boundaries = []; // [{start, end}, ...] group-index ranges (end exclusive), one entry per page
+    let currentPageIndex = 0;
+
+    function groupRows() {
+        const listEl = document.getElementById(listElId);
+        const rows = listEl ? Array.from(listEl.querySelectorAll(groupSelector)) : [];
+        const groups = [];
+        rows.forEach((row) => {
+            const key = row.dataset.rowGroup;
+            let group = groups.find((g) => g.key === key);
+            if (!group) {
+                group = { key, rows: [] };
+                groups.push(group);
+            }
+            group.rows.push(row);
+        });
+        return groups;
+    }
+
+    // Rows before `start` stay hidden (so they take up no space and the
+    // first visible group naturally lands at the real top of the
+    // fixed-height area), then walks forward from `start` until the next
+    // group's bottom edge would cross the area's own bottom edge.
+    function findPageEnd(groups, area, start) {
+        groups.forEach((g, i) => g.rows.forEach((r) => r.classList.toggle('hidden', i < start)));
+        const areaBottom = area.getBoundingClientRect().bottom;
+        let end = groups.length;
+        for (let i = start; i < groups.length; i++) {
+            const lastRowOfGroup = groups[i].rows[groups[i].rows.length - 1];
+            if (lastRowOfGroup.getBoundingClientRect().bottom > areaBottom + 1) {
+                end = i;
+                break;
+            }
+        }
+        // Always show at least one item — a single unusually tall item
+        // shouldn't just vanish with nothing shown at all.
+        return Math.max(start + 1, end);
+    }
+
+    // One full start-to-finish walk of the list, recording every page's
+    // boundary against the area's CURRENT real height.
+    function computeBoundariesOnePass(groups, area) {
+        const result = [];
+        let start = 0;
+        while (start < groups.length) {
+            const end = findPageEnd(groups, area, start);
+            result.push({ start, end });
+            start = end;
+        }
+        return result;
+    }
+
+    // Same markup as renderNav()'s <nav> wrapper, just enough content to
+    // get its REAL rendered height (prev/next + one page number — the
+    // bar's height never depends on how many page buttons it ends up
+    // holding, only its width does) without yet knowing the real page
+    // count.
+    function renderNavSkeleton(navEl) {
+        navEl.innerHTML = `
+            <nav aria-hidden="true" class="flex items-center justify-center gap-1 rounded-2xl border border-surface-200 bg-white px-3 py-2 text-sm w-fit mx-auto">
+                <span class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg">Previous</span>
+                <div class="flex items-center gap-1"><span class="w-8 h-8 flex items-center justify-center rounded-lg border-2">1</span></div>
+                <div class="w-px h-5 bg-surface-200 mx-1"></div>
+                <span class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg">Next</span>
+            </nav>
+        `;
+    }
+
+    // Walks the whole list to find every page boundary. The pagination bar
+    // itself is a sibling of the fitting area and shrinks that area once
+    // it has real content (see the card's flex layout in
+    // submissions.blade.php / users_table.blade.php) — so a first pass
+    // measured with an still-empty nav can overstate how much room a page
+    // actually has, clipping its last row the instant the nav bar then
+    // renders for real. Once that first pass finds more than one page,
+    // reserve the nav's real height (it doesn't vary with exact page
+    // count) and measure again before trusting the result — going from no
+    // nav to a nav can only ever shrink the area, never grow it, so a
+    // second pass is always enough to settle.
+    function computeBoundaries() {
+        const listEl = document.getElementById(listElId);
+        const area = listEl?.querySelector('.js-adaptive-rows-area');
+        const navEl = document.getElementById(listElId + '-pagination');
+        const groups = groupRows();
+        if (!listEl || !area || !navEl || !groups.length) return [];
+
+        navEl.innerHTML = '';
+        let result = computeBoundariesOnePass(groups, area);
+
+        if (result.length > 1) {
+            renderNavSkeleton(navEl);
+            result = computeBoundariesOnePass(groups, area);
+        }
+
+        return result;
+    }
+
+    function showPage(index) {
+        const listEl = document.getElementById(listElId);
+        if (!listEl || !boundaries.length) return;
+
+        const groups = groupRows();
+        currentPageIndex = Math.max(0, Math.min(index, boundaries.length - 1));
+        const { start, end } = boundaries[currentPageIndex];
+        groups.forEach((g, i) => g.rows.forEach((r) => {
+            const onPage = i >= start && i < end;
+            r.classList.toggle('hidden', !onPage);
+            // A same-page, client-side search filter (see
+            // originator/dashboard.blade.php's applySubmissionFilter() or
+            // admin/audit_logs.blade.php's applyDocumentFilter()) toggles
+            // this exact 'hidden' class too, over EVERY matching row in
+            // the DOM — safe under the old server-paginated design, where
+            // only the current page's rows existed in the DOM at all, but
+            // every row from every page lives in the DOM now. Without this
+            // marker, a search term could reveal a row pagination had
+            // deliberately hidden on another page; both of those filter
+            // functions check it and skip toggling 'hidden' on a row this
+            // marks off-page, leaving pagination's own hide alone.
+            r.dataset.fittedOffPage = onPage ? '0' : '1';
+        }));
+        renderNav();
+    }
+
+    // Same markup/classes as resources/views/vendor/pagination/tailwind.blade.php
+    // (the app-wide default pagination component) — hand-built here since
+    // there's no real LengthAwarePaginator driving it anymore, but it
+    // should look and behave identically to every other paginated list in
+    // the app, just without a page reload.
+    function renderNav() {
+        const navEl = document.getElementById(listElId + '-pagination');
+        if (!navEl) return;
+
+        if (boundaries.length <= 1) {
+            navEl.innerHTML = '';
+            return;
+        }
+
+        const onFirst = currentPageIndex === 0;
+        const onLast = currentPageIndex === boundaries.length - 1;
+
+        let numbersHtml = '';
+        boundaries.forEach((_, i) => {
+            const page = i + 1;
+            numbersHtml += i === currentPageIndex
+                ? `<span aria-current="page" class="w-8 h-8 flex items-center justify-center rounded-lg border-2 border-surface-800 font-semibold text-surface-900">${page}</span>`
+                : `<button type="button" data-fitted-page="${i}" aria-label="Go to page ${page}" class="w-8 h-8 flex items-center justify-center rounded-lg text-surface-600 hover:bg-surface-50 transition-colors">${page}</button>`;
+        });
+
+        const prevHtml = onFirst
+            ? `<span class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-surface-300 cursor-default select-none" aria-disabled="true"><svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>Previous</span>`
+            : `<button type="button" data-fitted-prev class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-surface-600 hover:bg-surface-50 transition-colors"><svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>Previous</button>`;
+        const nextHtml = onLast
+            ? `<span class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-surface-300 cursor-default select-none" aria-disabled="true">Next<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg></span>`
+            : `<button type="button" data-fitted-next class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-surface-600 hover:bg-surface-50 transition-colors">Next<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg></button>`;
+
+        navEl.innerHTML = `
+            <nav role="navigation" aria-label="Pagination Navigation"
+                class="flex items-center justify-center gap-1 rounded-2xl border border-surface-200 bg-white px-3 py-2 text-sm w-fit mx-auto">
+                ${prevHtml}
+                <div class="flex items-center gap-1">${numbersHtml}</div>
+                <div class="w-px h-5 bg-surface-200 mx-1"></div>
+                ${nextHtml}
+            </nav>
+        `;
+
+        navEl.querySelector('[data-fitted-prev]')?.addEventListener('click', () => showPage(currentPageIndex - 1));
+        navEl.querySelector('[data-fitted-next]')?.addEventListener('click', () => showPage(currentPageIndex + 1));
+        navEl.querySelectorAll('[data-fitted-page]').forEach((btn) => {
+            btn.addEventListener('click', () => showPage(parseInt(btn.dataset.fittedPage, 10)));
+        });
+    }
+
+    function refit() {
+        boundaries = computeBoundaries();
+        showPage(0);
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', refit);
+    } else {
+        refit();
+    }
+
+    return {
+        refit,
+        // Feature: restoring the page you were on after navigating away
+        // and back (see admin/audit_logs.blade.php) — 1-indexed to match
+        // what's shown on the page-number buttons themselves. A no-op if
+        // boundaries haven't been computed yet or the page number is out
+        // of range (showPage() already clamps it).
+        goToPage: (page) => showPage(page - 1),
+        // How many pages currently exist / which one is showing — also
+        // 1-indexed, also for admin/audit_logs.blade.php's "remember
+        // where I was" marker (captured at the moment "View" is clicked,
+        // not asked for here after the fact).
+        getCurrentPage: () => currentPageIndex + 1,
+    };
+}
+window.initFittedPagination = initFittedPagination;
 
 /**
  * Intercepts clicks on pagination links (see vendor/pagination/custom.blade.php

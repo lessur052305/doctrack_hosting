@@ -128,7 +128,7 @@ it('shows the print-required badge in the Archive results table, clickable for t
     $response->assertSee('openDocumentViewer(', false);
 });
 
-it('shows the nested movement timeline for a document row in the Archive', function () {
+it('opens the shared Document Tracker popup for a document row in the Archive', function () {
     $originator = User::factory()->originator()->create();
     $doc = DocumentRepository::create([
         'originator_id' => $originator->user_id, 'title' => 'archive-nested-test.txt', 'file_path' => 'documents/archive-nested-test.txt',
@@ -140,8 +140,10 @@ it('shows the nested movement timeline for a document row in the Archive', funct
     $response = $this->actingAs($originator)->get(route('originator.archive', ['category' => 'Job Order']));
 
     $response->assertOk();
-    $response->assertSee('archive-movements-' . $doc->document_id, false);
-    $response->assertSee('Uploaded');
+    // No more inline-expanding <tr> — this row opens the shared Document
+    // Tracker popup instead (see routes/web.php's documents.trackerModal).
+    $response->assertSee("openKpiDrilldown('document-tracker'", false);
+    $response->assertSee(route('documents.trackerModal', $doc), false);
 });
 
 it('no longer exposes a category print-default admin route', function () {

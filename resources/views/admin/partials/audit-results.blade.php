@@ -14,12 +14,14 @@
     $actionLabels = \App\Services\DocumentMovementTimeline::ACTION_LABELS;
 @endphp
 
-{{-- id targeted by sizeAuditTable() in audit_logs.blade.php — the PAGE
-     never scrolls, this scrolls internally instead, same principle as
-     Document Tracker/the Control Center's Recent Activity. --}}
-<div id="audit-table-scroll" class="overflow-x-auto overflow-y-auto">
+{{-- flex-1 + overflow-hidden here (not on the pagination div below) — the
+     parent #audit-results is capped to the device's screen height (see
+     audit_logs.blade.php); this is what resources/js/app.js's
+     initFittedPagination() measures against to decide how many rows
+     actually fit, hiding the rest. --}}
+<div class="overflow-x-auto flex-1 overflow-y-hidden js-adaptive-rows-area">
 <table class="w-full min-w-[720px] text-sm">
-    <thead class="sticky top-0 bg-surface-50 text-surface-500 text-xs uppercase tracking-wide">
+    <thead class="bg-surface-50 text-surface-500 text-xs uppercase tracking-wide">
         <tr>
             <th class="text-left px-6 py-3 font-medium border-r border-surface-200">Timestamp</th>
             <th class="text-left px-6 py-3 font-medium border-r border-surface-200">Document Title</th>
@@ -43,4 +45,11 @@
     </tbody>
 </table>
 </div>
-<div id="audit-pagination-footer" class="px-6 py-4 border-t border-surface-200">{{ $logs->links() }}</div>
+
+{{-- Feature: client-side "fitted" pagination — see resources/js/app.js's
+     initFittedPagination() for the full mechanism. Not Laravel's own
+     $logs->links() — the whole list is already in the DOM above (no
+     server-side page size at all now), and this container is entirely
+     built by that JS using the exact same original nav look as
+     resources/views/vendor/pagination/tailwind.blade.php. --}}
+<div id="audit-results-pagination" class="px-6 py-4 border-t border-surface-200 flex-shrink-0"></div>

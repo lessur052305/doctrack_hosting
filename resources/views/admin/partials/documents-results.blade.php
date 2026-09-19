@@ -11,9 +11,15 @@
     it again inline here would just be the same data twice. Clicking a
     row goes straight there instead.
 --}}
+{{-- flex-1 + overflow-hidden here (not on the pagination div below) — the
+     parent #doc-tracking-results is capped to the device's screen height
+     (see index.blade.php); this is what resources/js/app.js's
+     initFittedPagination() measures against to decide how many documents
+     actually fit, hiding the rest. --}}
+<div class="overflow-x-auto flex-1 overflow-y-hidden js-adaptive-rows-area">
 <div class="divide-y divide-surface-100">
     @forelse($documents as $doc)
-        <div class="p-6 hover:bg-surface-50 cursor-pointer transition-colors"
+        <div class="doc-tracking-row p-6 hover:bg-surface-50 cursor-pointer transition-colors" data-row-group="{{ $doc->document_id }}"
             onclick="window.location.href='{{ route('documents.track', $doc) }}'">
             <div class="flex flex-wrap items-start justify-between gap-3">
                 <div class="min-w-0">
@@ -40,4 +46,12 @@
         <div class="p-12 text-center text-sm text-surface-400">No documents match these filters.</div>
     @endforelse
 </div>
-<div class="px-6 py-4 border-t border-surface-200">{{ $documents->links() }}</div>
+</div>
+
+{{-- Feature: client-side "fitted" pagination — see resources/js/app.js's
+     initFittedPagination() for the full mechanism. Not Laravel's own
+     $documents->links() — the whole list is already in the DOM above (no
+     server-side page size at all now), and this container is entirely
+     built by that JS using the exact same original nav look as
+     resources/views/vendor/pagination/tailwind.blade.php. --}}
+<div id="doc-tracking-results-pagination" class="px-6 py-4 border-t border-surface-200 flex-shrink-0"></div>

@@ -271,15 +271,22 @@ test('the approver picker groups by department with heads listed before staff', 
         ->assertSee('Staff');
 });
 
-test('the approver picker shows each approver\'s specific stage(s), or every stage in their category if they have no explicit picks', function () {
+test('the approver picker groups by Category -> Stage -> Approver, an unrestricted approver appearing under every stage in their category', function () {
     $originator = User::factory()->originator()->create();
+    $stage1 = WorkflowStage::where('document_category', 'Job Order')->where('stage_name', 'Technical Review')->first();
     $stage2 = WorkflowStage::where('document_category', 'Job Order')->where('stage_name', 'Final Approval')->first();
 
-    $restricted = User::factory()->approver('Job Order')->create(['full_name' => 'Restricted Approver']);
+    // level: 'head' on both — Final Approval now requires it (see
+    // WorkflowService::eligibleApproversForStage()'s head-only rule);
+    // without it neither approver would be eligible for $stage2 at all,
+    // and this test is about STAGE grouping, not the head/staff distinction.
+    $restricted = User::factory()->approver('Job Order')->create(['full_name' => 'Restricted Approver', 'level' => 'head']);
     $restricted->workflowStages()->sync([$stage2->stage_id]);
 
-    $unrestricted = User::factory()->approver('Job Order')->create(['full_name' => 'Unrestricted Approver']);
-    // No sync() call — no explicit picks at all.
+    $unrestricted = User::factory()->approver('Job Order')->create(['full_name' => 'Unrestricted Approver', 'level' => 'head']);
+    // No sync() call — no explicit picks at all, so eligible for every
+    // configured stage in their category (see WorkflowService::
+    // eligibleApproversForStage()'s docblock).
 
     $document = DocumentRepository::create([
         'originator_id' => $originator->user_id,
@@ -290,15 +297,30 @@ test('the approver picker shows each approver\'s specific stage(s), or every sta
     ]);
 
     $response = $this->actingAs($originator)->get(route('originator.documents.selectApprovers', $document));
+    $response->assertOk();
 
-    $response->assertOk()
-        // Category prefixed on both — matters most for the 'unrelated'
-        // picker, which spans every category at once (see the next
-        // test), but checked here too since it's the same label logic.
-        ->assertSee('Job Order — Final Approval', false) // the restricted approver's one specific stage
-        // The unrestricted approver's label lists every configured stage
-        // for their category, not a blank/missing line.
-        ->assertSee('Job Order — Technical Review, Final Approval (all stages)', false);
+    $content = $response->getContent();
+    $categoryPos = strpos($content, 'Job Order');
+    $stage1Pos = strpos($content, $stage1->stage_name);
+    $stage2Pos = strpos($content, $stage2->stage_name);
+    $restrictedInStage1 = strpos($content, 'Restricted Approver', $stage1Pos);
+    $unrestrictedInStage1 = strpos($content, 'Unrestricted Approver', $stage1Pos);
+    $unrestrictedInStage2 = strpos($content, 'Unrestricted Approver', $stage2Pos);
+
+    // Category heads the whole group, above both stage subheadings.
+    expect($categoryPos)->not->toBeFalse()
+        ->and($stage1Pos)->not->toBeFalse()->and($stage2Pos)->not->toBeFalse()
+        ->and($categoryPos)->toBeLessThan($stage1Pos)
+        ->and($categoryPos)->toBeLessThan($stage2Pos)
+        // The unrestricted approver appears under BOTH stages — eligible
+        // for every stage in the category, not just one.
+        ->and($unrestrictedInStage1)->not->toBeFalse()
+        ->and($unrestrictedInStage2)->not->toBeFalse()
+        // The restricted approver only appears under Final Approval — the
+        // one stage they were explicitly synced to — never under Technical
+        // Review at all (strpos search bounded to before Final Approval's
+        // heading, so this only finds a genuine Technical Review listing).
+        ->and($restrictedInStage1 === false || $restrictedInStage1 > $stage2Pos)->toBeTrue();
 });
 
 test('the unrelated picker labels each approver with their own category, since it spans every category at once', function () {

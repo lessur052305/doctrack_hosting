@@ -6,14 +6,29 @@
 --}}
 <div class="bg-white rounded-xl shadow-card border border-surface-200 overflow-hidden">
     <div class="px-6 py-4 border-b border-surface-200 flex items-center justify-between">
-        <div>
+        <div class="flex items-baseline gap-2">
             <h2 class="text-sm font-semibold text-surface-900">Approved Documents</h2>
-            @if($isOwnSubmissionsView)
-                <p class="text-xs text-surface-400 mt-0.5">Showing only documents you submitted, across all categories.</p>
-            @endif
+            <span class="text-xs text-surface-400 tabular-nums">{{ $documents->total() }} total</span>
         </div>
-        <span class="text-xs text-surface-400">{{ $documents->total() }} total</span>
+        @if(auth()->user()->isAdmin())
+            {{-- Feature: "+ Import Legacy Document" as a button + popup
+                 instead of a permanently-visible collapsible bar (see
+                 archive/index.blade.php's matching comment) — same
+                 placement/style as the Originator dashboard's
+                 "+ New Submission" button. --}}
+            <button type="button"
+                onclick="openKpiDrilldown('legacy-import', 'Import Legacy Document', '{{ route('admin.archive.legacy.form') }}')"
+                class="inline-flex items-center gap-2 bg-gradient-to-b from-primary-600 to-primary-700 hover:from-primary-700 hover:to-primary-800 text-white text-sm font-medium px-4 py-2.5 rounded-lg shadow-sm transition-all">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/>
+                </svg>
+                Import Legacy Document
+            </button>
+        @endif
     </div>
+    @if($isOwnSubmissionsView)
+        <p class="px-6 pt-3 text-xs text-surface-400">Showing only documents you submitted, across all categories.</p>
+    @endif
     <div class="overflow-x-auto">
     <table class="w-full text-sm">
         <thead class="bg-surface-50 text-surface-500 text-xs uppercase tracking-wide">
@@ -40,9 +55,13 @@
                         ->max('acted_at') ?? $doc->updated_at;
                 @endphp
                 <tr class="hover:bg-surface-50 transition-colors cursor-pointer"
-                    onclick="document.getElementById('archive-movements-{{ $doc->document_id }}').classList.toggle('hidden'); this.querySelector('.archive-expand-icon').classList.toggle('rotate-90')">
+                    onclick="openKpiDrilldown('document-tracker', '{{ addslashes($doc->title) }}', '{{ route('documents.trackerModal', $doc) }}')">
                     <td class="px-4 py-3 font-medium text-surface-800 max-w-xs truncate">
-                        <svg class="archive-expand-icon inline-block w-3 h-3 mr-1 text-surface-400 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+                        {{-- Feature: opens the shared Document Tracker
+                             popup — see admin/partials/audit-row.blade.php's
+                             matching comment for why a popup instead of
+                             expanding this row in place. --}}
+                        <svg class="inline-block w-3 h-3 mr-1 text-surface-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 4.5a3 3 0 013-3h9a3 3 0 013 3v15a3 3 0 01-3 3h-9a3 3 0 01-3-3v-15z"/><path stroke-linecap="round" stroke-linejoin="round" d="M8.25 8.25h7.5M8.25 12h7.5M8.25 15.75h4.5"/></svg>
                         {{ $doc->title }}
                         @if($doc->is_legacy_import)
                             <span class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-processing-50 text-processing-700 align-middle">Imported</span>
@@ -78,13 +97,6 @@
                                 class="inline-flex items-center bg-primary-700 hover:bg-primary-800 text-white font-medium text-xs px-2.5 py-1 rounded-lg transition-colors whitespace-nowrap">
                                 Download &darr;
                             </a>
-                        </div>
-                    </td>
-                </tr>
-                <tr id="archive-movements-{{ $doc->document_id }}" class="hidden bg-surface-50/60">
-                    <td colspan="7" class="px-6 py-3">
-                        <div class="border border-surface-200 rounded-lg overflow-hidden bg-white">
-                            <x-document-movement-timeline :document="$doc" />
                         </div>
                     </td>
                 </tr>
