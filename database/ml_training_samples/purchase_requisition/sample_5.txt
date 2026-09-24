@@ -1,10 +1,12 @@
-REQUEST FOR PURCHASE
+PURCHASE REQUISITION REQUEST
 
-Requisition No.: PR-2026-2154
-Department: Security Office
+Department: Engineering
+Requestor: Dominic Pascual
+Date: June 5, 2026
 
-Item description and quantity: additional indoor security cameras for the warehouse entrance, 4 units requested.
-Budget: PHP 32,000.00.
-Date filed: June 19, 2026.
+Items requested: a new external backup drive array for the finance server (Qty: 2 units).
+Total Cost: PHP 65,000.00.
 
-This was requested to address a gap identified during the department's recent inventory review, and prompt processing would be appreciated given current stock levels.
+Note: prior stock has been fully depleted; this is not a discretionary purchase.
+
+Approved By: _______________________________

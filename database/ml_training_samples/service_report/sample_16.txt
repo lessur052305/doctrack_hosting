@@ -1,8 +1,10 @@
-SERVICE COMPLETION REPORT
+Service Visit Summary
 
-Service report no.: SR-2026-3065
-Date of service rendered: June 15, 2026
-Technician on duty: Nestor Garcia
+Technician: Ricardo Villanueva
+Date of Service: June 16, 2026
 
-Summary of work: functional check of the fire alarm system across the building.
-Findings and recommendations: All zones tested and responded correctly except one smoke detector on the 2nd floor, which has been tagged for replacement.
+On this visit, Ricardo Villanueva performed servicing of the central chiller unit supplying the office floors.
+
+Findings: Refrigerant levels checked and topped up slightly; condenser coils cleaned to restore full cooling efficiency. This report has been filed for the maintenance records.
+
+Approved By: _______________________________

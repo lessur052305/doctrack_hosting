@@ -1,8 +1,10 @@
-Field Service Report
-Service Report No SR-2026-3169
+Service Visit Summary
 
-Technician assigned: Allen Rose
-Date of service: June 23, 2026
+Technician: Rolando Cruz
+Date of Service: June 4, 2026
 
-This report covers routine maintenance check of the company service vehicle.
-Findings: Oil changed and tires checked for wear; brake pads are at roughly 60 percent and do not yet require replacement. No additional issues were reported by staff on site during the visit.
+On this visit, Rolando Cruz performed quarterly servicing of the building's main elevator.
+
+Findings: Cables, brakes, and door sensors inspected and found within safe operating tolerance; minor lubrication performed on guide rails. This report has been filed for the maintenance records.
+
+Approved By: _______________________________

@@ -1,12 +1,10 @@
-PURCHASE REQUISITION
+Requisition Slip
 
-Requisition No.: PR-2026-2033
-Department: IT Department
-Date: June 8, 2026
-Requested by: Patricia Lim
+Filed by: Lourdes Gatchalian, Finance Department
+Date: June 14, 2026
 
-Item Description: ergonomic office chairs with adjustable lumbar support
-Quantity: 8 units
-Estimated Budget: PHP 64,000.00
+Item Description: a portable air conditioning unit for the server room as a temporary backup.
+Quantity: 1 unit.
+Estimated total cost: PHP 47,500.00. Kindly process at your earliest convenience.
 
-Justification: This purchase is needed to support ongoing department operations and should be sourced from an accredited supplier where available.
+Approved By: _______________________________

@@ -1,11 +1,9 @@
-SERVICE REPORT
+Field Service Report
 
-Service Report No.: SR-2026-3234
-Date of Service: June 28, 2026
-Technician: Patricia Lim
+Technician assigned: Lourdes Gatchalian
+Date of service: June 9, 2026
 
-Work Performed: inspection of the loading bay roller shutter door.
+This report covers annual pest control treatment of the warehouse storage area.
+Findings: Treatment completed in all designated zones; minor rodent activity noted near the loading dock and flagged for a follow-up visit.
 
-Findings: Mechanism operates smoothly after lubrication; a minor squeak reported by staff was resolved during the visit.
-
-The area has been left in working condition and the requesting department was informed of the outcome upon completion.
+Approved By: _______________________________

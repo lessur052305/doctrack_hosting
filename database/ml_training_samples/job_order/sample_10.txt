@@ -1,8 +1,8 @@
-Company Job Order Form
+MAINTENANCE JOB REQUEST
 
-This Job Order No. JO-2026-1133 is submitted for approval.
+Date Requested: June 10, 2026
+Requested By: Dominic Pascual of the Finance department
 
-Requested by: Alvin Castillo, on behalf of Engineering Department.
-Date requested: June 20, 2026.
+Description of Work: troubleshooting of intermittent power flickering in the east wing office block, suspected loose breaker connection. Kindly advise on scheduling once assigned to a technician.
 
-Description of work: assembly and installation of cubicle partitions for three new hires starting next month. The requesting department asks that this be scheduled without disrupting regular working hours if possible, and that any parts needed be sourced from an approved supplier.
+Approved By: _______________________________

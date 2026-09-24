@@ -21,7 +21,7 @@
         $reviewDueAt = $container->assignments->pluck('review_due_at')->filter()->min();
         $reviewOverdue = $reviewDueAt && $reviewDueAt->isPast();
     @endphp
-    <div class="rounded-xl border {{ $reviewOverdue ? 'border-rejected-500/30' : 'border-processing-500/20' }} bg-white shadow-card overflow-hidden mb-4">
+    <div id="review-doc-{{ $doc->document_id }}" class="rounded-xl border {{ $reviewOverdue ? 'border-rejected-500/30' : 'border-processing-500/20' }} bg-white shadow-card overflow-hidden mb-4">
         <div class="p-6">
             <div class="flex items-start justify-between gap-3 mb-1">
                 <h3 class="text-sm font-semibold text-surface-900">{{ $doc->title }}</h3>

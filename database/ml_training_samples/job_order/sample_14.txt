@@ -1,12 +1,9 @@
-JOB ORDER
+INTERNAL JOB ORDER REQUEST
 
-Job Order No.: JO-2026-1021
-Date Requested: June 4, 2026
-Department: Procurement Office
-Requested By: Allen Rose
-Priority: High Priority
+Finance department is requesting maintenance support.
+Requested by: Rolando Cruz
+Date requested: June 14, 2026
 
-Description of Work:
-repair of two office chairs with broken armrests and a filing cabinet drawer that no longer slides open.
+Description of work needed: installation of additional shelving units in the archive storage room to accommodate overflow records. Prompt attention would be appreciated given its impact on daily operations.
 
-Please coordinate with the requesting department to schedule the work at the earliest convenient time. Kindly notify the front desk upon completion so the request can be closed out in the tracking log.
+Approved By: _______________________________

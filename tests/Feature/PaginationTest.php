@@ -94,6 +94,32 @@ it('paginates the Auto-Approval Review queue at 2 per page', function () {
     $page2->assertOk()->assertViewHas('reviewContainers', fn ($containers) => $containers->count() === 1);
 });
 
+it('deep-links from Admin Violations straight to the page containing that document (Feature: highlight)', function () {
+    $admin = User::factory()->admin()->create();
+    $approver = User::factory()->approver('Job Order')->create();
+    WorkflowStage::create(['document_category' => 'Job Order', 'stage_name' => 'Review', 'sequence_order' => 1]);
+
+    $targetDoc = null;
+    for ($i = 0; $i < 3; $i++) {
+        $autoDoc = paginationDoc($approver, ['title' => "auto-{$i}.txt", 'global_status' => 'approved']);
+        DocumentAssignment::create([
+            'document_id' => $autoDoc->document_id, 'user_id' => $approver->user_id,
+            'stage_id' => WorkflowStage::first()->stage_id, 'due_date' => $autoDoc->due_date,
+            'priority_rank' => 2, 'individual_status' => 'approved', 'acted_at' => now()->addSeconds($i),
+            'auto_approved' => true,
+        ]);
+        if ($i === 2) {
+            $targetDoc = $autoDoc; // 3rd of 3, sorted oldest-first by acted_at, so it lands on page 2 of a 2-per-page list
+        }
+    }
+
+    $response = $this->actingAs($admin)->get(route('admin.sla.queue', ['highlight' => $targetDoc->document_id]));
+
+    $response->assertOk()
+        ->assertViewHas('reviewContainers', fn ($containers) => $containers->currentPage() === 2
+            && $containers->pluck('document.document_id')->contains($targetDoc->document_id));
+});
+
 it('honors the pagination param on the SLA Queue refresh fragment (Feature: AJAX pagination)', function () {
     $admin = User::factory()->admin()->create();
     $approver = User::factory()->approver('Job Order')->create();
@@ -193,8 +219,8 @@ it('paginates Admin Violations at 5 per page', function () {
         ]);
         AdminViolation::create([
             'document_id' => $doc->document_id, 'assignment_id' => $assignment->assignment_id,
-            'violation_type' => 'missed_approval', 'stage_name' => 'Review',
-            'first_violated_at' => now(), 'resolved_at' => now(),
+            'violation_type' => 'late_review', 'stage_name' => 'Review',
+            'first_violated_at' => now(), 'resolved_at' => null,
         ]);
     }
 

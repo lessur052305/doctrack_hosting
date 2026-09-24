@@ -1,8 +1,12 @@
-Company Job Order Form
+JOB ORDER
 
-This Job Order No. JO-2026-1028 is submitted for approval.
+Date Requested: June 15, 2026
+Department: Engineering
+Requested By: Angelica Bautista
 
-Requested by: Carmela Diaz, on behalf of Engineering Department.
-Date requested: June 5, 2026.
+Description of Work:
+replacement of the cracked floor tiles near the main lobby entrance, a tripping hazard flagged by security.
 
-Description of work: repainting of the hallway walls on the 2nd floor, including patching of cracks near the stairwell. The requesting department asks that this be scheduled without disrupting regular working hours if possible, and that any parts needed be sourced from an approved supplier.
+Please coordinate with the requesting department to schedule the work at the earliest convenient time.
+
+Approved By: _______________________________

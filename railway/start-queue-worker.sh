@@ -21,4 +21,14 @@ set -e
 # Clearing here guarantees this process always reads whatever's currently set.
 php artisan config:clear
 
-exec php artisan queue:work --sleep=1 --tries=3 --max-time=3600
+# --max-time=3600 makes queue:work exit cleanly (code 0) every hour as a
+# memory-hygiene measure — but a clean exit isn't a crash, so Railway's
+# "On Failure" restart policy (the only tier this project's plan allows)
+# never restarts it: the service was observed sitting "Completed" instead
+# of "Online" after its first hour, silently dropping queued mail and
+# delayed SLA-escalation jobs until someone manually redeployed it. Looping
+# here keeps the periodic restart's memory benefit without depending on
+# Railway's restart policy at all.
+while true; do
+  php artisan queue:work --sleep=1 --tries=3 --max-time=3600
+done

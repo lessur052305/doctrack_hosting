@@ -1,12 +1,11 @@
-PURCHASE REQUISITION
+Purchase Requisition Form
 
-Requisition No.: PR-2026-2165
-Department: IT Department
-Date: June 20, 2026
-Requested by: Teresa Navarro
+This request is filed by the Finance department on June 6, 2026.
 
-Item Description: uninterruptible power supply (UPS) units for the server rack
-Quantity: 3 units
-Estimated Budget: PHP 45,000.00
+Item description: stackable filing cabinets for the archive room expansion.
+Quantity requested: 6 units.
+Budget allocated: PHP 41,200.00.
 
-Justification: This purchase is needed to support ongoing department operations and should be sourced from an accredited supplier where available.
+The department head has reviewed and endorsed this requisition for approval and release of funds.
+
+Approved By: _______________________________

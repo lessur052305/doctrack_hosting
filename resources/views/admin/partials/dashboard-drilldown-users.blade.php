@@ -17,7 +17,7 @@
                     <td class="px-4 py-2.5 text-surface-600">{{ $user->assigned_category ?? 'All' }}</td>
                     <td class="px-4 py-2.5">
                         @if($user->role === 'approver')
-                            <span class="text-xs font-medium {{ $user->is_busy ? 'text-amber-700' : 'text-approved-700' }}">{{ $user->is_busy ? 'Busy' : 'Available' }}</span>
+                            <span class="text-xs font-medium {{ $user->isAvailable() ? 'text-approved-700' : 'text-surface-400' }}">{{ $user->isAvailable() ? 'Available' : 'Not Available' }}</span>
                         @else
                             <span class="text-xs text-surface-400">—</span>
                         @endif

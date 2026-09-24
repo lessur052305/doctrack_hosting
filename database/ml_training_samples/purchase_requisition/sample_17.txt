@@ -1,12 +1,11 @@
-PURCHASE REQUISITION
+REQUEST FOR PURCHASE
 
-Requisition No.: PR-2026-2066
-Department: IT Department
-Date: June 11, 2026
-Requested by: Ricardo Villanueva
+Department: Engineering
 
-Item Description: a 4-drawer steel filing cabinet with lock
-Quantity: 3 units
-Estimated Budget: PHP 21,000.00
+Item description and quantity: branded uniforms for the newly onboarded facilities staff, 18 sets requested.
+Budget: PHP 29,700.00.
+Date filed: June 17, 2026.
 
-Justification: This purchase is needed to support ongoing department operations and should be sourced from an accredited supplier where available.
+This was requested to address a gap identified during the department's recent inventory review.
+
+Approved By: _______________________________

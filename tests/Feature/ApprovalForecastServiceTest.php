@@ -218,7 +218,16 @@ test('pads the estimate for a next-stage approver who already has a deep pending
         $workflow->routeToWorkflow($history);
         $this->travel(1)->hours();
         $workflow->decide(DocumentAssignment::where('document_id', $history->document_id)->first(), $approver, 'approved');
-        $this->travelBack();
+        // Re-freeze back to the SAME fixed Wednesday morning for the next
+        // round — travelBack() doesn't "undo the travel() above," it
+        // cancels time-freezing entirely and returns to the real current
+        // wall-clock moment, which defeated the whole point of freezing
+        // time in the first place (confirmed via debug output: only the
+        // first of these 3 rounds ever measured a non-zero business-hours
+        // gap — rounds 2 and 3 were silently computing their elapsed time
+        // against whatever the real time happened to be when the suite
+        // ran, not this fixed business-hours window).
+        $this->travelTo(\Carbon\Carbon::parse('2026-08-12 10:00:00'));
     }
 
     $current = forecastDoc($originator);

@@ -63,8 +63,7 @@ test('the stat cards and approver roster stay hidden on the folder-grid screen, 
 
     $response->assertOk();
     $response->assertDontSee('Total Violations');
-    $response->assertDontSee('Top Category');
-    $response->assertDontSee('Avg. Minutes Overdue');
+    $response->assertDontSee('Most Violations');
     $response->assertDontSee('Approvers — Violation Counts');
 });
 
@@ -77,7 +76,7 @@ test('the stat cards and approver table appear once a category is picked, scoped
 
     $response->assertOk();
     $response->assertSee('Total Violations');
-    $response->assertSee('Top Category');
+    $response->assertSee('Most Violations');
     $response->assertSee('Approvers — Violation Counts');
     $response->assertSee('Disputed');
 });
@@ -93,19 +92,6 @@ test('clicking into a category folder shows the Admin/Approver tables and hides 
     $response->assertSee('Admin Violations');
     $response->assertSee('Approvers — Violation Counts');
     $response->assertDontSee('Browse by Category');
-});
-
-test('the Top Category card reflects the category with the most breaches', function () {
-    $admin = User::factory()->admin()->create();
-    violationIn('Job Order');
-    violationIn('Job Order');
-    violationIn('Service Report');
-
-    $response = $this->actingAs($admin)->get(route('admin.sla.violations', ['category' => 'Job Order']));
-
-    $byCategory = $response->viewData('byCategory');
-    expect($byCategory->ml_category)->toBe('Job Order')
-        ->and($byCategory->total)->toBe(2);
 });
 
 test('the Disputed card counts violations whose document was later disputed', function () {

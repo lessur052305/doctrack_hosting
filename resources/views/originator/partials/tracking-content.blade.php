@@ -17,10 +17,45 @@
     the Originator's own tracking
     page and Admin's Document Tracking module, since both route through
     DocumentController::show() to this same partial.
+
+    Feature: a way back without relying on the sidebar or the browser's
+    own back button — this page is always reached by clicking INTO
+    something from a list (Your Submissions for an Originator; the
+    Document Tracking module or Audit Logs for an Admin, who can inspect
+    any document — see routes/web.php's documents.track comment), never
+    from the sidebar directly, so it's the one place in the app that
+    genuinely needs an explicit return link. Admin's two possible origins
+    are disambiguated by a `from` query param the caller links with (see
+    admin/partials/audit-row.blade.php); Document Tracking is the default
+    since it's the more common path in. An Originator only ever has one
+    possible origin, so no param needed there. Computed HERE rather than
+    in tracking.blade.php — this partial is also what trackingRefresh()
+    returns directly for the live-poll swap, which never touches
+    tracking.blade.php at all, so the link has to keep resolving
+    correctly on every refresh too, not just the first page load.
 --}}
+@php
+    $backTarget = auth()->user()->isOriginator()
+        ? ['label' => 'Your Submissions', 'url' => route('originator.dashboard')]
+        : (request('from') === 'audit'
+            ? ['label' => 'Audit Logs', 'url' => route('admin.audit.logs')]
+            : ['label' => 'Document Tracking', 'url' => route('admin.documents.index')]);
+@endphp
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
     <div class="space-y-6 flex flex-col">
         <div class="bg-white rounded-xl shadow-card border border-surface-200 p-6">
+            {{-- Tucked inside the header card itself, right above the
+                 title, instead of floating above the card as its own
+                 element — that used to leave a slab of empty space at the
+                 top of the page before any real content appeared. Styled
+                 as the same light pill used for "All Categories" on
+                 Archive/SLA Violation Reports, not a solid button — this
+                 is the first thing on the page now, so it shouldn't read
+                 as heavier than the content below it. --}}
+            <a href="{{ $backTarget['url'] }}" class="inline-flex items-center gap-1 text-xs font-medium text-primary-700 bg-primary-50 hover:bg-primary-100 ring-1 ring-inset ring-primary-500/20 rounded-full px-3 py-1.5 transition-colors mb-3">
+                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+                Back to {{ $backTarget['label'] }}
+            </a>
             <div class="flex items-start justify-between mb-6">
                 <div>
                     <div class="flex items-center gap-2">
@@ -39,6 +74,19 @@
                         @if($document->custom_routed)
                             <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700" title="Routed directly to hand-picked approver(s) instead of the standard pipeline">Custom Routed</span>
                         @endif
+                        {{-- Feature: Revision History (Google-Docs-style —
+                             see documents/partials/revision-history-list.
+                             blade.php). Same viewTracking population as
+                             this whole page: originator, any assigned
+                             approver, Admin — so it's always offered here,
+                             not gated behind open Revision Requests below
+                             (a past revision can still be worth reviewing
+                             after every flag on it is already resolved). --}}
+                        <button type="button"
+                            onclick="openKpiDrilldown('revision-history', 'Revision History', {{ Js::from(route('documents.revisions', $document)) }})"
+                            class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-surface-100 text-surface-600 hover:bg-surface-200 transition-colors cursor-pointer">
+                            History
+                        </button>
                         @if($document->requires_printing && in_array($document->global_status, ['approved', 'auto_approved']))
                             @if(auth()->user()->isOriginator())
                                 <button type="button"
@@ -108,9 +156,13 @@
                             &middot; Confidence: {{ $document->ml_confidence }}%
                         @endif
                         @if($document->readability_score !== null)
-                            &middot; Readability: {{ $document->readability_score }}%
-                            @if($document->readability_score < config('ml.min_real_word_ratio', 0.7) * 100)
-                                <span class="text-surface-400">(scored low — likely vocabulary the model hasn't learned yet, not an error)</span>
+                            @if($document->ml_recheck_readability_score !== null)
+                                &middot; <span class="text-surface-400">Recheck Readability: {{ $document->readability_score }}% &rarr; {{ $document->ml_recheck_readability_score }}%</span>
+                            @else
+                                &middot; Readability: {{ $document->readability_score }}%
+                                @if($document->readability_score < config('ml.min_real_word_ratio', 0.7) * 100)
+                                    <span class="text-surface-400">(scored low — likely vocabulary the model hasn't learned yet, not an error)</span>
+                                @endif
                             @endif
                         @endif
                         @if($document->used_ocr_fallback)
@@ -132,7 +184,11 @@
 
             <x-lifecycle-stepper :document="$document" />
 
-            @if($document->global_status === 'rejected' && !$document->nextVersion)
+            {{-- 'processing' here is never still-in-progress (see
+                 DocumentController::resubmit()'s matching comment) — it's
+                 a stuck validation/extraction failure, same as 'rejected',
+                 and needs the same way out. --}}
+            @if(in_array($document->global_status, ['rejected', 'processing'], true) && !$document->nextVersion)
                 <div class="mt-6 pt-6 border-t border-surface-200">
                     <details class="text-sm">
                         {{-- bg + padding, not just colored underlined text —

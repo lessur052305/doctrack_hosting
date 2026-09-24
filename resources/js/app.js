@@ -409,6 +409,56 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
+    // Per-device text size control (Feature: readability on small/laptop
+    // screens — see components/text-size-control.blade.php and
+    // resources/css/app.css's data-text-size rules). Persisted in
+    // localStorage, not the user's account — a per-device preference,
+    // not something that should follow them to a different, differently-
+    // sized screen. The attribute itself is already applied before first
+    // paint by the inline script in layouts/app.blade.php's <head>
+    // (avoids a flash at the default size); this just wires up the menu
+    // and keeps its checkmark in sync.
+    const textSizeControl = document.getElementById('text-size-control');
+    if (textSizeControl) {
+        const applyTextSizeCheck = (size) => {
+            textSizeControl.querySelectorAll('[data-text-size-option]').forEach((btn) => {
+                btn.querySelector('[data-text-size-check]')?.classList.toggle('hidden', btn.dataset.textSizeOption !== size);
+            });
+        };
+
+        applyTextSizeCheck(document.documentElement.dataset.textSize || 'normal');
+
+        textSizeControl.querySelectorAll('[data-text-size-option]').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const size = btn.dataset.textSizeOption;
+                if (size === 'normal') {
+                    delete document.documentElement.dataset.textSize;
+                } else {
+                    document.documentElement.dataset.textSize = size;
+                }
+                try {
+                    localStorage.setItem('textSize', size);
+                } catch (e) {}
+                applyTextSizeCheck(size);
+                textSizeControl.open = false;
+
+                // Every JS-computed height cap in this app (Document
+                // Tracker, Your Submissions, User Accounts, Document
+                // Tracking, Audit Logs, the Calendar — see
+                // sizeCappedCard()'s own docblock) already re-measures on
+                // a plain window resize, since a static CSS calc() can't
+                // account for the variable space above those cards. A
+                // root font-size change never fires that event on its
+                // own, so without this, switching text size left every
+                // one of those pages with a stale, too-small-or-too-large
+                // cap until the next real window resize — this makes the
+                // text-size change reuse that exact same, already-wired-
+                // everywhere mechanism instead of needing its own.
+                window.dispatchEvent(new Event('resize'));
+            });
+        });
+    }
+
     // Notification bell — live unread count/list, present on every page.
     // Instant via Reverb (see startLiveChannel below); the slow poll is
     // just a safety net in case the WebSocket connection is down. Swaps
@@ -460,7 +510,25 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
             });
         }
+
+        // Presence heartbeat (Feature: online-based "Available" status,
+        // and the chat widget's online dot) — pings while this tab is
+        // open; ages out on its own server-side (see User::isOnline()) if
+        // the tab closes or the connection dies, no explicit "I'm
+        // leaving" signal needed. Piggybacks on the bell's presence check
+        // (bell only renders when authenticated) rather than a separate marker.
+        const sendHeartbeat = () => {
+            const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content;
+            fetch('/presence/heartbeat', {
+                method: 'POST',
+                headers: { 'X-CSRF-TOKEN': csrfToken, Accept: 'application/json' },
+            }).catch(() => {});
+        };
+        sendHeartbeat();
+        setInterval(sendHeartbeat, 60000);
     }
+
+    initChatWidget();
 });
 
 /**
@@ -904,3 +972,198 @@ window.addEventListener('popstate', () => {
         __refreshAjaxPaginationContainer(container, opts, window.location.search);
     });
 });
+
+/**
+ * Chat widget (Feature: floating icon to message the single Admin, and
+ * for Admin to message any user). Tracks its own currently-open view
+ * client-side (list/thread/media + which other user) so a live push or
+ * poll tick re-fetches exactly what's on screen instead of guessing.
+ */
+let __chatState = { view: 'list', withId: null };
+
+function __chatCsrfToken() {
+    return document.querySelector('meta[name="csrf-token"]')?.content;
+}
+
+function __chatRefreshUrl() {
+    const widget = document.getElementById('chat-widget');
+    if (!widget) return null;
+
+    const base = widget.dataset.refreshUrl;
+    const params = new URLSearchParams();
+    if (__chatState.withId) params.set('with', __chatState.withId);
+    if (__chatState.view === 'media') params.set('view', 'media');
+    if (__chatState.query) params.set('q', __chatState.query);
+
+    const qs = params.toString();
+    return qs ? `${base}?${qs}` : base;
+}
+
+function __chatLoadPanel() {
+    const url = __chatRefreshUrl();
+    const body = document.getElementById('chat-panel-body');
+    if (!url || !body) return;
+
+    fetch(url, { headers: { Accept: 'text/html' } })
+        .then((res) => (res.ok ? res.text() : Promise.reject(res)))
+        .then((html) => {
+            body.innerHTML = html;
+            const messages = document.getElementById('chat-messages');
+            if (messages) messages.scrollTop = messages.scrollHeight;
+        })
+        .catch(() => {});
+
+    // Opening a thread IS the read receipt for it, same convention as the
+    // notification bell marking everything read on open.
+    if (__chatState.view === 'thread' && __chatState.withId) {
+        fetch(`/chat/thread/${__chatState.withId}/read`, {
+            method: 'POST',
+            headers: { 'X-CSRF-TOKEN': __chatCsrfToken(), Accept: 'application/json' },
+        })
+            .then(() => __chatUpdateBadge())
+            .catch(() => {});
+    }
+}
+
+window.openChatUserList = function () {
+    __chatState = { view: 'list', withId: null };
+    __chatLoadPanel();
+};
+
+window.openChatThread = function (otherId) {
+    __chatState = { view: 'thread', withId: otherId };
+    __chatLoadPanel();
+};
+
+window.openChatMedia = function (otherId) {
+    __chatState = { view: 'media', withId: otherId };
+    __chatLoadPanel();
+};
+
+window.searchChatThread = function (otherId, query) {
+    __chatState = { view: 'thread', withId: otherId, query };
+    __chatLoadPanel();
+};
+
+window.previewChatImage = function () {
+    const input = document.getElementById('chat-image-input');
+    const label = document.getElementById('chat-image-preview-name');
+    if (!input || !label) return;
+
+    if (input.files && input.files[0]) {
+        label.textContent = `📎 ${input.files[0].name}`;
+        label.classList.remove('hidden');
+    } else {
+        label.classList.add('hidden');
+    }
+};
+
+window.sendChatMessage = function (event, otherId) {
+    event.preventDefault();
+    const form = event.target;
+    const bodyInput = document.getElementById('chat-body-input');
+    const imageInput = document.getElementById('chat-image-input');
+    const text = bodyInput ? bodyInput.value.trim() : '';
+
+    if (!text && !(imageInput && imageInput.files && imageInput.files[0])) {
+        return false; // nothing to send
+    }
+
+    const widget = document.getElementById('chat-widget');
+    const formData = new FormData();
+    formData.append('with', otherId);
+    if (text) formData.append('body', text);
+    if (imageInput && imageInput.files && imageInput.files[0]) {
+        formData.append('image', imageInput.files[0]);
+    }
+
+    fetch(widget.dataset.sendUrl, {
+        method: 'POST',
+        headers: { 'X-CSRF-TOKEN': __chatCsrfToken(), Accept: 'application/json' },
+        body: formData,
+    })
+        .then((res) => (res.ok ? res.json() : Promise.reject(res)))
+        .then(() => {
+            form.reset();
+            const label = document.getElementById('chat-image-preview-name');
+            if (label) label.classList.add('hidden');
+            __chatLoadPanel();
+        })
+        .catch(() => {});
+
+    return false;
+};
+
+function __chatRenderBadge(count) {
+    const badge = document.getElementById('chat-unread-badge');
+    if (!badge) return;
+    if (count > 0) {
+        badge.textContent = count > 9 ? '9+' : count;
+        badge.classList.remove('hidden');
+    } else {
+        badge.classList.add('hidden');
+    }
+}
+
+function __chatUpdateBadge() {
+    const widget = document.getElementById('chat-widget');
+    if (!widget) return;
+
+    fetch(widget.dataset.pollUrl, { headers: { Accept: 'application/json' } })
+        .then((res) => (res.ok ? res.json() : Promise.reject(res)))
+        .then((data) => __chatRenderBadge(data.unread_count))
+        .catch(() => {});
+}
+
+/**
+ * Not built on startLiveChannel()/startLivePoll() — those two are shaped
+ * around swapping one HTML fragment into one fixed target, but the chat
+ * badge's payload is plain JSON and needs to trigger a re-fetch of
+ * whichever of THREE different views (list/thread/media) happens to be
+ * open, not one fixed target. A small dedicated loop here is simpler and
+ * more correct than bending isBusy() into a side-effect hook, which
+ * (tried first) broke startLivePoll's own change-detection by never
+ * letting it record a new baseline.
+ */
+function initChatWidget() {
+    const widget = document.getElementById('chat-widget');
+    if (!widget) return;
+
+    __chatUpdateBadge();
+
+    if (window.Echo) {
+        window.Echo.private(`user.${widget.dataset.userId}`).listen('.chat.message.sent', () => {
+            __chatUpdateBadge();
+            if (widget.open) __chatLoadPanel();
+        });
+    }
+
+    let lastUnread = null;
+    const poll = () => {
+        fetch(widget.dataset.pollUrl, { headers: { Accept: 'application/json' } })
+            .then((res) => (res.ok ? res.json() : Promise.reject(res)))
+            .then((data) => {
+                __chatRenderBadge(data.unread_count);
+                if (lastUnread !== null && data.unread_count !== lastUnread && widget.open) {
+                    __chatLoadPanel();
+                }
+                lastUnread = data.unread_count;
+            })
+            .catch(() => {})
+            .finally(() => setTimeout(poll, (30 + Math.random() * 15) * 1000));
+    };
+    setTimeout(poll, (30 + Math.random() * 15) * 1000);
+
+    // Default view on open: Admin sees the full user list (or whatever
+    // was last open), everyone else (exactly one possible contact) goes
+    // straight into that thread.
+    widget.addEventListener('toggle', () => {
+        if (!widget.open) return;
+
+        if (widget.dataset.isAdmin === '1') {
+            __chatLoadPanel();
+        } else {
+            window.openChatThread(parseInt(widget.dataset.adminId, 10));
+        }
+    });
+}

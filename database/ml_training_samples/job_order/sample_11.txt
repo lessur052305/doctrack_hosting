@@ -1,8 +1,8 @@
-Company Job Order Form
+Facilities Job Order
 
-This Job Order No. JO-2026-1007 is submitted for approval.
+Date Requested: June 11, 2026
+Requested by: Teresa Navarro (Engineering)
 
-Requested by: Juan Santos, on behalf of Finance Department.
-Date requested: June 2, 2026.
+Description of Work / Nature of the Request: replacement of the fire extinguisher units in the basement parking level that failed the latest inspection. This has been raised as a routine facilities concern, not an emergency.
 
-Description of work: repair of the split-type air conditioning unit in the 3rd floor conference room, which has been leaking water and producing a rattling noise during operation. The requesting department asks that this be scheduled without disrupting regular working hours if possible, and that any parts needed be sourced from an approved supplier.
+Approved By: _______________________________

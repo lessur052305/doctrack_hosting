@@ -1,8 +1,9 @@
 INTERNAL JOB ORDER REQUEST
-Reference: Job Order No JO-2026-1119
 
-Warehouse & Logistics is requesting maintenance support.
-Requested by: Dominic Pascual
-Date requested: June 18, 2026
+Finance department is requesting maintenance support.
+Requested by: Edgar Ramos
+Date requested: June 8, 2026
 
-Description of work needed: installation of a new water dispenser unit on the 4th floor pantry. This has been reported more than once and the department would appreciate prompt attention given its impact on daily operations.
+Description of work needed: repair of a leaking pipe fitting under the second floor pantry sink that has caused minor water staining below. Prompt attention would be appreciated given its impact on daily operations.
+
+Approved By: _______________________________

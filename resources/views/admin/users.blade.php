@@ -132,8 +132,13 @@
         // element, no inline style), so this has to re-run every swap too,
         // not just once on load like originator/dashboard.blade.php's
         // #submissions-card (a stable wrapper the swap never touches).
+        // Card height AND row count re-measured together, in that order,
+        // on every resize — including a text-size change (see app.js's
+        // text-size control, which dispatches a synthetic resize event
+        // for exactly this).
         function resizeUsersCard() {
             sizeCappedCard(document.getElementById('users-list'));
+            fittedPagination.refit();
         }
         resizeUsersCard();
         window.addEventListener('resize', resizeUsersCard);

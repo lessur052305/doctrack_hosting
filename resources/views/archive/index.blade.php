@@ -75,7 +75,12 @@
                  and Search/Clear buttons remain a working no-JS fallback. --}}
             <div class="bg-white rounded-xl shadow-card border border-surface-200 p-5">
                 @unless(auth()->user()->isApprover())
-                    <a href="{{ url()->current() }}" class="inline-flex items-center gap-1 text-xs font-medium text-primary-700 hover:underline mb-3">
+                    {{-- Same pill styling as the "All Categories" back links
+                         on SLA Violation Reports and Document Tracking —
+                         light tint, ring, rounded-full — instead of a bare
+                         underlined text link, for visual consistency across
+                         every "back to the folder grid" control in the app. --}}
+                    <a href="{{ url()->current() }}" class="inline-flex items-center gap-1 text-xs font-medium text-primary-700 bg-primary-50 hover:bg-primary-100 ring-1 ring-inset ring-primary-500/20 rounded-full px-3 py-1.5 transition-colors mb-3">
                         <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
                         All Categories
                     </a>

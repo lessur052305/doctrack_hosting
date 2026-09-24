@@ -76,7 +76,6 @@
         // See resources/js/app.js's sizeCappedCard() docblock.
         const docTrackingCard = document.getElementById('doc-tracking-card');
         sizeCappedCard(docTrackingCard);
-        window.addEventListener('resize', () => sizeCappedCard(docTrackingCard));
 
         // Fitted pagination — see resources/js/app.js's
         // initFittedPagination() for the full mechanism (shared with the
@@ -86,6 +85,17 @@
         // fragment's rows/pagination container out from under the running
         // instance.
         const fittedPagination = initFittedPagination('doc-tracking-results', '.doc-tracking-row');
+
+        // Card height AND row count re-measured together, in that order,
+        // on every resize — including a text-size change (see app.js's
+        // text-size control, which dispatches a synthetic resize event
+        // for exactly this). fittedPagination is referenced here even
+        // though it's declared just above, not before — fine, since this
+        // callback only ever runs later, on an actual resize.
+        window.addEventListener('resize', () => {
+            sizeCappedCard(docTrackingCard);
+            fittedPagination.refit();
+        });
 
         // Debounced live search — the search box is the one control that
         // can't just "auto-submit on change" like the dropdowns, since a

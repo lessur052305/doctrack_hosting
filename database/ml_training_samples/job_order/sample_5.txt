@@ -1,8 +1,8 @@
-INTERNAL JOB ORDER REQUEST
-Reference: Job Order No JO-2026-1098
+Facilities Job Order
 
-Engineering Department is requesting maintenance support.
-Requested by: Bianca Fernandez
-Date requested: June 15, 2026
+Date Requested: June 5, 2026
+Requested by: Cristina Manalo (Engineering)
 
-Description of work needed: general cleaning and dust removal from the server room racks and cooling vents. This has been reported more than once and the department would appreciate prompt attention given its impact on daily operations.
+Description of Work / Nature of the Request: general cleaning and dust removal from the server room racks and cooling vents, overdue by two maintenance cycles. This has been raised as a routine facilities concern, not an emergency.
+
+Approved By: _______________________________

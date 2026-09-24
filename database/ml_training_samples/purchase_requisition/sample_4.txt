@@ -1,10 +1,10 @@
-Purchase Requisition Form
-Requisition No PR-2026-2143
+Requisition Slip
 
-This request is filed by the Operations Division on June 18, 2026.
+Filed by: Bianca Fernandez, Finance Department
+Date: June 4, 2026
 
-Item description: a foldable conference table for the newly renovated meeting room.
-Quantity requested: 1 unit.
-Budget allocated: PHP 19,000.00.
+Item Description: replacement toner cartridges for the second floor printers.
+Quantity: 12 units.
+Estimated total cost: PHP 18,400.00. Kindly process at your earliest convenience.
 
-The department head has reviewed and endorsed this requisition for approval and release of funds.
+Approved By: _______________________________

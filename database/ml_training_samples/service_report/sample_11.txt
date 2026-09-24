@@ -1,8 +1,10 @@
-Field Service Report
-Service Report No SR-2026-3013
+MAINTENANCE SERVICE REPORT
 
-Technician assigned: Ricardo Villanueva
-Date of service: June 11, 2026
+Date Serviced: June 11, 2026
+Technician: Gian Funelas
 
-This report covers preventive maintenance of the split-type air conditioning units on the 3rd floor.
-Findings: All units were cleaned and refrigerant levels checked; one unit had a slightly clogged filter which was cleaned on site. No further issues found. No additional issues were reported by staff on site during the visit.
+Work performed: servicing of the commercial dishwasher unit in the staff pantry.
+
+Observations: Spray arms and filters cleaned; heating element tested and confirmed reaching proper sanitizing temperature.
+
+Approved By: _______________________________

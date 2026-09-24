@@ -117,4 +117,43 @@
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') closeKpiDrilldown();
     });
+
+    // Revision History (Feature: Google-Docs-style before/after popup —
+    // see documents/partials/revision-history-list.blade.php and
+    // revision-diff.blade.php). Delegated on #kpi-drilldown-body, a
+    // stable ancestor that survives every fragment swap, same reasoning
+    // as the "Withdraw"/Request Revision delegation in approver/
+    // dashboard.blade.php. Guarded by data attributes that only exist on
+    // this drilldown's own markup, so it's a no-op for every other
+    // drilldown type sharing this same modal.
+    document.getElementById('kpi-drilldown-body')?.addEventListener('click', async function (e) {
+        const body = document.getElementById('kpi-drilldown-body');
+
+        const diffBtn = e.target.closest('[data-revision-diff-url]');
+        if (diffBtn) {
+            body.innerHTML = '<div class="p-10 text-center text-sm text-surface-400">Loading…</div>';
+            try {
+                const res = await fetch(diffBtn.dataset.revisionDiffUrl, { headers: { Accept: 'text/html' } });
+                if (!res.ok) throw new Error('Fetch failed');
+                body.innerHTML = await res.text();
+            } catch (err) {
+                body.innerHTML = '<div class="p-10 text-center text-sm text-rejected-600">Couldn\'t load this revision.</div>';
+            }
+            return;
+        }
+
+        const backBtn = e.target.closest('[data-back-to-history]');
+        if (backBtn) {
+            const root = e.target.closest('[data-diff-root]');
+            if (!root) return;
+            body.innerHTML = '<div class="p-10 text-center text-sm text-surface-400">Loading…</div>';
+            try {
+                const res = await fetch(root.dataset.listUrl, { headers: { Accept: 'text/html' } });
+                if (!res.ok) throw new Error('Fetch failed');
+                body.innerHTML = await res.text();
+            } catch (err) {
+                body.innerHTML = '<div class="p-10 text-center text-sm text-rejected-600">Couldn\'t load history.</div>';
+            }
+        }
+    });
 </script>

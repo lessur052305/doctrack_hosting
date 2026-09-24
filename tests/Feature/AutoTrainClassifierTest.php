@@ -170,7 +170,11 @@ test('includes low-confidence documents in training too, and re-scores them once
     $doc->refresh();
     expect($doc->ml_rechecked_at)->not->toBeNull()
         ->and($doc->ml_recheck_confidence)->not->toBeNull()
-        ->and($doc->ml_recheck_category)->not->toBeNull();
+        ->and($doc->ml_recheck_category)->not->toBeNull()
+        // Readability gets the identical recheck treatment, same batch,
+        // same trigger — see ValidationService::categoryVocabulary()'s
+        // widened source and autoTrainIfDue()'s recheck step.
+        ->and($doc->ml_recheck_readability_score)->not->toBeNull();
 });
 
 test('respects the per-category population cap, oldest-eligible-first', function () {

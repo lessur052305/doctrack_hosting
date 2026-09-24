@@ -51,21 +51,21 @@ test('a document with every required section and enough words passes validation'
 });
 
 test('a document missing a required section fails validation with a specific error', function () {
-    $text = "JOB ORDER\nDate Requested: July 16, 2026\nRequested By: Test Requester\n"
+    $text = "JOB ORDER\nRequested By: Test Requester\n"
         . "Description of Work: some description that is long enough to pass the word count on its own here.";
 
     $result = app(ValidationService::class)->validate('Job Order', $text);
 
     expect($result['is_valid'])->toBeFalse()
-        ->and($result['errors'])->toContain('Missing required section/field: "Job Order No"');
+        ->and($result['errors'])->toContain('Missing required section/field: "Date Requested"');
 });
 
 test('accepts a reasonable wording variant of a required field instead of demanding the exact phrase', function () {
-    // "Job Order Number" instead of "Job Order No" — the exact real-world
-    // mismatch that originally slipped through live testing and prompted
-    // this fix (see ValidationService::TEMPLATES's own comment).
-    $text = "JOB ORDER\nJob Order Number: JO-2026-0001\nDate Requested: July 16, 2026\n"
-        . "Requested By: Test Requester\nDescription of Work:\n"
+    // "Requestor" instead of "Requested By" — same reasoning as the
+    // original wording-mismatch fix this pattern was built for (see
+    // ValidationService::TEMPLATES's own comment): a document only needs
+    // ONE of a field's accepted phrasings, not the exact canonical one.
+    $text = "JOB ORDER\nDate Requested: July 16, 2026\nRequestor: Test Requester\nDescription of Work:\n"
         . "Perform scheduled servicing on the company delivery truck including an oil change, "
         . "brake inspection, tire rotation, and a full fluid level check before the next route.";
 
@@ -76,20 +76,18 @@ test('accepts a reasonable wording variant of a required field instead of demand
 });
 
 test('still fails when NONE of a field\'s accepted variants are present', function () {
-    $text = "JOB ORDER\nReference Code: JO-2026-0001\nDate Requested: July 16, 2026\n"
-        . "Requested By: Test Requester\nDescription of Work:\n"
+    $text = "JOB ORDER\nDate Requested: July 16, 2026\nSubmitted For: Test Requester\nDescription of Work:\n"
         . "Perform scheduled servicing on the company delivery truck including an oil change, "
         . "brake inspection, tire rotation, and a full fluid level check before the next route.";
 
     $result = app(ValidationService::class)->validate('Job Order', $text);
 
     expect($result['is_valid'])->toBeFalse()
-        ->and($result['errors'])->toContain('Missing required section/field: "Job Order No"');
+        ->and($result['errors'])->toContain('Missing required section/field: "Requested By"');
 });
 
 test('a document under the minimum word count fails validation', function () {
-    $text = "JOB ORDER\nJob Order No: JO-1\nDate Requested: July 16, 2026\n"
-        . "Requested By: X\nDescription of Work: too short.";
+    $text = "JOB ORDER\nDate Requested: July 16, 2026\nRequested By: X\nDescription of Work: too short.";
 
     $result = app(ValidationService::class)->validate('Job Order', $text);
 
@@ -135,11 +133,42 @@ test('a document that is mostly garbled/unrecognizable text scores low on readab
         ->and($result['readability_note'])->toContain('Scored low');
 });
 
+test('the readability vocabulary also draws from real documents already used in training, not curated samples alone', function () {
+    stageJobOrderVocabulary();
+
+    $originator = \App\Models\User::factory()->originator()->create();
+
+    // A word that appears in NONE of stageJobOrderVocabulary()'s curated
+    // samples — only a real, already-trained-on routed document teaches
+    // it. Repeated enough to actually move the real-word ratio.
+    $novelWord = 'thermogauge';
+    \App\Models\DocumentRepository::create([
+        'originator_id' => $originator->user_id,
+        'title' => 'routed.txt',
+        'file_path' => 'documents/routed.txt',
+        'mime_type' => 'text/plain',
+        'due_date' => now()->addDay(),
+        'global_status' => 'classified_validated',
+        'ml_category' => 'Job Order',
+        'ocr_text' => str_repeat("{$novelWord} ", 20),
+        'used_for_training_at' => now(),
+    ]);
+
+    $text = "JOB ORDER\nDate Requested: July 16, 2026\nRequested By: X\nDescription of Work: "
+        . str_repeat("{$novelWord} ", 20);
+
+    $result = app(ValidationService::class)->validate('Job Order', $text);
+
+    // Without the routed document's vocabulary, "thermogauge" would be
+    // unrecognized and this would score low/fail the readability check.
+    expect($result['readability_note'])->toBeNull();
+});
+
 test('an ordinary business document clears the readability check even with domain jargon and proper nouns', function () {
     stageJobOrderVocabulary();
 
     $text = "JOB ORDER\nJob Order No: JO-2026-0188\nDate Requested: February 3, 2026\n"
-        . "Requested By: Nestor Villanueva, Fleet Supervisor\nDepartment: Transport and Vehicle Maintenance\n"
+        . "Requested By: Nestor Villanueva, Fleet Supervisor\nDepartment: Engineering\n"
         . "Description of Work: Perform scheduled servicing on the company delivery truck with plate number XPT-4471. "
         . "Change the engine oil and oil filter, inspect the brake pads and replace if worn beyond the safe limit, "
         . "check the transmission fluid, and rotate the tires. Test the battery charge and inspect all exterior lights.";

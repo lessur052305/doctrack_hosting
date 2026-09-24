@@ -260,7 +260,7 @@
                                 @endif
                             @endif
                         @elseif($soleAssignment->auto_approved)
-                            Auto-approved by the system
+                            Auto-approved by the system{{ $soleAssignment->approver ? ' — was assigned to ' . $soleAssignment->approver->full_name : '' }}
                         @else
                             {{ ucfirst($state) }}{{ $soleAssignment->approver ? ' by ' . $soleAssignment->approver->full_name : '' }}
                             @if($soleAssignment->acted_at) &middot; {{ $soleAssignment->acted_at->format('M j, Y, g:i A') }} @endif

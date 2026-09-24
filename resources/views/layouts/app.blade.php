@@ -27,6 +27,26 @@
             history.replaceState(null, '', location.pathname + location.search);
         }
     </script>
+    <script>
+        // Per-device text size preference (Feature: readability control —
+        // see components/text-size-control.blade.php). Applied here,
+        // synchronously at the very top of <head>, so the page never
+        // flashes at the default size before app.js (loaded later, via
+        // the Vite directive below) gets a chance to react — same "run
+        // before first paint" reasoning as the pendingScrollHash script
+        // above. Stored
+        // per-device in localStorage, not on the user's account: there's
+        // no reliable way to detect a screen is physically small, so this
+        // is a manual choice the user makes once on whichever device
+        // needs it — see resources/css/app.css's matching data-text-size
+        // rules.
+        try {
+            var __textSize = localStorage.getItem('textSize');
+            if (__textSize === 'large' || __textSize === 'larger') {
+                document.documentElement.dataset.textSize = __textSize;
+            }
+        } catch (e) {}
+    </script>
     {{--
         Business-hours config for the client-side real-remaining ticker
         (see the script block below) — cheap (one small holiday query),
@@ -146,6 +166,7 @@
             <h1 class="text-[1.05rem] font-semibold text-surface-900 tracking-tight">@yield('page-title', 'Dashboard')</h1>
             <div class="ml-auto flex items-center gap-4">
                 @auth
+                    <x-text-size-control />
                     <x-notification-bell />
                     <x-user-badge />
                 @endauth
@@ -227,6 +248,7 @@
     @if(auth()->user()->isAdmin() || auth()->user()->isApprover() || auth()->user()->isOriginator())
         <x-kpi-drilldown-modal />
     @endif
+    <x-chat-widget />
 @endauth
 <script>
     // Live relative-time updater (Feature: SLA countdowns/expiries update in

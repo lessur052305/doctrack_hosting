@@ -1,8 +1,10 @@
-SERVICE COMPLETION REPORT
+Service Visit Summary
 
-Service report no.: SR-2026-3260
-Date of service rendered: June 30, 2026
-Technician on duty: Jasmine Ocampo
+Technician: Christian Peralta
+Date of Service: June 12, 2026
 
-Summary of work: servicing of the office intercom and paging system.
-Findings and recommendations: Audio quality tested clear across all floors; one speaker unit on the 3rd floor was found faulty and has been noted for replacement.
+On this visit, Christian Peralta performed inspection of the perimeter security fencing and gate motors.
+
+Findings: All gate motors operating within normal cycle times; one section of fencing found loose and scheduled for tightening. This report has been filed for the maintenance records.
+
+Approved By: _______________________________

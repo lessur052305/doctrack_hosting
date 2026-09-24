@@ -1,10 +1,12 @@
-REQUEST FOR PURCHASE
+PURCHASE REQUISITION
 
-Requisition No.: PR-2026-2022
-Department: Security Office
+Date: June 13, 2026
+Requested by: Michael Torres
 
-Item description and quantity: toner cartridges compatible with the HP LaserJet Pro printers on the 2nd floor, 12 cartridges requested.
-Budget: PHP 18,000.00.
-Date filed: June 7, 2026.
+Item Description: laminated safety signage for the loading dock and stairwells
+Quantity: 25 pieces
+Estimated Budget: PHP 6,750.00
 
-This was requested to address a gap identified during the department's recent inventory review, and prompt processing would be appreciated given current stock levels.
+Justification: This purchase supports ongoing Engineering department operations and should be sourced from an accredited supplier where available.
+
+Approved By: _______________________________

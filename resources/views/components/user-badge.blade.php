@@ -1,6 +1,11 @@
 {{--
-    Top-right header identity block, shared by every role via
-    layouts/app.blade.php — replaces what used to be a single role pill.
+    Identity block: Department/Category/Stage line (approvers only), name,
+    role pill. Originally the top-right header's own identity block
+    (auth()->user() only); parameterized with an optional :user (defaults
+    to auth()->user(), so the header usage below is unchanged) and :center
+    (default true) so the exact same card can be reused left-aligned in a
+    list row — see chat/partials/user-list.blade.php, the Admin chat
+    panel's "every user" list (Feature: chat).
 
     Department / category / stage only exist for approvers (see the
     add_department_and_level_to_users_table migration's docblock — both
@@ -9,8 +14,9 @@
     their name and a role pill, same information the old single pill gave,
     just paired with the name now.
 --}}
+@props(['user' => null, 'center' => true])
 @php
-    $user = auth()->user();
+    $user = $user ?? auth()->user();
     $isApprover = $user->role === 'approver';
 
     if ($isApprover) {
@@ -27,7 +33,7 @@
         };
     }
 @endphp
-<div class="text-center leading-tight">
+<div class="{{ $center ? 'text-center' : 'text-left' }} leading-tight">
     @if($isApprover)
         <p class="text-xs text-surface-500 truncate max-w-[140px] sm:max-w-[260px]">
             {{ $user->department ?? '—' }} | {{ $user->assigned_category ?? '—' }} | {{ $stageLabel }}

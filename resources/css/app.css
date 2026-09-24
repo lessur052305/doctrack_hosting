@@ -21,6 +21,29 @@
     animation-timing-function: ease;
 }
 
+/* Base text size (Feature: readability on small/laptop screens — see
+   components/text-size-control.blade.php). Bumped up from the browser's
+   16px default; every Tailwind text and spacing utility used across this
+   app is rem-based, so this one change scales the whole UI
+   proportionally without touching any of the hundreds of files that use
+   those utilities. The two overrides below are the user's own opt-in
+   "Large"/"Larger" steps, applied via a data-text-size attribute set on
+   <html> from localStorage — see layouts/app.blade.php's inline head
+   script (runs before first paint, so there's no flash at the default
+   size) and resources/js/app.js's menu wiring. A genuine per-device
+   preference, not something detected automatically: there's no reliable
+   way for a browser to report physical screen size, so this is the
+   user's own call, remembered only on the device where they set it. */
+html {
+    font-size: 17px;
+}
+html[data-text-size="large"] {
+    font-size: 19px;
+}
+html[data-text-size="larger"] {
+    font-size: 21px;
+}
+
 @layer base {
     input, select, textarea {
         @apply shadow-sm transition-shadow duration-150;

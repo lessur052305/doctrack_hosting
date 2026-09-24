@@ -44,11 +44,7 @@
         // snapping back to Fastest.
         let currentMode = 'fastest';
 
-        function applyMode(mode) {
-            currentMode = mode;
-            resultsEl.querySelectorAll('[data-perf-mode-panel]').forEach((panel) => {
-                panel.classList.toggle('hidden', panel.dataset.perfModePanel !== mode);
-            });
+        function setButtonState(mode) {
             resultsEl.querySelectorAll('[data-perf-mode-btn]').forEach((btn) => {
                 const active = btn.dataset.perfModeBtn === mode;
                 btn.classList.toggle('bg-primary-700', active);
@@ -59,6 +55,22 @@
             });
         }
 
+        function showPanel(mode) {
+            resultsEl.querySelectorAll('[data-perf-mode-panel]').forEach((panel) => {
+                panel.classList.toggle('hidden', panel.dataset.perfModePanel !== mode);
+            });
+        }
+
+        // Instant — no animation. Used after a live swap replaces this
+        // whole fragment with fresh markup (see onSwap below): there's
+        // nothing to crossfade FROM at that point, so animating here would
+        // just be a pointless flash on every background update.
+        function applyMode(mode) {
+            currentMode = mode;
+            showPanel(mode);
+            setButtonState(mode);
+        }
+
         // Delegated, not bound directly to the buttons — this whole
         // fragment (toggle included) gets replaced wholesale on every
         // live swap below, same reasoning as every other delegated
@@ -67,7 +79,42 @@
         resultsEl.addEventListener('click', function (e) {
             const btn = e.target.closest('[data-perf-mode-btn]');
             if (!btn) return;
-            applyMode(btn.dataset.perfModeBtn);
+            const mode = btn.dataset.perfModeBtn;
+            if (mode === currentMode) return;
+
+            // The button's own background-color fade is plain CSS
+            // (transition-colors, already on the buttons) — updated
+            // immediately and left alone to animate on its own. This is
+            // deliberately NOT wrapped in document.startViewTransition():
+            // that API snapshots the WHOLE screen into one before/after
+            // image pair and cross-dissolves between them, which froze
+            // this exact color transition for most of its duration
+            // instead of letting it play smoothly (confirmed by sampling
+            // the button's computed background-color frame by frame — a
+            // real, measured bug, not a style preference).
+            currentMode = mode;
+            setButtonState(mode);
+
+            // Manual opacity crossfade for the panel content instead, run
+            // independently of the button above so neither one can freeze
+            // the other. Panels carry transition-opacity (see
+            // performance-insights-results.blade.php) to animate this.
+            const visiblePanel = resultsEl.querySelector('[data-perf-mode-panel]:not(.hidden)');
+            const nextPanel = resultsEl.querySelector(`[data-perf-mode-panel="${mode}"]`);
+            if (!visiblePanel || !nextPanel || visiblePanel === nextPanel) {
+                showPanel(mode);
+                return;
+            }
+
+            visiblePanel.style.opacity = '0';
+            setTimeout(() => {
+                visiblePanel.classList.add('hidden');
+                visiblePanel.style.opacity = ''; // reset for the next time this panel is shown
+                nextPanel.classList.remove('hidden');
+                nextPanel.style.opacity = '0';
+                void nextPanel.offsetWidth; // force a reflow so the fade-in below isn't batched away with the line above
+                nextPanel.style.opacity = '1';
+            }, 150);
         });
 
         const opts = {

@@ -26,4 +26,16 @@ class MlStagingSample extends Model
     {
         return $this->belongsTo(MlModelRepository::class, 'trained_in_model_id', 'model_id');
     }
+
+    /**
+     * Every curated sample's extracted text for one category — the exact
+     * same set ClassificationService::autoTrainIfDue() trains on and
+     * ValidationService::categoryVocabulary() widens with real-document
+     * vocabulary, previously queried identically in both places
+     * independently.
+     */
+    public static function curatedTextsFor(string $category): \Illuminate\Support\Collection
+    {
+        return static::where('category', $category)->pluck('extracted_text');
+    }
 }

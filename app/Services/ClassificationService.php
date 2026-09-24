@@ -350,7 +350,7 @@ class ClassificationService
         $usedDocuments = collect();
 
         foreach ($categories as $category) {
-            $curated = MlStagingSample::where('category', $category)->pluck('extracted_text');
+            $curated = MlStagingSample::curatedTextsFor($category);
             $cap = (int) floor($curated->count() * $maxAutoRatio);
             $included = $eligibleByCategory->get($category, collect())->take($cap);
 
@@ -400,16 +400,36 @@ class ClassificationService
         // ml_recheck_* columns (previously written by a now-retired manual
         // admin action, revived here for this automatic use instead).
         if ($kept) {
-            $usedDocuments->each(function (DocumentRepository $doc) {
+            $validationService = app(ValidationService::class);
+            // Fetched once per category and reused across every document
+            // in that category, instead of readabilityAgainst() re-
+            // querying/re-tokenizing categoryVocabulary() from scratch
+            // for every single document in the batch — a real cost once a
+            // batch has several documents sharing a category. Scoped to
+            // this one method call only (a plain local array, not a
+            // class-level cache), so it can't ever go stale across calls.
+            $vocabularyByCategory = [];
+
+            $usedDocuments->each(function (DocumentRepository $doc) use ($validationService, &$vocabularyByCategory) {
                 try {
                     $recheck = $this->classify((string) $doc->ocr_text);
                 } catch (\Throwable) {
                     return; // best-effort — never let a re-score failure disturb an already-routed document
                 }
 
+                // Readability's own vocabulary just grew to include this
+                // same batch (see ValidationService::categoryVocabulary()),
+                // so it gets the identical recheck treatment confidence
+                // already had — same trigger, same batch, same "X% → Y%"
+                // display pattern.
+                $category = (string) $doc->ml_category;
+                $vocabularyByCategory[$category] ??= ValidationService::vocabularyFor($category);
+                $readability = $validationService->readabilityWithVocabulary($vocabularyByCategory[$category], $category, (string) $doc->ocr_text);
+
                 $doc->update([
                     'ml_recheck_category' => $recheck['category'],
                     'ml_recheck_confidence' => $recheck['confidence'],
+                    'ml_recheck_readability_score' => $readability['score'],
                     'ml_rechecked_at' => now(),
                 ]);
             });

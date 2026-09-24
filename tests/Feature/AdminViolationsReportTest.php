@@ -45,19 +45,19 @@ test('the Admin Violations section is hidden on the bare landing screen, same as
     $originator = User::factory()->originator()->create();
     $stage = WorkflowStage::create(['document_category' => 'Job Order', 'stage_name' => 'Review', 'sequence_order' => 1]);
 
-    $missedDoc = violationDoc($originator, 'Job Order', 'missed-approval-doc.txt');
-    $missedAssignment = DocumentAssignment::create([
-        'document_id' => $missedDoc->document_id, 'user_id' => null, 'stage_id' => $stage->stage_id,
-        'due_date' => $missedDoc->due_date, 'priority_rank' => 2, 'individual_status' => 'approved', 'auto_approved' => true,
+    $doc = violationDoc($originator, 'Job Order', 'late-review-doc.txt');
+    $assignment = DocumentAssignment::create([
+        'document_id' => $doc->document_id, 'user_id' => null, 'stage_id' => $stage->stage_id,
+        'due_date' => $doc->due_date, 'priority_rank' => 2, 'individual_status' => 'approved', 'auto_approved' => true,
     ]);
     AdminViolation::create([
-        'document_id' => $missedDoc->document_id, 'assignment_id' => $missedAssignment->assignment_id,
-        'violation_type' => 'missed_approval', 'stage_name' => 'Review',
-        'first_violated_at' => now(), 'resolved_at' => now(),
+        'document_id' => $doc->document_id, 'assignment_id' => $assignment->assignment_id,
+        'violation_type' => 'late_review', 'stage_name' => 'Review',
+        'first_violated_at' => now(), 'resolved_at' => null,
     ]);
 
     $bare = $this->actingAs($admin)->get(route('admin.sla.violations'));
-    $bare->assertOk()->assertDontSee('Admin Violations')->assertDontSee('missed-approval-doc.txt');
+    $bare->assertOk()->assertDontSee('Admin Violations')->assertDontSee('late-review-doc.txt');
 });
 
 test('the Admin Violations table groups by document with stages listed underneath, badge reflects whether the document still needs review, scoped to only the current category', function () {
@@ -68,11 +68,8 @@ test('the Admin Violations table groups by document with stages listed underneat
     $purchaseStage = WorkflowStage::create(['document_category' => 'Purchase Requisition', 'stage_name' => 'Review', 'sequence_order' => 1]);
 
     // Still sitting unreviewed in Auto-Approval Review (admin_reviewed_at
-    // is null) — must show Open, even though its AdminViolation row is
-    // itself already marked resolved_at (that field only logs the
-    // approval-stage fact, not whether Admin has reviewed it — see
-    // AdminController::adminViolationsData()'s docblock).
-    $openDoc = violationDoc($originator, 'Job Order', 'missed-approval-doc.txt');
+    // is null) — must show Open.
+    $openDoc = violationDoc($originator, 'Job Order', 'open-late-review-doc.txt');
     $openAssignment = DocumentAssignment::create([
         'document_id' => $openDoc->document_id, 'user_id' => null, 'stage_id' => $jobOrderStage1->stage_id,
         'due_date' => $openDoc->due_date, 'priority_rank' => 2, 'individual_status' => 'approved', 'auto_approved' => true,
@@ -80,13 +77,13 @@ test('the Admin Violations table groups by document with stages listed underneat
     ]);
     AdminViolation::create([
         'document_id' => $openDoc->document_id, 'assignment_id' => $openAssignment->assignment_id,
-        'violation_type' => 'missed_approval', 'stage_name' => 'Technical Review',
-        'first_violated_at' => now(), 'resolved_at' => now(),
+        'violation_type' => 'late_review', 'stage_name' => 'Technical Review',
+        'first_violated_at' => now(), 'resolved_at' => null,
     ]);
 
     // Already reviewed by Admin (admin_reviewed_at is set) — must show
     // Resolved.
-    $resolvedDoc = violationDoc($originator, 'Job Order', 'late-review-doc.txt');
+    $resolvedDoc = violationDoc($originator, 'Job Order', 'resolved-late-review-doc.txt');
     $resolvedAssignment = DocumentAssignment::create([
         'document_id' => $resolvedDoc->document_id, 'user_id' => null, 'stage_id' => $jobOrderStage2->stage_id,
         'due_date' => $resolvedDoc->due_date, 'priority_rank' => 2, 'individual_status' => 'approved', 'auto_approved' => true,
@@ -106,25 +103,49 @@ test('the Admin Violations table groups by document with stages listed underneat
         'due_date' => $otherDoc->due_date, 'priority_rank' => 2, 'individual_status' => 'approved', 'auto_approved' => true,
     ]);
     AdminViolation::create([
-        'document_id' => $otherAssignment->document_id, 'assignment_id' => $otherAssignment->assignment_id,
-        'violation_type' => 'missed_approval', 'stage_name' => 'Review',
-        'first_violated_at' => now(), 'resolved_at' => now(),
+        'document_id' => $otherDoc->document_id, 'assignment_id' => $otherAssignment->assignment_id,
+        'violation_type' => 'late_review', 'stage_name' => 'Review',
+        'first_violated_at' => now(), 'resolved_at' => null,
     ]);
 
     $response = $this->actingAs($admin)->get(route('admin.sla.violations', ['category' => 'Job Order']));
     $response->assertOk()
         ->assertSee('Admin Violations')
-        ->assertSee('missed-approval-doc.txt')
-        ->assertSee('late-review-doc.txt')
+        ->assertSee('open-late-review-doc.txt')
+        ->assertSee('resolved-late-review-doc.txt')
         ->assertSee('Technical Review')
         ->assertSee('Final Approval')
         ->assertSee('Open')
         ->assertSee('Resolved')
-        ->assertDontSee('other-category-doc.txt')
-        ->assertDontSee('Missed by Admin')
-        ->assertDontSee('Late Review');
+        ->assertDontSee('other-category-doc.txt');
 
     $items = $response->viewData('adminViolations')->keyBy(fn ($item) => $item->document->title);
-    expect($items['missed-approval-doc.txt']->isOpen)->toBeTrue()
-        ->and($items['late-review-doc.txt']->isOpen)->toBeFalse();
+    expect($items['open-late-review-doc.txt']->isOpen)->toBeTrue()
+        ->and($items['resolved-late-review-doc.txt']->isOpen)->toBeFalse();
+});
+
+test('a missed_approval violation never appears in Admin Violations by itself — only once/if its own review window later lapses unreviewed too', function () {
+    $admin = User::factory()->admin()->create();
+    $originator = User::factory()->originator()->create();
+    $stage = WorkflowStage::create(['document_category' => 'Job Order', 'stage_name' => 'Technical Review', 'sequence_order' => 1]);
+
+    // No eligible approver — auto-approved instantly, logged already
+    // resolved. Even though the assignment itself is still unreviewed by
+    // Admin (admin_reviewed_at null), this alone must not surface here —
+    // see AdminController::adminViolationsData()'s docblock.
+    $doc = violationDoc($originator, 'Job Order', 'no-eligible-approver-doc.txt');
+    $assignment = DocumentAssignment::create([
+        'document_id' => $doc->document_id, 'user_id' => null, 'stage_id' => $stage->stage_id,
+        'due_date' => $doc->due_date, 'priority_rank' => 2, 'individual_status' => 'approved', 'auto_approved' => true,
+        'admin_reviewed_at' => null,
+    ]);
+    AdminViolation::create([
+        'document_id' => $doc->document_id, 'assignment_id' => $assignment->assignment_id,
+        'violation_type' => 'missed_approval', 'stage_name' => 'Technical Review',
+        'first_violated_at' => now(), 'resolved_at' => now(),
+    ]);
+
+    $response = $this->actingAs($admin)->get(route('admin.sla.violations', ['category' => 'Job Order']));
+    $response->assertOk()->assertDontSee('no-eligible-approver-doc.txt');
+    expect($response->viewData('adminViolationTotal'))->toBe(0);
 });

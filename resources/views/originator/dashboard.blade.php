@@ -268,7 +268,6 @@
         // after that, so a live swap doesn't need to re-measure it.
         const submissionsCard = document.getElementById('submissions-card');
         sizeCappedCard(submissionsCard);
-        window.addEventListener('resize', () => sizeCappedCard(submissionsCard));
 
         // Fitted pagination — see resources/js/app.js's
         // initFittedPagination() for the full mechanism (shared with the
@@ -279,6 +278,17 @@
         // swap below, since that replaces this fragment's rows/pagination
         // container out from under the running instance.
         const fittedPagination = initFittedPagination('submissions-list', '.submission-row');
+
+        // Card height AND row count re-measured together, in that order,
+        // on every resize — including a text-size change (see app.js's
+        // text-size control, which dispatches a synthetic resize event
+        // for exactly this). fittedPagination is referenced here even
+        // though it's declared just above, not before — fine, since this
+        // callback only ever runs later, on an actual resize.
+        window.addEventListener('resize', () => {
+            sizeCappedCard(submissionsCard);
+            fittedPagination.refit();
+        });
 
         const opts = {
             refreshUrl: listEl.dataset.refreshUrl,

@@ -749,16 +749,11 @@ class AdminController extends Controller
         return response()->json([
             'stats' => $stats,
             'review_count' => $reviewCount,
-            // Fallback-path signals for what AdminActivityLogged covers over
+            // Fallback-path signal for what AdminActivityLogged covers over
             // the WebSocket — the poll can't "listen" for that event, so it
             // detects the same changes structurally instead: a new audit
-            // log row covers logins/uploads/decisions/escalations/etc.,
-            // and a busy-flag signature covers is_busy toggles specifically
-            // (that path writes no audit log, so latest_log_id alone
-            // wouldn't catch it — see User::booted()).
+            // log row covers logins/uploads/decisions/escalations/etc.
             'latest_log_id' => AuditLog::max('log_id'),
-            'busy_signature' => User::where('role', 'approver')->orderBy('user_id')
-                ->pluck('is_busy')->map(fn ($busy) => $busy ? '1' : '0')->implode(','),
         ]);
     }
 
@@ -1373,7 +1368,30 @@ class AdminController extends Controller
             ->sortBy(fn ($c) => $c->assignments->first()->acted_at)
             ->values();
 
-        return $this->paginateContainers($reviewContainers, $request, 2, route('admin.sla.queue'));
+        $perPage = 2;
+
+        // Deep-link support (Admin Violations links here with
+        // ?highlight={document_id}) — jump straight to whichever page
+        // actually contains that document instead of always landing on
+        // page 1 and leaving Admin to hunt for it themselves. Overrides
+        // any ?page= the request came in with, since the two are
+        // mutually exclusive ways of picking a page.
+        if ($request->filled('highlight')) {
+            $index = $reviewContainers->search(fn ($c) => $c->document->document_id == $request->input('highlight'));
+            if ($index !== false) {
+                $request->merge(['page' => intdiv($index, $perPage) + 1]);
+            }
+
+            // Cleared from the query bag (not just left out of the merge
+            // above) — paginateContainers() below builds every page link
+            // from $request->query(), which merge() never touches. Left
+            // in place, every one of those links would silently re-send
+            // highlight=X, snapping the admin straight back to this same
+            // page no matter which page link they actually clicked.
+            $request->query->remove('highlight');
+        }
+
+        return $this->paginateContainers($reviewContainers, $request, $perPage, route('admin.sla.queue'));
     }
 
     public function slaQueue(Request $request)
@@ -1886,10 +1904,10 @@ class AdminController extends Controller
         return view('admin.partials.admin-violations-results', $this->adminViolationsData($request));
     }
 
-    /** Cheap change-signal for the live-poll fallback — scoped to the same category as adminViolationsData(). */
+    /** Cheap change-signal for the live-poll fallback — scoped to the same category AND violation_type as adminViolationsData(), so this never signals a change the refresh wouldn't actually show. */
     public function adminViolationsPoll(Request $request)
     {
-        $query = AdminViolation::query();
+        $query = AdminViolation::query()->where('violation_type', 'late_review');
         if ($request->filled('category')) {
             $category = $request->string('category');
             $query->whereHas('document', fn ($q) => $q->where('ml_category', $category));
@@ -1951,7 +1969,6 @@ class AdminController extends Controller
         $query = $this->violationsQuery($request)->where('approver_id', $approver->user_id);
 
         $totalCount = (clone $query)->count();
-        $avgOverdue = (clone $query)->avg('duration_overdue');
         $topStage = (clone $query)
             ->selectRaw('stage_name, count(*) as total')
             ->groupBy('stage_name')
@@ -1974,7 +1991,6 @@ class AdminController extends Controller
         return response()->json([
             'name' => $approver->full_name,
             'totalCount' => $totalCount,
-            'avgOverdue' => round($avgOverdue ?? 0),
             'topStageName' => $topStage->stage_name ?? '—',
             'topStageTotal' => $topStage->total ?? 0,
             'rank' => $rank === false ? null : $rank + 1,
@@ -2068,15 +2084,6 @@ class AdminController extends Controller
         $byStage = (clone $query)->selectRaw('stage_name, count(*) as total')
             ->groupBy('stage_name')->orderByDesc('total')->limit(5)->get();
 
-        // Top Category — parallels Top Approver/Top Bottleneck Stage, and
-        // ties directly into the category-folder browsing above.
-        $byCategory = (clone $query)
-            ->join('document_repository', 'sla_violations.document_id', '=', 'document_repository.document_id')
-            ->selectRaw('document_repository.ml_category, count(*) as total')
-            ->groupBy('document_repository.ml_category')
-            ->orderByDesc('total')
-            ->first();
-
         // Disputed — how many of these violations were later flagged by an
         // Admin as a bad auto-approval (see AdminController::
         // reviewAutoApproval()). Otherwise only visible per-row as a badge,
@@ -2084,7 +2091,6 @@ class AdminController extends Controller
         $disputedCount = (clone $query)->whereHas('document', fn ($q) => $q->whereNotNull('disputed_at'))->count();
 
         $totalCount = (clone $query)->count();
-        $avgOverdue = (clone $query)->avg('duration_overdue');
 
         // Full roster for the Approvers table — EVERY approver, not just
         // the ones with violations, so a clean record is visible too, not
@@ -2118,34 +2124,35 @@ class AdminController extends Controller
             'byApprover' => $byApprover,
             'approverRoster' => $approverRoster,
             'byStage' => $byStage,
-            'byCategory' => $byCategory,
             'disputedCount' => $disputedCount,
             'totalCount' => $totalCount,
-            'avgOverdue' => round($avgOverdue ?? 0),
         ];
     }
 
     /**
-     * Admin-side violations — see AdminViolation's docblock for the two
-     * kinds ('missed_approval': a stage had no eligible approver and
-     * Admin's own fallback window passed too; 'late_review': an already
-     * auto-approved document wasn't reviewed within its window). Not
-     * attributed to a specific admin (this queue has no single owner the
-     * way an approver's seat does), and the system is locked to exactly
-     * one Admin account anyway (see storeUser()).
+     * Admin-side violations — scoped to `late_review` only (see
+     * AdminViolation's docblock): an already-auto-approved document that
+     * sat past its review grace period without Admin actually confirming
+     * or disputing it. `missed_approval` rows are deliberately excluded
+     * here — they're logged already-resolved the instant they happen
+     * (the auto-approval that causes one already IS its resolution, see
+     * AdminViolation's docblock), so they're just a historical record of
+     * WHY a stage got auto-approved, not something Admin still needs to
+     * act on. A document auto-approved for lack of an eligible approver
+     * only shows up in this list once/if its OWN review grace period
+     * later lapses unreviewed too — at that point it's a `late_review`
+     * row like any other, same as one caused by an approver's own SLA
+     * miss. Not attributed to a specific admin (this queue has no single
+     * owner the way an approver's seat does), and the system is locked to
+     * exactly one Admin account anyway (see storeUser()).
      *
-     * Grouped by DOCUMENT rather than by violation type — the type itself
-     * isn't shown; what matters to Admin is which document/stage needs
-     * attention and whether it still does. Status is deliberately NOT
-     * read from AdminViolation.resolved_at (a missed_approval row is
-     * always created already-resolved the instant it's logged, since the
-     * auto-approval that caused it already IS the resolution for THAT
-     * event — see SlaService::escalateNeedsApprover()'s docblock).
-     * Instead status mirrors DocumentAssignment.admin_reviewed_at, the
-     * same field the Confirm/Dispute action on the Auto-Approval Review
-     * page sets — one action per DOCUMENT there (it reviews every
-     * pending stage at once), so one Open/Resolved badge per document
-     * here matches exactly what that one action can affect.
+     * Grouped by DOCUMENT — a document can have more than one stage
+     * sitting unreviewed at once, listed together under one entry. Status
+     * mirrors DocumentAssignment.admin_reviewed_at, the same field the
+     * Confirm/Dispute action on the Auto-Approval Review page sets — one
+     * action per DOCUMENT there (it reviews every pending stage at once),
+     * so one Open/Resolved badge per document here matches exactly what
+     * that one action can affect.
      *
      * Scoped to the same `category` param the rest of the page uses,
      * same as violationsQuery() — the view only renders this section
@@ -2154,7 +2161,7 @@ class AdminController extends Controller
      */
     private function adminViolationsData(Request $request): array
     {
-        $query = AdminViolation::query();
+        $query = AdminViolation::query()->where('violation_type', 'late_review');
         if ($request->filled('category')) {
             $category = $request->string('category');
             $query->whereHas('document', fn ($q) => $q->where('ml_category', $category));
@@ -2168,22 +2175,8 @@ class AdminController extends Controller
             ->groupBy('document_id')
             ->map(fn ($rows) => (object) [
                 'document' => $rows->first()->document,
-                // late_ml_review has no stage_name at all (it predates any
-                // stage/seat existing for the document — see
-                // admin_violations' migration docblock) — labeled instead
-                // of left blank.
-                'stages' => $rows->map(fn ($v) => $v->stage_name ?? 'Classification Review')->unique()->values(),
-                // late_ml_review has no assignment either, so "has this
-                // been reviewed" has to fall back to the violation's own
-                // resolved_at instead of the (nonexistent) assignment's
-                // admin_reviewed_at — the other two types keep asking the
-                // assignment, since THEIR open/closed state is really
-                // about whether the underlying auto-approval got its
-                // follow-up review, a narrower question than "is the
-                // violation row itself resolved."
-                'isOpen' => $rows->contains(fn ($v) => $v->assignment_id === null
-                    ? is_null($v->resolved_at)
-                    : is_null(optional($v->assignment)->admin_reviewed_at)),
+                'stages' => $rows->pluck('stage_name')->unique()->values(),
+                'isOpen' => $rows->contains(fn ($v) => is_null(optional($v->assignment)->admin_reviewed_at)),
                 'firstViolatedAt' => $rows->min('first_violated_at'),
             ])
             ->sortByDesc('firstViolatedAt')

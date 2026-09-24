@@ -90,6 +90,16 @@
             @if($annotations->isNotEmpty())
                 <p class="text-sm text-surface-400">{{ $annotations->count() }} open revision request{{ $annotations->count() === 1 ? '' : 's' }}</p>
             @endif
+            {{-- Feature: Revision History — see documents/partials/
+                 revision-history-list.blade.php. Reopens THIS SAME shared
+                 modal on the history view instead (fetched-in markup, so
+                 an inline onclick="" works here even though a <script>
+                 tag wouldn't — see this file's own top-of-file comment). --}}
+            <button type="button" onclick="openKpiDrilldown('revision-history', 'Revision History', {{ Js::from(route('documents.revisions', $document)) }})" class="text-surface-400 hover:text-surface-700" aria-label="View revision history" title="Revision History">
+                <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                </svg>
+            </button>
             <button type="button" onclick="window.print()" class="text-surface-400 hover:text-surface-700" aria-label="Print document" title="Print">
                 <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M6.72 13.829c-.24.03-.48.062-.72.096m.72-.096a42.415 42.415 0 0110.56 0m-10.56 0L6.34 18m10.94-4.171c.24.03.48.062.72.096m-.72-.096L17.66 18m0 0l.318 2.647a.75.75 0 01-.74.853H6.762a.75.75 0 01-.74-.853L6.34 18m11.32 0H6.34m10.94-9.75V4.243a.75.75 0 00-.75-.75H7.47a.75.75 0 00-.75.75V8.25m10.94 0H6.72"/>

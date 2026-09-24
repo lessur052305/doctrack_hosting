@@ -63,7 +63,6 @@
         // See resources/js/app.js's sizeCappedCard() docblock.
         const auditCard = document.getElementById('audit-card');
         sizeCappedCard(auditCard);
-        window.addEventListener('resize', () => sizeCappedCard(auditCard));
 
         // Fitted pagination — see resources/js/app.js's
         // initFittedPagination() for the full mechanism (shared with
@@ -73,6 +72,17 @@
         // history — either scrolled a page that could have shown more, or
         // still didn't fit and needed the internal scrollbar anyway.
         const fittedPagination = initFittedPagination('audit-results', '.audit-row');
+
+        // Card height AND row count re-measured together, in that order,
+        // on every resize — including a text-size change (see app.js's
+        // text-size control, which dispatches a synthetic resize event
+        // for exactly this). fittedPagination is referenced here even
+        // though it's declared just above, not before — fine, since this
+        // callback only ever runs later, on an actual resize.
+        window.addEventListener('resize', () => {
+            sizeCappedCard(auditCard);
+            fittedPagination.refit();
+        });
 
         // Feature: return to the same page after clicking "View" into a
         // document's Tracking page and coming back — pagination here is

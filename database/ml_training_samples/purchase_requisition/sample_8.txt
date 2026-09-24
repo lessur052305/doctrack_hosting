@@ -1,10 +1,12 @@
-REQUEST FOR PURCHASE
+PURCHASE REQUISITION
 
-Requisition No.: PR-2026-2187
-Department: Security Office
+Date: June 8, 2026
+Requested by: Marites Aquino
 
-Item description and quantity: LED panel light fixtures to replace the aging fluorescent tubes, 20 units requested.
-Budget: PHP 40,000.00.
-Date filed: June 22, 2026.
+Item Description: safety vests and hard hats for the site inspection team
+Quantity: 15 sets
+Estimated Budget: PHP 27,750.00
 
-This was requested to address a gap identified during the department's recent inventory review, and prompt processing would be appreciated given current stock levels.
+Justification: This purchase supports ongoing Finance department operations and should be sourced from an accredited supplier where available.
+
+Approved By: _______________________________

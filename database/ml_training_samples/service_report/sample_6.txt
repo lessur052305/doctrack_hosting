@@ -1,11 +1,9 @@
-SERVICE REPORT
+SERVICE COMPLETION REPORT
 
-Service Report No.: SR-2026-3195
-Date of Service: June 25, 2026
-Technician: Roberto Cruz
+Date of service rendered: June 6, 2026
+Technician on duty: Ferdinand Ilagan
 
-Work Performed: replacement of HVAC air filters throughout the 4th floor.
+Summary of work: inspection of the parking structure's lighting system.
+Findings and recommendations: Approximately 15 percent of fixtures found non-functional; replacement bulbs installed and full system re-tested successfully.
 
-Findings: All filters were replaced as scheduled; airflow noticeably improved in the units that had visibly dirty filters prior to service.
-
-The area has been left in working condition and the requesting department was informed of the outcome upon completion.
+Approved By: _______________________________

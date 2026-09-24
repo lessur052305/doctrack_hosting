@@ -195,6 +195,50 @@ test('the reminder fires again once an hour has passed since the last one', func
     expect($sent)->toBe(1);
 });
 
+test('the reminder window shortens to the due date instead of running the full 12 hours, when the due date is closer', function () {
+    // review_due_at (grace period) lapsed 2 hours ago — the flat 12-hour
+    // reminder window would normally run until 10 hours from now, but the
+    // document's own due date is only 1 hour away, so the window should
+    // close there instead (see SlaService::trackLateReviews()).
+    User::factory()->admin()->create();
+    $originator = User::factory()->originator()->create();
+    $approver = User::factory()->approver('Job Order')->create();
+    $stage = WorkflowStage::where('stage_name', 'Technical Review')->first();
+
+    $document = DocumentRepository::create([
+        'originator_id' => $originator->user_id,
+        'title' => 'close-due-date.txt',
+        'file_path' => 'documents/close-due-date.txt',
+        'mime_type' => 'text/plain',
+        'due_date' => now()->addHour(),
+        'global_status' => 'auto_approved',
+        'ml_category' => 'Job Order',
+    ]);
+    DocumentAssignment::create([
+        'document_id' => $document->document_id,
+        'user_id' => $approver->user_id,
+        'stage_id' => $stage->stage_id,
+        'due_date' => $document->due_date,
+        'priority_rank' => 2,
+        'individual_status' => 'approved',
+        'auto_approved' => true,
+        'acted_at' => now()->subHour(),
+        'sla_expires_at' => now()->subHours(13),
+        'review_due_at' => now()->subHours(2),
+    ]);
+
+    // Still within the window (due date is an hour away) — reminder fires.
+    $firstSweep = app(SlaService::class)->sweep()['late_review_reminders_sent'];
+    expect($firstSweep)->toBe(1);
+
+    // Past the due date now, well short of the flat 12-hour mark — the
+    // shortened window means no further reminder, not another one at the
+    // usual 1-hour interval.
+    $this->travel(65)->minutes();
+    $secondSweep = app(SlaService::class)->sweep()['late_review_reminders_sent'];
+    expect($secondSweep)->toBe(0);
+});
+
 test('a reviewed auto-approval never triggers the reminder, regardless of its review window', function () {
     $assignment = unreviewedAutoApproval(-10);
     $assignment->update(['admin_reviewed_at' => now(), 'admin_review_outcome' => 'confirmed']);

@@ -1,11 +1,10 @@
-SERVICE REPORT
+MAINTENANCE SERVICE REPORT
 
-Service Report No.: SR-2026-3156
-Date of Service: June 22, 2026
-Technician: Maria Reyes
+Date Serviced: June 3, 2026
+Technician: Marites Aquino
 
-Work Performed: pest control service for the pantry and storage areas.
+Work performed: inspection of the fire suppression system in the server room.
 
-Findings: Treatment was applied to all identified entry points; no active infestation was found, and a follow-up visit was scheduled as a precaution.
+Observations: All nozzles and sensors tested functional; one pressure gauge reading slightly low and flagged for follow-up next quarter.
 
-The area has been left in working condition and the requesting department was informed of the outcome upon completion.
+Approved By: _______________________________

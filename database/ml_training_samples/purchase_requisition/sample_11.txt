@@ -1,10 +1,11 @@
 Purchase Requisition Form
-Requisition No PR-2026-2011
 
-This request is filed by the Operations Division on June 6, 2026.
+This request is filed by the Engineering department on June 11, 2026.
 
-Item description: 5 units of business laptops (Core i5, 16GB RAM, 512GB SSD).
-Quantity requested: 5 units.
-Budget allocated: PHP 175,000.00.
+Item description: heavy-duty extension cords and power strips for the warehouse floor.
+Quantity requested: 20 units.
+Budget allocated: PHP 11,600.00.
 
 The department head has reviewed and endorsed this requisition for approval and release of funds.
+
+Approved By: _______________________________

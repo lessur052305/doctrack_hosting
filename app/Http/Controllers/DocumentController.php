@@ -3,11 +3,13 @@
 namespace App\Http\Controllers;
 
 use App\Models\DocumentRepository;
+use App\Models\DocumentRevision;
 use App\Models\DocumentReviewSession;
 use App\Models\SubmissionBatch;
 use App\Models\User;
 use App\Models\WorkflowStage;
 use App\Rules\ReliableMimeType;
+use App\Services\TextDiffService;
 use App\Services\ValidationService;
 use App\Services\WorkflowService;
 use Carbon\Carbon;
@@ -277,6 +279,37 @@ class DocumentController extends Controller
     }
 
     /**
+     * Feature: Revision History (Google-Docs-style — see DocumentRevision).
+     * Newest save first; the view itself pins the document's current live
+     * text above all of them as a non-diffable "present" entry. Same
+     * viewTracking population as the rest of the tracker: originator, any
+     * assigned approver, Admin.
+     */
+    public function revisionHistory(DocumentRepository $document)
+    {
+        $this->authorize('viewTracking', $document);
+
+        $revisions = DocumentRevision::where('document_id', $document->document_id)
+            ->with(['revisedBy', 'annotations.raisedBy'])
+            ->orderByDesc('created_at')
+            ->get();
+
+        return view('documents.partials.revision-history-list', compact('document', 'revisions'));
+    }
+
+    /** One revision's before/after comparison — see TextDiffService for the word-diff approach. */
+    public function revisionCompare(DocumentRepository $document, DocumentRevision $revision, TextDiffService $diffService)
+    {
+        $this->authorize('viewTracking', $document);
+        abort_unless($revision->document_id === $document->document_id, 404);
+
+        $revision->loadMissing(['revisedBy', 'annotations.raisedBy']);
+        $diff = $diffService->diff($revision->previous_text ?? '', $revision->new_text ?? '');
+
+        return view('documents.partials.revision-diff', compact('document', 'revision', 'diff'));
+    }
+
+    /**
      * Feature: originator-directed routing — the "pick approver(s)"
      * follow-up step for a document uploaded with routing_mode 'custom' or
      * 'unrelated' (see WorkflowService::ingest()), shown once
@@ -461,7 +494,12 @@ class DocumentController extends Controller
     public function resubmit(Request $request, DocumentRepository $document)
     {
         $this->authorize('resubmit', $document);
-        abort_unless($document->global_status === 'rejected', 409, 'Only a rejected document can be resubmitted.');
+        // 'processing' is never a transient "still working" state once a
+        // document is visible here — WorkflowService::ingest() only ever
+        // leaves it there on a genuine dead end (validation or extraction
+        // failure, see failExtraction()'s docblock), same as 'rejected'.
+        // Both are stuck states an originator needs a real way out of.
+        abort_unless(in_array($document->global_status, ['rejected', 'processing'], true), 409, 'Only a rejected or failed-validation document can be resubmitted.');
 
         $validated = $request->validate([
             'file' => ['required', 'file', 'mimes:pdf,docx,doc,txt,png,jpg,jpeg', new ReliableMimeType(), 'max:20480'],

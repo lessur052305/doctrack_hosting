@@ -1,11 +1,10 @@
-SERVICE REPORT
+Service Visit Summary
 
-Service Report No.: SR-2026-3117
-Date of Service: June 19, 2026
-Technician: Alvin Castillo
+Technician: Dominic Pascual
+Date of Service: June 20, 2026
 
-Work Performed: servicing of the office printers on the 1st floor.
+On this visit, Dominic Pascual performed inspection of the rooftop exhaust fans serving the kitchen area.
 
-Findings: Printers cleaned internally and toner levels checked; one unit had a paper jam sensor issue which was resolved during the visit.
+Findings: Fans cleaned and belts inspected; one unit showing early belt wear and scheduled for replacement next cycle. This report has been filed for the maintenance records.
 
-The area has been left in working condition and the requesting department was informed of the outcome upon completion.
+Approved By: _______________________________

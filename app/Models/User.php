@@ -2,7 +2,6 @@
 
 namespace App\Models;
 
-use App\Events\AdminActivityLogged;
 use App\Mail\ResetPasswordMail;
 use App\Mail\VerifyAccountMail;
 use Illuminate\Contracts\Auth\MustVerifyEmail;
@@ -45,30 +44,35 @@ class User extends Authenticatable implements MustVerifyEmail
     private const LEVELS = ['staff', 'head'];
 
     protected $fillable = [
-        'username', 'password_hash', 'full_name', 'email', 'role', 'assigned_category', 'department', 'level', 'is_busy', 'created_by', 'is_active',
+        'username', 'password_hash', 'full_name', 'email', 'role', 'assigned_category', 'department', 'level', 'created_by', 'is_active', 'last_seen_at',
     ];
 
     protected $hidden = ['password_hash', 'remember_token'];
 
     protected $casts = [
         'is_active' => 'boolean',
-        'is_busy' => 'boolean',
         'email_verified_at' => 'datetime',
+        'last_seen_at' => 'datetime',
     ];
 
+    /** How recently last_seen_at must have been touched to count as "online" — see isOnline(). */
+    private const ONLINE_WITHIN_SECONDS = 90;
+
     /**
-     * toggleAvailability() (ApprovalController) flips is_busy without
-     * writing an audit log entry — this is the only path that changes,
-     * so unlike everything else the admin dashboard's Approver Workload
-     * panel depends on, it needs its own explicit live-update hook.
+     * "Available" (chat/Active Users list) = an active account currently
+     * online — a heartbeat updates last_seen_at every ~60-75s while the
+     * app is open (see the chat.heartbeat route), so a closed tab/lost
+     * connection ages out within ONLINE_WITHIN_SECONDS without needing any
+     * explicit "I'm leaving" signal.
      */
-    protected static function booted(): void
+    public function isOnline(): bool
     {
-        static::updated(function (self $user) {
-            if ($user->wasChanged('is_busy')) {
-                event(new AdminActivityLogged());
-            }
-        });
+        return $this->last_seen_at !== null && $this->last_seen_at->gt(now()->subSeconds(self::ONLINE_WITHIN_SECONDS));
+    }
+
+    public function isAvailable(): bool
+    {
+        return $this->is_active && $this->isOnline();
     }
 
     /**
@@ -94,6 +98,17 @@ class User extends Authenticatable implements MustVerifyEmail
     // --- Department / level helpers ---
     public function isHead(): bool { return $this->level === 'head'; }
     public function isStaffLevel(): bool { return $this->level === 'staff'; }
+
+    /**
+     * The single Admin account every Originator/Approver's chat thread is
+     * with (see ChatController). Nullable, not firstOrFail() — the chat
+     * widget renders in the shared layout on every authenticated page, so
+     * it must not fatal on a fixture/edge case with no admin seeded yet.
+     */
+    public static function adminAccount(): ?self
+    {
+        return static::where('role', 'admin')->where('is_active', true)->first();
+    }
 
     public static function knownDepartments(): array
     {
@@ -140,6 +155,16 @@ class User extends Authenticatable implements MustVerifyEmail
     public function notifications()
     {
         return $this->hasMany(NotificationRecord::class, 'recipient_id', 'user_id')->orderByDesc('created_at');
+    }
+
+    public function sentChatMessages()
+    {
+        return $this->hasMany(ChatMessage::class, 'sender_id', 'user_id');
+    }
+
+    public function receivedChatMessages()
+    {
+        return $this->hasMany(ChatMessage::class, 'recipient_id', 'user_id');
     }
 
     public function auditLogs()

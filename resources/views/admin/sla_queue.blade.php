@@ -32,6 +32,19 @@
         startLivePoll({ ...opts, pollUrl: resultsEl.dataset.pollUrl });
 
         enableAjaxPagination(resultsEl, opts);
+
+        // Deep-link from Admin Violations (?highlight={document_id}) —
+        // slaQueueData() already made sure the right PAGE loaded; this
+        // just scrolls to and briefly rings the specific card on it.
+        const highlightId = new URLSearchParams(window.location.search).get('highlight');
+        if (highlightId) {
+            const target = document.getElementById(`review-doc-${highlightId}`);
+            if (target) {
+                target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                target.classList.add('ring-2', 'ring-primary-500');
+                setTimeout(() => target.classList.remove('ring-2', 'ring-primary-500'), 2000);
+            }
+        }
     });
 </script>
 @endsection

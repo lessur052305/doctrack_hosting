@@ -48,7 +48,12 @@
 </div>
 
 @foreach($modes as $mode => $panels)
-<div data-perf-mode-panel="{{ $mode }}" class="grid grid-cols-1 lg:grid-cols-3 gap-4 {{ $mode === 'fastest' ? '' : 'hidden' }}">
+{{-- transition-opacity (Feature: smooth Fastest/Slowest toggle) — the
+     click handler in performance_insights.blade.php fades opacity to 0,
+     swaps which panel has `hidden`, then fades the new one in, driven by
+     this CSS transition rather than the View Transitions API (see that
+     script's own comment for why the two don't mix well here). --}}
+<div data-perf-mode-panel="{{ $mode }}" class="grid grid-cols-1 lg:grid-cols-3 gap-4 transition-opacity duration-150 {{ $mode === 'fastest' ? '' : 'hidden' }}">
     @foreach($panels as $panel)
         <div class="bg-white rounded-xl shadow-card border border-surface-200 overflow-hidden">
             <div class="px-5 py-3 border-b border-surface-200">

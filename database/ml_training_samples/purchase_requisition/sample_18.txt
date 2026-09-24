@@ -1,10 +1,12 @@
-Purchase Requisition Form
-Requisition No PR-2026-2077
+PURCHASE REQUISITION
 
-This request is filed by the Operations Division on June 12, 2026.
+Date: June 18, 2026
+Requested by: Vinz Lessur
 
-Item description: 24-port gigabit network switches for the server room upgrade.
-Quantity requested: 2 units.
-Budget allocated: PHP 30,000.00.
+Item Description: network switches to expand connectivity in the newly renovated east wing
+Quantity: 4 units
+Estimated Budget: PHP 72,300.00
 
-The department head has reviewed and endorsed this requisition for approval and release of funds.
+Justification: This purchase supports ongoing Finance department operations and should be sourced from an accredited supplier where available.
+
+Approved By: _______________________________

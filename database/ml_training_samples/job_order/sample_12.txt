@@ -1,8 +1,9 @@
-INTERNAL JOB ORDER REQUEST
-Reference: Job Order No JO-2026-1140
+JOB ORDER SLIP
 
-IT Department is requesting maintenance support.
-Requested by: Teresa Navarro
-Date requested: June 21, 2026
+Department: Finance
+Requested For: Juan Santos
+Date Requested: June 12, 2026
 
-Description of work needed: inspection and refill of fire extinguishers located on the 1st and 2nd floor hallways. This has been reported more than once and the department would appreciate prompt attention given its impact on daily operations.
+Description of Work: repainting of the exterior perimeter fence following visible rust spots along the north side. Please close out the ticket once the work has been verified complete.
+
+Approved By: _______________________________

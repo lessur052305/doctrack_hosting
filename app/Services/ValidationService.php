@@ -19,15 +19,20 @@ class ValidationService
      * Required section keywords each document category must contain. Each
      * entry is a list of acceptable phrasings for the SAME field, not a
      * list of separate fields — a document only needs to contain ONE of
-     * them (e.g. "Job Order No" or "Job Order Number") to satisfy that
-     * requirement. Added after a real document ("Job Order Number:")
-     * failed validation purely over wording, not any actual missing
-     * content — see validate()'s matching comment.
+     * them (e.g. "Requested By" or "Requestor") to satisfy that
+     * requirement.
+     *
+     * Deliberately no "reference number" field (Job Order No/Requisition
+     * No/Service Report No) here — the value that follows a label is
+     * never checked at all (see validate()'s matching str_contains logic),
+     * so requiring one only made the originator guess a meaningless,
+     * self-invented number and its exact label wording, for zero real
+     * quality control. Every remaining field below tests actual content
+     * (a real date, a real requester, a real description) instead.
      */
     private const TEMPLATES = [
         'Job Order' => [
             'required_sections' => [
-                ['job order no', 'job order number', 'job order #'],
                 ['date requested', 'date needed', 'requested date'],
                 ['requested by', 'requestor', 'requested for'],
                 ['description of work', 'work description', 'scope of work'],
@@ -36,7 +41,6 @@ class ValidationService
         ],
         'Purchase Requisition' => [
             'required_sections' => [
-                ['requisition no', 'requisition number', 'pr no', 'pr number'],
                 ['department'],
                 ['item description', 'items', 'description of items'],
                 ['quantity', 'qty'],
@@ -46,7 +50,6 @@ class ValidationService
         ],
         'Service Report' => [
             'required_sections' => [
-                ['service report no', 'service report number', 'sr no', 'report no'],
                 ['technician'],
                 ['date of service', 'service date', 'date serviced'],
                 ['findings', 'observations'],
@@ -62,6 +65,17 @@ class ValidationService
      * training page already uses to decide "enough to train on."
      */
     private const MIN_VOCABULARY_SAMPLES = 5;
+
+    /**
+     * Caps how many routed real documents' text feed the vocabulary below
+     * — this only needs enough real-world words to meaningfully widen
+     * recognition, not the full unbounded history of every document ever
+     * trained on for a category, which would otherwise grow (and get
+     * slower to re-tokenize on every call) for the lifetime of the app.
+     * Most recently trained first, so the cap always keeps the freshest
+     * vocabulary rather than an arbitrary/oldest slice.
+     */
+    private const MAX_ROUTED_VOCABULARY_SAMPLES = 200;
 
     /**
      * @return array{is_valid: bool, errors: array<int,string>, readability_score: ?int, readability_note: ?string}
@@ -170,6 +184,32 @@ class ValidationService
     }
 
     /**
+     * Same scoring as readabilityAgainst(), but takes an already-fetched
+     * vocabulary instead of querying/tokenizing categoryVocabulary()
+     * again — for a caller re-scoring many documents in the same category
+     * back to back (see ClassificationService::autoTrainIfDue()'s batch
+     * recheck, the only caller that needs this), fetching once per
+     * category and reusing it across every document in that category
+     * avoids redundant identical queries. categoryVocabulary() itself
+     * stays uncached everywhere else — see its own docblock for why.
+     *
+     * @param array<string,true>|null $vocabulary from vocabularyFor()
+     * @return array{score: ?int, note: ?string}
+     */
+    public function readabilityWithVocabulary(?array $vocabulary, string $category, string $text): array
+    {
+        ['error' => $note, 'score' => $score] = $this->scoreContentQuality($vocabulary, $category, $text);
+
+        return ['score' => $score, 'note' => $note];
+    }
+
+    /** Public entry point to categoryVocabulary() — see readabilityWithVocabulary()'s docblock for why a caller would need this directly. */
+    public static function vocabularyFor(string $category): ?array
+    {
+        return self::categoryVocabulary($category);
+    }
+
+    /**
      * A real-word-ratio heuristic, not semantic understanding — true
      * "is this professional/nonsense" detection isn't reliable at this
      * project's scale. This only catches text where most tokens simply
@@ -194,12 +234,17 @@ class ValidationService
      */
     private function checkContentQuality(string $category, string $text): array
     {
+        return $this->scoreContentQuality(self::categoryVocabulary($category), $category, $text);
+    }
+
+    /** The actual scoring math, factored out from checkContentQuality() so readabilityWithVocabulary() can reuse it against an already-fetched vocabulary instead of re-querying categoryVocabulary(). */
+    private function scoreContentQuality(?array $vocabulary, string $category, string $text): array
+    {
         $words = str_word_count(strtolower($text), 1);
         if (count($words) === 0) {
             return ['error' => null, 'score' => null]; // nothing to score — the word-count gate above already covers empty content
         }
 
-        $vocabulary = self::categoryVocabulary($category);
         if ($vocabulary === null) {
             return ['error' => null, 'score' => null]; // too few staged training samples for this category yet
         }
@@ -226,10 +271,17 @@ class ValidationService
      * Deliberately not cached — the category counts here (tens, not
      * thousands, of samples) make re-querying and re-tokenizing on every
      * call cheap, and this needs a genuinely fresh read every time a
-     * document is scored (the vocabulary grows continuously as more
-     * documents route through — see ClassificationService::
-     * autoTrainIfDue()) — a cache would need explicit invalidation to
+     * document is scored — a cache would need explicit invalidation to
      * support that, for no real performance win at this scale.
+     *
+     * Sourced from curated MlStagingSample rows PLUS real documents
+     * ClassificationService::autoTrainIfDue() has already folded into
+     * training for this category (used_for_training_at not null) — the
+     * same real-document growth classification's own vocabulary gets,
+     * still scoped per category (never mixed with the other two, unlike
+     * the classifier's own shared TF-IDF vocabulary — see
+     * autoTrainIfDue()'s recheck step, which re-scores readability for
+     * this same batch once training completes).
      *
      * Tokenized the same way as ClassificationService::preprocess()
      * (lowercase, strip non-letters) but WITHOUT its stopword removal —
@@ -239,14 +291,20 @@ class ValidationService
      */
     private static function categoryVocabulary(string $category): ?array
     {
-        $samples = \App\Models\MlStagingSample::where('category', $category)->pluck('extracted_text');
-        if ($samples->count() < self::MIN_VOCABULARY_SAMPLES) {
-            return null;
+        $curatedSamples = \App\Models\MlStagingSample::curatedTextsFor($category);
+        if ($curatedSamples->count() < self::MIN_VOCABULARY_SAMPLES) {
+            return null; // the cold-start bar is about curated data specifically — same bar the ML Training page uses
         }
 
+        $routedSamples = \App\Models\DocumentRepository::where('ml_category', $category)
+            ->whereNotNull('used_for_training_at')
+            ->orderByDesc('used_for_training_at')
+            ->limit(self::MAX_ROUTED_VOCABULARY_SAMPLES)
+            ->pluck('ocr_text');
+
         $vocabulary = [];
-        foreach ($samples as $text) {
-            $normalized = preg_replace('/[^a-z\s]/', ' ', strtolower($text));
+        foreach ($curatedSamples->merge($routedSamples) as $text) {
+            $normalized = preg_replace('/[^a-z\s]/', ' ', strtolower((string) $text));
             foreach (preg_split('/\s+/', trim($normalized)) ?: [] as $token) {
                 if (strlen($token) >= 2) {
                     $vocabulary[$token] = true;

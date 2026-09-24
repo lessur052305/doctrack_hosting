@@ -36,6 +36,28 @@ function pendingAssignment(array $overrides = []): DocumentAssignment
     ], $overrides));
 }
 
+test('escalating the same assignment twice only ever logs one violation — regression for a real production race condition', function () {
+    // Confirmed live in production: multiple independent triggers for the
+    // same overdue assignment (the event-driven job, the periodic
+    // safety-net sweep, ApprovalController's own on-demand check on every
+    // dashboard load/poll) could all find it "still pending" within
+    // moments of each other and each log their own SlaViolation before
+    // any of them committed the auto-approval that should have taken it
+    // out of contention — one assignment ended up with 335 duplicate
+    // violation rows over two days. escalate() now re-checks under a row
+    // lock (see SlaService::escalateApproverMiss()) before logging
+    // anything, so a second call against an assignment already resolved
+    // by the first must be a clean no-op, not a second violation.
+    $assignment = pendingAssignment();
+    $sla = app(SlaService::class);
+
+    $sla->escalate($assignment);
+    $sla->escalate($assignment->fresh()); // simulates a second, concurrent-in-spirit trigger racing the first
+
+    expect(SlaViolation::where('assignment_id', $assignment->assignment_id)->count())->toBe(1)
+        ->and($assignment->fresh()->individual_status)->toBe('approved');
+});
+
 test('a real approver missing their own SLA window is auto-approved immediately', function () {
     // Admin still reviews it afterward instead (review_due_at), not
     // before. The SLA violation itself is still logged either way.

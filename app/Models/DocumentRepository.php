@@ -38,6 +38,7 @@ class DocumentRepository extends Model
         'is_validated', 'validation_errors', 'due_date', 'global_status',
         'previous_version_id', 'version_number', 'is_legacy_import', 'disputed_at',
         'ml_review_status', 'ml_recheck_category', 'ml_recheck_confidence', 'ml_rechecked_at',
+        'ml_recheck_readability_score',
         'ml_recheck_dismissed_at', 'confirmed_at_model_id', 'requires_printing',
         'readability_score', 'readability_review_status', 'is_security_blocked',
         'desired_routing', 'pending_custom_routing_at', 'custom_routed', 'ml_review_due_at',

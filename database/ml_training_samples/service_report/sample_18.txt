@@ -1,8 +1,9 @@
-Field Service Report
-Service Report No SR-2026-3091
+SERVICE COMPLETION REPORT
 
-Technician assigned: Dominic Pascual
-Date of service: June 17, 2026
+Date of service rendered: June 18, 2026
+Technician on duty: Edgar Ramos
 
-This report covers plumbing inspection of the restrooms on the 2nd and 3rd floors.
-Findings: No leaks detected; water pressure normal across all fixtures checked. One faucet handle was slightly loose and has been tightened. No additional issues were reported by staff on site during the visit.
+Summary of work: routine check of the company vehicle fleet's tire pressure and fluid levels.
+Findings and recommendations: All vehicles inspected; two units required tire top-up and one required a coolant refill before dispatch.
+
+Approved By: _______________________________

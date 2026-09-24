@@ -13,9 +13,10 @@ use Illuminate\Console\Command;
  * Command name fits again: every eligible approver is assigned to a stage
  * at once (see WorkflowService::assignStage()), so a stage genuinely can
  * have several parallel sibling assignments in flight simultaneously. This
- * sweep flags each individually expired PENDING assignment on its own —
- * setting escalated_to_admin = true — with no cross-row coordination; each
- * seat's SLA window is independent of its siblings.
+ * sweep escalates each individually expired PENDING assignment on its own
+ * (logs an SlaViolation and auto-approves it — see SlaService::
+ * escalateApproverMiss()) with no cross-row coordination; each seat's SLA
+ * window is independent of its siblings.
  *
  * This is the first half of the Section 5 safety net; the second half
  * (auto-approval after an Admin grace window) is handled by the existing

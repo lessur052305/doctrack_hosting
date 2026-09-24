@@ -1,10 +1,11 @@
-Purchase Requisition Form
-Requisition No PR-2026-2176
+REQUEST FOR PURCHASE
 
-This request is filed by the Operations Division on June 21, 2026.
+Department: Engineering
 
-Item description: heavy-duty extension cords and surge protectors.
-Quantity requested: 15 units.
-Budget allocated: PHP 9,000.00.
+Item description and quantity: uninterruptible power supply units for the network closet, 3 units requested.
+Budget: PHP 54,000.00.
+Date filed: June 7, 2026.
 
-The department head has reviewed and endorsed this requisition for approval and release of funds.
+This was requested to address a gap identified during the department's recent inventory review.
+
+Approved By: _______________________________

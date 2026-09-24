@@ -1,10 +1,11 @@
-REQUEST FOR PURCHASE
+Purchase Requisition Form
 
-Requisition No.: PR-2026-2055
-Department: Security Office
+This request is filed by the Finance department on June 16, 2026.
 
-Item description and quantity: assorted whiteboard markers and dry erasers, 30 sets requested.
-Budget: PHP 4,500.00.
-Date filed: June 10, 2026.
+Item description: a replacement compressor part for the rooftop HVAC unit.
+Quantity requested: 1 unit.
+Budget allocated: PHP 38,900.00.
 
-This was requested to address a gap identified during the department's recent inventory review, and prompt processing would be appreciated given current stock levels.
+The department head has reviewed and endorsed this requisition for approval and release of funds.
+
+Approved By: _______________________________

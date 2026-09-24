@@ -76,8 +76,8 @@
                                 </span>
                                 <br>
                             @endif
-                            <span class="text-xs font-medium {{ $u->is_busy ? 'text-processing-700' : 'text-approved-700' }}">
-                                {{ $u->is_busy ? 'Busy/Away' : 'Available' }}
+                            <span class="text-xs font-medium {{ $u->isAvailable() ? 'text-approved-700' : 'text-surface-400' }}">
+                                {{ $u->isAvailable() ? 'Available' : 'Not Available' }}
                             </span>
                         @else
                             <br>

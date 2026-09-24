@@ -9,6 +9,7 @@ use App\Models\AuditLog;
 use App\Models\DocumentAnnotation;
 use App\Models\DocumentAssignment;
 use App\Models\DocumentRepository;
+use App\Models\DocumentRevision;
 use App\Models\DocumentReviewSession;
 use App\Models\NotificationRecord;
 use App\Models\User;
@@ -37,9 +38,11 @@ use Throwable;
  * completes once every one of those rows is non-pending (see
  * completeStage()); a single rejection from ANY of them immediately kills
  * the whole document, same as before. There is no more load-balanced
- * "pick one" step for normal routing — is_busy no longer gates assignment
- * at all, since "assign everyone" and "skip whoever's busy" are
- * contradictory goals. The old one-winner ranking (rankApprovers()) still
+ * "pick one" step for normal routing — every eligible approver gets a
+ * seat regardless (the manual busy/away flag this used to skip was
+ * removed entirely; see User::isOnline()/isAvailable() for its
+ * replacement, a display-only online signal, not a routing gate).
+ * The old one-winner ranking (rankApprovers()) still
  * exists and is still used, but only by findReplacementApprover() for the
  * deactivation-handoff case, which is a genuinely different operation:
  * replacing one lost seat, not routing a stage.
@@ -713,12 +716,11 @@ class WorkflowService
      * ranks a candidate pool that's already been filtered down to one lost
      * seat's replacement options.
      *
-     * Approvers marked busy/away are skipped in favor of an available
-     * peer, unless every candidate is busy. Ties in workload are broken by
-     * fairness, not by an arbitrary ID: whichever tied approver's most
-     * recent assignment (of any status) happened longest ago gets this
-     * one; an approver who has never received an assignment is treated as
-     * having waited the longest and wins the tie outright.
+     * Ties in workload are broken by fairness, not by an arbitrary ID:
+     * whichever tied approver's most recent assignment (of any status)
+     * happened longest ago gets this one; an approver who has never
+     * received an assignment is treated as having waited the longest and
+     * wins the tie outright.
      *
      * @param Collection<int, User> $candidates
      * @return Collection<int, User> ranked best-first; empty if $candidates was empty
@@ -729,9 +731,7 @@ class WorkflowService
             return collect();
         }
 
-        $available = $candidates->reject(fn (User $approver) => $approver->is_busy)->values();
-        $pool = $available->isNotEmpty() ? $available : $candidates;
-        $userIds = $pool->pluck('user_id');
+        $userIds = $candidates->pluck('user_id');
 
         $workloads = DocumentAssignment::whereIn('user_id', $userIds)
             ->where('individual_status', 'pending')
@@ -744,7 +744,7 @@ class WorkflowService
             ->groupBy('user_id')
             ->pluck('last_assigned_at', 'user_id');
 
-        $ranked = $pool->values()->all();
+        $ranked = $candidates->values()->all();
         usort($ranked, function (User $a, User $b) use ($workloads, $lastAssignedAt) {
             $countA = (int) ($workloads[$a->user_id] ?? 0);
             $countB = (int) ($workloads[$b->user_id] ?? 0);
@@ -905,9 +905,8 @@ class WorkflowService
      * stage of a document is routed together (the normal case — see
      * routeToWorkflow()), every approver on every stage shares the exact
      * same deadline as a guarantee, not as an accident of how fast the
-     * routing loop happens to run. is_busy is not consulted — every
-     * eligible approver gets a seat regardless of busy status, since
-     * "assign everyone" and "skip busy ones" can't both hold.
+     * routing loop happens to run. Every eligible approver gets a seat
+     * regardless — there is no busy/away flag to skip anymore.
      */
     /**
      * $autoApproveImmediately=false defers resolving a "nobody eligible"
@@ -1515,11 +1514,17 @@ class WorkflowService
     public function saveDocumentRevision(DocumentRepository $document, User $originator, string $text, array $resolvedAnnotationIds): void
     {
         DB::transaction(function () use ($document, $originator, $text, $resolvedAnnotationIds) {
+            // Captured before the overwrite below — Feature: Revision
+            // History (see DocumentRevision), which needs the FULL
+            // before-text, not just the fact that a change happened.
+            $previousText = $document->ocr_text;
+
             // A submitted <textarea> value can reintroduce \r\n depending
             // on the browser — see TextExtractionService::
             // normalizeLineEndings()'s docblock for why leaving that in
             // would throw off every future flagged-passage offset again.
-            $document->ocr_text = TextExtractionService::normalizeLineEndings($text);
+            $newText = TextExtractionService::normalizeLineEndings($text);
+            $document->ocr_text = $newText;
             $document->save();
 
             AuditLog::record($originator->user_id, $document->document_id, 'revision_saved',
@@ -1542,6 +1547,19 @@ class WorkflowService
                 NotificationRecord::send($annotation->raised_by, $document->document_id,
                     "'{$document->title}' (stage '{$annotation->assignment->stage->stage_name}') was revised to address " .
                     "your flagged concern: \"{$annotation->comment}\" — please re-review.", 'high');
+            }
+
+            // One immutable before/after snapshot per save, linked to
+            // whichever flags this specific save addressed — see
+            // DocumentRevision's docblock.
+            $revision = DocumentRevision::create([
+                'document_id' => $document->document_id,
+                'revised_by' => $originator->user_id,
+                'previous_text' => $previousText,
+                'new_text' => $newText,
+            ]);
+            if ($resolved->isNotEmpty()) {
+                $revision->annotations()->attach($resolved->pluck('annotation_id'));
             }
 
             event(new DocumentStatusChanged($document));

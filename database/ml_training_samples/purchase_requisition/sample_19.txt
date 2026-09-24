@@ -1,10 +1,10 @@
-REQUEST FOR PURCHASE
+Requisition Slip
 
-Requisition No.: PR-2026-2088
-Department: Security Office
+Filed by: Nestor Villanueva, Engineering Department
+Date: June 19, 2026
 
-Item description and quantity: 2TB external hard drives for offsite document backup, 6 units requested.
-Budget: PHP 27,000.00.
-Date filed: June 13, 2026.
+Item Description: a replacement forklift battery for the warehouse loading equipment.
+Quantity: 1 unit.
+Estimated total cost: PHP 58,000.00. Kindly process at your earliest convenience.
 
-This was requested to address a gap identified during the department's recent inventory review, and prompt processing would be appreciated given current stock levels.
+Approved By: _______________________________

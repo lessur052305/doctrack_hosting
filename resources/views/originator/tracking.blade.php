@@ -3,33 +3,6 @@
 @section('page-title', 'Document Tracking')
 
 @section('content')
-{{-- Feature: a way back without relying on the sidebar or the browser's
-     own back button — this page is always reached by clicking INTO
-     something from a list (Your Submissions for an Originator; the
-     Document Tracking module or Audit Logs for an Admin, who can inspect
-     any document — see routes/web.php's documents.track comment), never
-     from the sidebar directly, so it's the one place in the app that
-     genuinely needs an explicit return link. Admin's two possible origins
-     are disambiguated by a `from` query param the caller links with (see
-     admin/partials/audit-row.blade.php); Document Tracking is the default
-     since it's the more common path in. An Originator only ever has one
-     possible origin, so no param needed there. --}}
-@php
-    $backTarget = auth()->user()->isOriginator()
-        ? ['label' => 'Your Submissions', 'url' => route('originator.dashboard')]
-        : (request('from') === 'audit'
-            ? ['label' => 'Audit Logs', 'url' => route('admin.audit.logs')]
-            : ['label' => 'Document Tracking', 'url' => route('admin.documents.index')]);
-@endphp
-{{-- Solid, not tinted — a light bg-primary-50 fill still read as barely
-     there against this page's own bg-surface-50 background (see
-     layouts/app.blade.php's <main>), so this uses the same solid fill as
-     a real primary action button (Save, Add to Archive) instead of the
-     lighter tint used for the smaller in-row buttons elsewhere. --}}
-<a href="{{ $backTarget['url'] }}" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary-700 hover:bg-primary-800 text-sm font-medium text-white transition-colors mb-4 shadow-sm">
-    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
-    Back to {{ $backTarget['label'] }}
-</a>
 <div id="tracking-content"
     data-document-id="{{ $document->document_id }}"
     data-originator-id="{{ $document->originator_id }}"

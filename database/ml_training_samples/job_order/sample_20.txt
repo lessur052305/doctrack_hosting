@@ -1,12 +1,9 @@
-JOB ORDER
+INTERNAL JOB ORDER REQUEST
 
-Job Order No.: JO-2026-1063
-Date Requested: June 10, 2026
-Department: Engineering Department
-Requested By: Ferdinand Aquino
-Priority: Urgent
+Finance department is requesting maintenance support.
+Requested by: Arnel Domingo
+Date requested: June 20, 2026
 
-Description of Work:
-repair of a door lock in the server room that has become difficult to turn.
+Description of work needed: replacement of the company delivery truck's worn tires and a full brake pad inspection before its next long haul. Prompt attention would be appreciated given its impact on daily operations.
 
-Please coordinate with the requesting department to schedule the work at the earliest convenient time. Kindly notify the front desk upon completion so the request can be closed out in the tracking log.
+Approved By: _______________________________

@@ -4,6 +4,7 @@ use App\Http\Controllers\AdminController;
 use App\Http\Controllers\ApprovalController;
 use App\Http\Controllers\ArchiveController;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\ChatController;
 use App\Http\Controllers\DocumentController;
 use App\Http\Controllers\NotificationController;
 use Illuminate\Support\Facades\Route;
@@ -82,6 +83,18 @@ Route::middleware('auth')->group(function () {
     Route::post('/notifications/{notification}/read', [NotificationController::class, 'markRead'])->name('notifications.read');
     Route::post('/notifications/read-all', [NotificationController::class, 'markAllRead'])->name('notifications.readAll');
 
+    // --- Chat (shared across all roles — every Originator/Approver's one
+    // conversation partner is the single Admin account; see ChatController) ---
+    Route::get('/chat/poll', [ChatController::class, 'poll'])->middleware('throttle:polling')->name('chat.poll');
+    Route::get('/chat/refresh', [ChatController::class, 'refresh'])->middleware('throttle:polling')->name('chat.refresh');
+    Route::post('/chat/send', [ChatController::class, 'send'])->middleware('throttle:mutations')->name('chat.send');
+    Route::post('/chat/thread/{otherUser}/read', [ChatController::class, 'markThreadRead'])->name('chat.thread.read');
+    Route::get('/chat/images/{message}', [ChatController::class, 'image'])->name('chat.image');
+
+    // Presence heartbeat — pinged periodically while any authenticated
+    // page is open (see resources/js/app.js), powers User::isOnline().
+    Route::post('/presence/heartbeat', [ChatController::class, 'heartbeat'])->middleware('throttle:polling')->name('presence.heartbeat');
+
     // --- Originator ---
     Route::middleware('role:originator')->prefix('originator')->name('originator.')->group(function () {
         Route::get('/dashboard', [DocumentController::class, 'dashboard'])->name('dashboard');
@@ -140,7 +153,6 @@ Route::middleware('auth')->group(function () {
         // flagged the wrong thing" / "never mind" — see
         // WorkflowService::withdrawAnnotation()).
         Route::post('/annotations/{annotation}/withdraw', [ApprovalController::class, 'withdrawAnnotation'])->middleware('throttle:mutations')->name('annotations.withdraw');
-        Route::post('/availability/toggle', [ApprovalController::class, 'toggleAvailability'])->name('availability.toggle');
         Route::get('/archive', [ArchiveController::class, 'index'])->name('archive');
 
         // Decision History: every decision this approver has personally
@@ -288,6 +300,18 @@ Route::middleware('auth')->group(function () {
     Route::middleware('role:admin,originator,approver')
         ->get('/documents/{document}/tracker-modal', [DocumentController::class, 'trackerModal'])
         ->name('documents.trackerModal');
+
+    // Feature: Revision History (Google-Docs-style before/after popup —
+    // see DocumentRevision, TextDiffService). Same viewTracking population
+    // as the rest of the tracker; fetched into the shared kpi-drilldown-
+    // modal from both the approver's Review & Comment panel and the
+    // originator/admin's tracking page.
+    Route::middleware('role:admin,originator,approver')
+        ->get('/documents/{document}/revisions', [DocumentController::class, 'revisionHistory'])
+        ->name('documents.revisions');
+    Route::middleware('role:admin,originator,approver')
+        ->get('/documents/{document}/revisions/{revision}', [DocumentController::class, 'revisionCompare'])
+        ->name('documents.revisions.compare');
 
     // Inline (not force-download) original-file viewer, embedded in the
     // Approver dashboard and reachable by the originator/admin too.

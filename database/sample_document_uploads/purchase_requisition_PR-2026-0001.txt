@@ -1,13 +1,18 @@
 Purchase Requisition Form
-Requisition No: PR-2026-0001
 
-SAMPLE UPLOAD DOCUMENT — for testing file upload only, not a real request.
+This request is filed by the Finance department on June 24, 2026.
+Requested by: Rolando Cruz
 
-Department: Sample Department (Test Upload)
-Item description: Sample office supplies for demonstration purposes.
-Quantity: 5 units.
-Budget: PHP 1,000.00.
+Department: Finance
+Item description: replacement label printers and thermal label rolls for the
+records archiving project, to replace two units that have stopped feeding
+paper reliably.
+Quantity: 3 units (printers) and 20 rolls (labels).
+Budget: PHP 36,500.00.
 
-This placeholder document exists to verify that PDF, DOCX, DOC, TXT, PNG,
-JPG, and JPEG uploads are all processed correctly by the system for the
-Purchase Requisition category.
+Justification: current printers are over five years old and repeated repair
+attempts have not resolved the feed issue; continuing to run the archiving
+project without reliable label printing risks delays to the retention
+schedule.
+
+Approved By: _______________________________

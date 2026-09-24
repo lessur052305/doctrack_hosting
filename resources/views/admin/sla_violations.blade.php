@@ -16,32 +16,33 @@
         </a>
     @endunless
 
-    {{-- Gated behind picking a category — an unfiltered "Top Category: Job
-         Order" card on first load reads as if the report already defaulted
-         to Job Order, even though nothing was picked yet. Blank until a
-         real category is chosen.
+    {{-- Each card carries a stable id (see the script below) — clicking an
+         approver's row further down swaps Total Violations/Most Violations/
+         Top Bottleneck Stage/Disputed to THAT approver's own numbers. They
+         stay showing that approver until a different one is clicked —
+         closing the popup does NOT revert them (see selectApprover() below;
+         there used to be a restore-on-close here, but that made the cards
+         flip back to the category's own top offender — confusingly, always
+         "Lessur Vinz" or whoever — the instant you closed the popup you'd
+         just opened to look at).
 
-         Each card carries a stable id (see the script below) — clicking an
-         approver's row further down swaps Total Violations/Avg Overdue/Top
-         Bottleneck Stage/Disputed/Top Approver to THAT approver's own
-         numbers. They stay showing that approver until a different one is
-         clicked — closing the popup does NOT revert them (see
-         selectApprover() below; there used to be a restore-on-close here,
-         but that made the cards flip back to the category's own top
-         approver — confusingly, always "Lessur Vinz" or whoever — the
-         instant you closed the popup you'd just opened to look at). --}}
+         Two cards that used to live here were removed: "Avg. Minutes
+         Overdue" (a real internal signal — how long it takes the system to
+         NOTICE an expired deadline, not how long a document sits
+         unapproved, since auto-approval is instant either way — but that
+         distinction read as confusing/wrong to anyone without that context,
+         so it's gone from this dashboard) and "Top Category" (this page
+         only ever shows these cards once you're already inside one
+         category's folder, so it could only ever repeat the folder you're
+         already standing in). --}}
     @unless($showFolders)
-        <div class="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <div class="bg-white rounded-xl shadow-card border border-surface-200 p-5">
                 <p class="text-sm text-surface-500 mb-1">Total Violations</p>
                 <p class="text-2xl font-bold text-rejected-700" id="stat-total-violations">{{ $totalCount }}</p>
             </div>
             <div class="bg-white rounded-xl shadow-card border border-surface-200 p-5">
-                <p class="text-sm text-surface-500 mb-1">Avg. Minutes Overdue</p>
-                <p class="text-2xl font-bold text-surface-900" id="stat-avg-overdue">{{ $avgOverdue }}</p>
-            </div>
-            <div class="bg-white rounded-xl shadow-card border border-surface-200 p-5">
-                <p class="text-sm text-surface-500 mb-1" id="stat-top-approver-label">Top Approver</p>
+                <p class="text-sm text-surface-500 mb-1" id="stat-top-approver-label">Most Violations</p>
                 <p class="text-sm font-semibold text-surface-900" id="stat-top-approver-name">{{ optional($byApprover->first()?->approver)->full_name ?? '—' }}</p>
                 <p class="text-sm text-surface-400" id="stat-top-approver-sub">{{ $byApprover->first()->total ?? 0 }} violation(s)</p>
             </div>
@@ -49,11 +50,6 @@
                 <p class="text-sm text-surface-500 mb-1">Top Bottleneck Stage</p>
                 <p class="text-sm font-semibold text-surface-900" id="stat-top-stage-name">{{ $byStage->first()->stage_name ?? '—' }}</p>
                 <p class="text-sm text-surface-400" id="stat-top-stage-sub">{{ $byStage->first()->total ?? 0 }} violation(s)</p>
-            </div>
-            <div class="bg-white rounded-xl shadow-card border border-surface-200 p-5">
-                <p class="text-sm text-surface-500 mb-1">Top Category</p>
-                <p class="text-sm font-semibold text-surface-900">{{ $byCategory->ml_category ?? '—' }}</p>
-                <p class="text-sm text-surface-400">{{ $byCategory->total ?? 0 }} violation(s)</p>
             </div>
             <div class="bg-white rounded-xl shadow-card border border-surface-200 p-5">
                 <p class="text-sm text-surface-500 mb-1">Disputed</p>
@@ -197,7 +193,6 @@
                 .then((res) => (res.ok ? res.json() : Promise.reject()))
                 .then((data) => {
                     document.getElementById('stat-total-violations').textContent = data.totalCount;
-                    document.getElementById('stat-avg-overdue').textContent = data.avgOverdue;
                     document.getElementById('stat-top-approver-label').textContent = 'Selected Approver';
                     document.getElementById('stat-top-approver-name').textContent = data.name;
                     document.getElementById('stat-top-approver-sub').textContent = data.rank

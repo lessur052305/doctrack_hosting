@@ -588,23 +588,6 @@ class ApprovalController extends Controller
         return redirect()->route('approver.dashboard')->with('status', $status);
     }
 
-    /**
-     * Self-service "busy/away" toggle (Feature: load-balancing fallback).
-     * A busy approver is skipped by WorkflowService's eligibility logic in
-     * favor of an available peer on the same stage, unless doing so would
-     * leave nobody eligible at all.
-     */
-    public function toggleAvailability(Request $request)
-    {
-        $user = $request->user();
-        $user->is_busy = !$user->is_busy;
-        $user->save();
-
-        return back()->with('status', $user->is_busy
-            ? "You're now marked as busy/away — new documents will route to an available peer where possible."
-            : "You're now marked as available.");
-    }
-
     // ---------------------------------------------------------------
     // Decision History — every decision THIS approver has personally
     // made (approved, rejected, or auto-approved on their behalf),

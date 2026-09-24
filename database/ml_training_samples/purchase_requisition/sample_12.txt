@@ -1,10 +1,11 @@
 REQUEST FOR PURCHASE
 
-Requisition No.: PR-2026-2220
-Department: Security Office
+Department: Finance
 
-Item description and quantity: mobile phones issued to field service technicians, 6 units requested.
-Budget: PHP 90,000.00.
-Date filed: June 25, 2026.
+Item description and quantity: a new office chair batch to replace units flagged during the facilities walkthrough, 14 units requested.
+Budget: PHP 84,000.00.
+Date filed: June 12, 2026.
 
-This was requested to address a gap identified during the department's recent inventory review, and prompt processing would be appreciated given current stock levels.
+This was requested to address a gap identified during the department's recent inventory review.
+
+Approved By: _______________________________

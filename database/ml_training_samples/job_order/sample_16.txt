@@ -1,8 +1,8 @@
-INTERNAL JOB ORDER REQUEST
-Reference: Job Order No JO-2026-1035
+MAINTENANCE JOB REQUEST
 
-IT Department is requesting maintenance support.
-Requested by: Roberto Cruz
-Date requested: June 6, 2026
+Date Requested: June 16, 2026
+Requested By: Ferdinand Ilagan of the Finance department
 
-Description of work needed: plumbing repair for a leaking faucet and slow-draining sink in the pantry area. This has been reported more than once and the department would appreciate prompt attention given its impact on daily operations.
+Description of Work: servicing of the loading dock hydraulic leveler, which has been descending slower than normal. Kindly advise on scheduling once assigned to a technician.
+
+Approved By: _______________________________
