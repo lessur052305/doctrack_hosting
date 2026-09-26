@@ -20,9 +20,7 @@ use Illuminate\Http\Request;
  */
 class AssignmentController extends Controller
 {
-    public function __construct(private WorkflowService $workflow, private SlaService $sla)
-    {
-    }
+    public function __construct(private WorkflowService $workflow, private SlaService $sla) {}
 
     public function index(Request $request)
     {
@@ -32,15 +30,13 @@ class AssignmentController extends Controller
 
         DocumentAssignment::where('user_id', $userId)
             ->where('individual_status', 'pending')
-            ->where('escalated_to_admin', false)
             ->where('sla_expires_at', '<', now())
             ->with(['stage', 'document', 'approver'])
             ->get()
-            ->each(fn (DocumentAssignment $a) => $this->sla->escalate($a));
+            ->each(fn (DocumentAssignment $a) => $this->sla->autoApproveMissedDeadline($a));
 
         $assignments = DocumentAssignment::where('user_id', $userId)
             ->where('individual_status', 'pending')
-            ->where('escalated_to_admin', false)
             ->with(['document', 'stage'])
             ->orderBy('priority_rank')
             ->orderBy('sla_expires_at')
@@ -60,10 +56,11 @@ class AssignmentController extends Controller
 
         abort_if($assignment->individual_status !== 'pending', 409, 'This assignment has already been actioned.');
 
-        if (!$assignment->escalated_to_admin && $assignment->sla_expires_at && now()->greaterThan($assignment->sla_expires_at)) {
-            $this->sla->escalate($assignment);
+        if ($assignment->sla_expires_at && now()->greaterThan($assignment->sla_expires_at)) {
+            $this->sla->autoApproveMissedDeadline($assignment);
+            $assignment->refresh(); // autoApproveMissedDeadline() worked on its own locked copy — re-read what it did
         }
-        abort_if($assignment->escalated_to_admin, 409, "This assignment's SLA deadline has passed — it was just escalated to Admin and can no longer be decided here.");
+        abort_if($assignment->individual_status !== 'pending', 409, "This assignment's SLA deadline has passed — the system auto-approved it, so it can no longer be decided here.");
 
         $this->workflow->decide($assignment, $request->user(), $validated['decision'], $validated['comments'] ?? null);
 

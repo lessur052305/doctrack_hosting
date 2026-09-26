@@ -64,12 +64,23 @@ it('routes a stage only to approvers whose department matches, even when categor
     expect($budgetAssignees->all())->toBe([$financeStaff->user_id]);
 });
 
-it('seats both departments on a stage owned by more than one department (Final Approval)', function () {
+it('seats both departments on a stage owned by more than one department (Final Approval), once the review stages are approved', function () {
+    $engineer = User::factory()->approver('Job Order')->create(['department' => 'Engineering', 'level' => 'staff']);
+    $financeStaff = User::factory()->approver('Job Order')->create(['department' => 'Finance', 'level' => 'staff']);
     $engineerHead = User::factory()->approver('Job Order')->create(['department' => 'Engineering', 'level' => 'head']);
     $financeHead = User::factory()->approver('Job Order')->create(['department' => 'Finance', 'level' => 'head']);
 
     $document = documentFor('Job Order');
-    app(WorkflowService::class)->routeToWorkflow($document);
+    $workflow = app(WorkflowService::class);
+    $workflow->routeToWorkflow($document);
+
+    // Final Approval is not open while the review stages are pending.
+    expect(DocumentAssignment::where('document_id', $document->document_id)->where('stage_id', $this->finalApproval->stage_id)->exists())->toBeFalse();
+
+    // Approve every review seat (Technical Review: engineer + engineer head; Budget Check: finance staff + finance head).
+    foreach (DocumentAssignment::where('document_id', $document->document_id)->get() as $seat) {
+        $workflow->decide($seat, User::find($seat->user_id), 'approved');
+    }
 
     $finalApprovers = DocumentAssignment::where('document_id', $document->document_id)
         ->where('stage_id', $this->finalApproval->stage_id)

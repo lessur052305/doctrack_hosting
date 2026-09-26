@@ -12,7 +12,12 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 
 /**
- * Section 4/5: true event-driven SLA escalation. Dispatched with a delay
+ * Section 4/5: true event-driven SLA enforcement — auto-approves a seat the
+ * instant its deadline passes (the class keeps its original "Escalate" name
+ * only because jobs already waiting in the queue store that class name;
+ * renaming it would make them fail to load).
+ *
+ * Formerly: true event-driven SLA escalation. Dispatched with a delay
  * set to exactly the assignment's sla_expires_at, so it fires the instant
  * the deadline hits — no polling interval, no dependency on someone
  * loading a page. This replaces the periodic sweep as the PRIMARY
@@ -36,8 +41,7 @@ class EscalateAssignmentJob implements ShouldQueue
     public function __construct(
         private int $assignmentId,
         private Carbon $expectedSlaExpiresAt,
-    ) {
-    }
+    ) {}
 
     public function handle(SlaService $sla): void
     {
@@ -49,13 +53,12 @@ class EscalateAssignmentJob implements ShouldQueue
         // Carbon value from the dispatch call site, which can carry
         // microseconds — equalTo() would spuriously fail on that mismatch
         // even when the deadline genuinely hasn't changed.
-        if (!$assignment
+        if (! $assignment
             || $assignment->individual_status !== 'pending'
-            || $assignment->escalated_to_admin
-            || !$assignment->sla_expires_at
+            || ! $assignment->sla_expires_at
             || $assignment->sla_expires_at->format('Y-m-d H:i:s') !== $this->expectedSlaExpiresAt->format('Y-m-d H:i:s')
         ) {
-            return; // resolved, already escalated, or a newer deadline superseded this job
+            return; // resolved, or a newer deadline superseded this job
         }
 
         // Belt-and-suspenders, matching AutoApproveAssignmentJob's own
@@ -64,15 +67,15 @@ class EscalateAssignmentJob implements ShouldQueue
         // see phpunit.xml) ignores delay() and runs jobs immediately on
         // dispatch. A document with a very tight due_date can be born
         // with an SLA window that's already elapsed by the time this
-        // executes; without this check, escalate() (now auto-approving
+        // executes; without this check, autoApproveMissedDeadline() (now auto-approving
         // immediately for a real approver miss — see SlaService::
-        // escalateApproverMiss()) would cascade through every remaining
+        // autoApproveApproverMiss()) would cascade through every remaining
         // stage synchronously, right inside the original request, instead
         // of only ever firing once the deadline genuinely arrives.
         if (now()->lt($assignment->sla_expires_at)) {
             return;
         }
 
-        $sla->escalate($assignment);
+        $sla->autoApproveMissedDeadline($assignment);
     }
 }

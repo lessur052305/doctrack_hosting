@@ -2,17 +2,17 @@
 
 use App\Http\Middleware\CheckForSlaOutage;
 use App\Http\Middleware\RoleMiddleware;
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
-use Illuminate\Console\Scheduling\Schedule;
 use Sentry\Laravel\Integration;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
-        web: __DIR__ . '/../routes/web.php',
-        api: __DIR__ . '/../routes/api.php',
-        commands: __DIR__ . '/../routes/console.php',
+        web: __DIR__.'/../routes/web.php',
+        api: __DIR__.'/../routes/api.php',
+        commands: __DIR__.'/../routes/console.php',
         health: '/up',
     )
     // Registers POST /broadcasting/auth (web+auth middleware — matches
@@ -21,7 +21,7 @@ return Application::configure(basePath: dirname(__DIR__))
     // callbacks. Required for private-channel WebSocket auth (Reverb) to
     // work at all — see resources/js/echo.js for the client side.
     ->withBroadcasting(
-        __DIR__ . '/../routes/channels.php',
+        __DIR__.'/../routes/channels.php',
         ['middleware' => ['web', 'auth']],
     )
     ->withMiddleware(function (Middleware $middleware) {
@@ -58,19 +58,17 @@ return Application::configure(basePath: dirname(__DIR__))
         // worker (see docuwise-queue-worker systemd user service), not on
         // a polling cycle.
         //
-        // 1) backstop only: catches anything the event-driven job might
-        // ever miss (e.g. the queue worker was down when a job should have
+        // 1) backstop only: auto-approves any overdue seat the event-driven job
+        // might ever miss (e.g. the queue worker was down when a job should have
         // fired). 5 minutes is plenty for a safety net that isn't the
         // primary mechanism anymore.
         $schedule->command('workflow:check-parallel-slas')->everyFiveMinutes()->withoutOverlapping();
-        // 2) auto-approval past the Admin grace window (config
-        // 'sla.admin_grace_hours') is likewise now primarily event-driven —
-        // AutoApproveAssignmentJob is dispatched from SlaService::escalate()
-        // with a delay set to exactly when that window lapses. This command
-        // stays as the same kind of backstop as (1) above, in case a job is
-        // ever lost, plus it transparently covers any assignment escalated
-        // before this job existed (no escalated_at, so no job was ever
-        // dispatched for it).
+        // 2) the follow-ups that genuinely need a schedule rather than an
+        // event: outage detection/compensation, the Admin's late-review
+        // reminders for auto-approvals still awaiting review, and the
+        // one-time "final call" reminder to an approver about to miss a
+        // deadline. It does NOT auto-approve missed deadlines — that is
+        // (1) above and the delayed job.
         $schedule->command('sla:check')->everyFiveMinutes()->withoutOverlapping();
         // Note: queue draining is no longer scheduled here — a persistent
         // `php artisan queue:work` process (systemd user service) runs

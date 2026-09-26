@@ -31,18 +31,34 @@ function classifiedJobOrder(User $originator): DocumentRepository
     ]);
 }
 
-test('a validated document is routed to every configured stage for its category', function () {
+test('review stages are routed immediately, and Final Approval opens only once every one of them is approved', function () {
     $originator = User::factory()->originator()->create();
-    User::factory()->approver('Job Order')->create();
+    $staff = User::factory()->approver('Job Order')->create();
+    $head = User::factory()->approver('Job Order')->create(['level' => 'head']);
     $workflow = app(WorkflowService::class);
 
     $document = classifiedJobOrder($originator);
     $workflow->routeToWorkflow($document);
 
-    expect(DocumentAssignment::where('document_id', $document->document_id)->count())->toBe(2);
+    $finalStage = WorkflowStage::where('stage_name', 'Final Approval')->first();
+    $reviewSeats = DocumentAssignment::where('document_id', $document->document_id)->get();
+
+    // Technical Review only — Final Approval is not open yet.
+    expect($reviewSeats)->toHaveCount(2)
+        ->and($reviewSeats->pluck('stage_id')->unique()->all())->not->toContain($finalStage->stage_id);
+
+    $workflow->decide($reviewSeats->firstWhere('user_id', $staff->user_id), $staff, 'approved');
+    expect(DocumentAssignment::where('document_id', $document->document_id)->where('stage_id', $finalStage->stage_id)->exists())->toBeFalse();
+
+    $workflow->decide($reviewSeats->firstWhere('user_id', $head->user_id), $head, 'approved');
+
+    $finalSeats = DocumentAssignment::where('document_id', $document->document_id)->where('stage_id', $finalStage->stage_id)->get();
+    expect($finalSeats->pluck('user_id')->all())->toBe([$head->user_id])
+        ->and($finalSeats->first()->individual_status)->toBe('pending');
 });
 
-test('every stage of a document shares the exact same SLA deadline, computed once for the whole document', function () {
+test('every review stage of a document shares the exact same SLA deadline, computed once for the whole document', function () {
+    WorkflowStage::create(['document_category' => 'Job Order', 'stage_name' => 'Budget Check', 'sequence_order' => 3]);
     $originator = User::factory()->originator()->create();
     User::factory()->approver('Job Order')->create();
     $workflow = app(WorkflowService::class);
@@ -50,10 +66,12 @@ test('every stage of a document shares the exact same SLA deadline, computed onc
     $document = classifiedJobOrder($originator);
     $workflow->routeToWorkflow($document);
 
-    // Two stages (Technical Review, Final Approval) — every assignment
-    // across BOTH must carry the identical deadline, guaranteed by a
-    // single up-front computation rather than each stage separately
-    // calling now() a few milliseconds apart (see routeToWorkflow()).
+    // Two review stages (Technical Review, Budget Check) are routed together —
+    // every assignment across BOTH must carry the identical deadline,
+    // guaranteed by a single up-front computation rather than each stage
+    // separately calling now() a few milliseconds apart (see
+    // routeToWorkflow()). Final Approval is not among them: it opens later,
+    // with its own window.
     $deadlines = DocumentAssignment::where('document_id', $document->document_id)->pluck('sla_expires_at');
 
     expect($deadlines)->toHaveCount(2)
@@ -227,27 +245,33 @@ test('a stranded minority reject resets to pending once majority approval makes 
 
 test('approving every stage finalizes the document as approved', function () {
     $originator = User::factory()->originator()->create();
-    $approver = User::factory()->approver('Job Order')->create();
+    $staff = User::factory()->approver('Job Order')->create();
+    $head = User::factory()->approver('Job Order')->create(['level' => 'head']);
     $workflow = app(WorkflowService::class);
 
     $document = classifiedJobOrder($originator);
     $workflow->routeToWorkflow($document);
 
-    $assignments = DocumentAssignment::where('document_id', $document->document_id)->get();
-    foreach ($assignments as $assignment) {
-        $workflow->decide($assignment, $approver, 'approved');
+    foreach (DocumentAssignment::where('document_id', $document->document_id)->get() as $seat) {
+        $workflow->decide($seat, $seat->user_id === $head->user_id ? $head : $staff, 'approved');
     }
+
+    // The review stage is done, so Final Approval has now opened for the head.
+    $finalSeat = DocumentAssignment::where('document_id', $document->document_id)
+        ->whereHas('stage', fn ($q) => $q->where('stage_name', 'Final Approval'))
+        ->first();
+    expect($document->fresh()->global_status)->not->toBe('approved');
+
+    $workflow->decide($finalSeat, $head, 'approved');
 
     expect($document->fresh()->global_status)->toBe('approved');
 });
 
-test('rejecting one stage terminates the whole document and auto-closes every other pending stage', function () {
+test('rejecting one stage terminates the whole document and auto-closes every other pending review stage', function () {
+    // A second review stage, so there is a genuinely different stage still
+    // pending when the first is rejected (Final Approval isn't open yet).
+    WorkflowStage::create(['document_category' => 'Job Order', 'stage_name' => 'Budget Check', 'sequence_order' => 3]);
     $originator = User::factory()->originator()->create();
-    // level: 'head' — this single approver needs to hold BOTH stages here
-    // (Technical Review AND Final Approval) for the test to exercise cascade-
-    // close across a real second pending stage; Final Approval now requires
-    // it (see WorkflowService::eligibleApproversForStage()'s head-only rule)
-    // or this approver would never be seated on it at all.
     $approver = User::factory()->approver('Job Order')->create(['level' => 'head']);
     $workflow = app(WorkflowService::class);
 
@@ -264,9 +288,13 @@ test('rejecting one stage terminates the whole document and auto-closes every ot
     $stillPendingCount = DocumentAssignment::where('document_id', $document->document_id)
         ->where('individual_status', 'pending')
         ->count();
+    $finalOpened = DocumentAssignment::where('document_id', $document->document_id)
+        ->whereHas('stage', fn ($q) => $q->where('stage_name', 'Final Approval'))
+        ->exists();
 
     expect($document->fresh()->global_status)->toBe('rejected')
         ->and($stillPendingCount)->toBe(0)
+        ->and($finalOpened)->toBeFalse()
         ->and($assignments->last()->fresh()->individual_status)->toBe('rejected')
         ->and($assignments->last()->fresh()->cascade_closed_by)->toBe($approver->user_id);
 });

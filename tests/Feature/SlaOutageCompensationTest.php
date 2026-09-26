@@ -63,11 +63,42 @@ it('does not detect an outage on the very first heartbeat — nothing to compare
 
 it('does not treat a short gap as an outage', function () {
     app(SlaService::class)->detectOutage();
-    Carbon::setTestNow(now()->addMinutes(3)); // under the 5-minute floor
+    Carbon::setTestNow(now()->addMinutes(3)); // well under the 10-minute floor
 
     $outage = app(SlaService::class)->detectOutage();
 
     expect($outage)->toBeNull();
+    expect(SlaOutageWindow::count())->toBe(0);
+});
+
+it('does not treat the scheduler\'s own healthy 5-minute tick as an outage', function () {
+    // sla:check runs every 5 minutes, so a perfectly healthy scheduler produces a
+    // 5:00-5:02 gap between heartbeats. Flagging that (as the old 5-minute floor
+    // did) recorded a fake outage on every tick and kept pushing deadlines forward.
+    $service = app(SlaService::class);
+    $service->detectOutage();
+
+    foreach ([5 * 60 + 2, 5 * 60, 5 * 60 + 1, 9 * 60] as $gapSeconds) {
+        Carbon::setTestNow(now()->addSeconds($gapSeconds));
+        expect($service->detectOutage())->toBeNull();
+    }
+
+    expect(SlaOutageWindow::count())->toBe(0);
+});
+
+it('never extends a pending deadline across repeated healthy scheduler ticks', function () {
+    $service = app(SlaService::class);
+    $service->detectOutage();
+    $assignment = pendingAssignmentAt(now()->addMinutes(10), now()->addDays(2)); // Urgent — the exact case that used to slide forward
+
+    $originalExpiry = $assignment->sla_expires_at->copy();
+
+    foreach (range(1, 6) as $tick) {
+        Carbon::setTestNow(now()->addMinutes(5)->addSeconds(1));
+        $service->checkForOutageRecovery();
+    }
+
+    expect($assignment->fresh()->sla_expires_at->equalTo($originalExpiry))->toBeTrue();
     expect(SlaOutageWindow::count())->toBe(0);
 });
 

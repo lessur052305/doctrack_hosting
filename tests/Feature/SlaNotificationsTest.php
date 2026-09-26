@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\AdminViolation;
 use App\Models\DocumentAssignment;
 use App\Models\DocumentRepository;
 use App\Models\NotificationRecord;
@@ -7,6 +8,7 @@ use App\Models\User;
 use App\Models\WorkflowStage;
 use App\Services\SlaService;
 use App\Services\WorkflowService;
+use Carbon\Carbon;
 use Illuminate\Support\Facades\Mail;
 
 beforeEach(function () {
@@ -14,7 +16,7 @@ beforeEach(function () {
     // 2026-08-12 is a Wednesday, comfortably within business hours — pins
     // "now" so business-hours-aware SLA math (addBusinessMinutes, etc.)
     // behaves the same no matter when this suite actually runs.
-    $this->travelTo(\Carbon\Carbon::parse('2026-08-12 10:00:00'));
+    $this->travelTo(Carbon::parse('2026-08-12 10:00:00'));
 });
 
 function classifiedJobOrderDueIn(User $originator, int $minutesUntilDue): DocumentRepository
@@ -88,18 +90,18 @@ test('an approver does NOT get the extra URGENT notification when their new assi
         ->exists())->toBeFalse();
 });
 
-// The "short grace window" notification (old SlaService::escalate()'s
+// The "short grace window" notification (old SlaService::autoApproveMissedDeadline()'s
 // needs_approver branch) is gone along with the grace window itself — a
 // needs_approver seat now auto-approves the instant ITS OWN deadline
 // passes, same as a real approver's miss, so there's no second window
 // left to warn about.
 
-test('escalate() no longer sends any email — SLA escalation is in-app/notification only now', function () {
+test('autoApproveMissedDeadline() no longer sends any email — SLA escalation is in-app/notification only now', function () {
     Mail::fake();
     User::factory()->admin()->create();
     $assignment = escalatableAssignment();
 
-    app(SlaService::class)->escalate($assignment);
+    app(SlaService::class)->autoApproveMissedDeadline($assignment);
 
     Mail::assertNothingQueued();
     Mail::assertNothingSent();
@@ -151,7 +153,7 @@ test('an unreviewed auto-approval already past its review window triggers one re
 
     $sent = app(SlaService::class)->sweep()['late_review_reminders_sent'];
 
-    $violation = \App\Models\AdminViolation::where('assignment_id', $assignment->assignment_id)->where('violation_type', 'late_review')->first();
+    $violation = AdminViolation::where('assignment_id', $assignment->assignment_id)->where('violation_type', 'late_review')->first();
 
     expect($sent)->toBe(1)
         ->and($violation)->not->toBeNull()
@@ -181,7 +183,7 @@ test('the reminder does not repeat within the same hour — a second sweep right
     expect($first)->toBe(1)->and($second)->toBe(0);
     // Still exactly one violation row — the second sweep updated it in
     // place rather than creating a duplicate.
-    expect(\App\Models\AdminViolation::where('assignment_id', $assignment->assignment_id)->count())->toBe(1);
+    expect(AdminViolation::where('assignment_id', $assignment->assignment_id)->count())->toBe(1);
 });
 
 test('the reminder fires again once an hour has passed since the last one', function () {

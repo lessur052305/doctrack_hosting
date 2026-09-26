@@ -5,7 +5,9 @@ use App\Models\DocumentAssignment;
 use App\Models\DocumentRepository;
 use App\Models\User;
 use App\Models\WorkflowStage;
+use Carbon\Carbon;
 use Illuminate\Http\UploadedFile;
+use Laravel\Sanctum\PersonalAccessToken;
 
 beforeEach(function () {
     WorkflowStage::create(['document_category' => 'Job Order', 'stage_name' => 'Technical Review', 'sequence_order' => 1]);
@@ -47,10 +49,10 @@ it('rejects requests to protected routes with no token', function () {
 it('lets an originator submit a document via the API using the exact same classification/routing pipeline', function () {
     $originator = User::factory()->originator()->create();
 
-    $this->travelTo(\Carbon\Carbon::parse('2026-08-12 10:00:00')); // Wednesday, business hours
+    $this->travelTo(Carbon::parse('2026-08-12 10:00:00')); // Wednesday, business hours
 
     $response = $this->actingAs($originator, 'sanctum')->postJson('/api/v1/documents', [
-        'files' => [UploadedFile::fake()->createWithContent('doc.txt', 'some document content ' . str_repeat('word ', 20))],
+        'files' => [UploadedFile::fake()->createWithContent('doc.txt', 'some document content '.str_repeat('word ', 20))],
         'due_date' => now()->addHours(4)->format('Y-m-d\TH:i'),
     ]);
 
@@ -102,7 +104,7 @@ it('lets an approver decide their own pending assignment via the API', function 
     $assignment = DocumentAssignment::create([
         'document_id' => $document->document_id, 'stage_id' => $stage->stage_id, 'user_id' => $approver->user_id,
         'individual_status' => 'pending', 'sla_expires_at' => now()->addHour(), 'priority_rank' => 1,
-        'escalated_to_admin' => false, 'auto_approved' => false,
+        'auto_approved' => false,
     ]);
 
     $response = $this->actingAs($approver, 'sanctum')->postJson("/api/v1/assignments/{$assignment->assignment_id}/decide", [
@@ -126,7 +128,7 @@ it("blocks an approver from deciding on someone else's assignment via the API", 
     $assignment = DocumentAssignment::create([
         'document_id' => $document->document_id, 'stage_id' => $stage->stage_id, 'user_id' => $approverA->user_id,
         'individual_status' => 'pending', 'sla_expires_at' => now()->addHour(), 'priority_rank' => 1,
-        'escalated_to_admin' => false, 'auto_approved' => false,
+        'auto_approved' => false,
     ]);
 
     $this->actingAs($approverB, 'sanctum')->postJson("/api/v1/assignments/{$assignment->assignment_id}/decide", [
@@ -148,7 +150,7 @@ it('revokes the token on logout, so it cannot be reused', function () {
     // instead of re-checking the (now-deleted) token — an artifact of
     // the test harness, not a real request/response cycle. The row being
     // gone is the actual guarantee that matters.
-    expect(\Laravel\Sanctum\PersonalAccessToken::find($tokenId))->toBeNull();
+    expect(PersonalAccessToken::find($tokenId))->toBeNull();
 });
 
 it('logs api_login to the audit trail', function () {
@@ -232,12 +234,12 @@ it("only lists an approver's own assignments via the API", function () {
     $myAssignment = DocumentAssignment::create([
         'document_id' => $document->document_id, 'stage_id' => $stage->stage_id, 'user_id' => $mine->user_id,
         'individual_status' => 'pending', 'sla_expires_at' => now()->addHour(), 'priority_rank' => 1,
-        'escalated_to_admin' => false, 'auto_approved' => false,
+        'auto_approved' => false,
     ]);
     DocumentAssignment::create([
         'document_id' => $document->document_id, 'stage_id' => $stage->stage_id, 'user_id' => $someoneElse->user_id,
         'individual_status' => 'pending', 'sla_expires_at' => now()->addHour(), 'priority_rank' => 1,
-        'escalated_to_admin' => false, 'auto_approved' => false,
+        'auto_approved' => false,
     ]);
 
     $response = $this->actingAs($mine, 'sanctum')->getJson('/api/v1/assignments');

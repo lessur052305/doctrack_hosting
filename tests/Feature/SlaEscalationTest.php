@@ -44,15 +44,15 @@ test('escalating the same assignment twice only ever logs one violation — regr
     // moments of each other and each log their own SlaViolation before
     // any of them committed the auto-approval that should have taken it
     // out of contention — one assignment ended up with 335 duplicate
-    // violation rows over two days. escalate() now re-checks under a row
-    // lock (see SlaService::escalateApproverMiss()) before logging
+    // violation rows over two days. autoApproveMissedDeadline() now re-checks under a row
+    // lock (see SlaService::autoApproveApproverMiss()) before logging
     // anything, so a second call against an assignment already resolved
     // by the first must be a clean no-op, not a second violation.
     $assignment = pendingAssignment();
     $sla = app(SlaService::class);
 
-    $sla->escalate($assignment);
-    $sla->escalate($assignment->fresh()); // simulates a second, concurrent-in-spirit trigger racing the first
+    $sla->autoApproveMissedDeadline($assignment);
+    $sla->autoApproveMissedDeadline($assignment->fresh()); // simulates a second, concurrent-in-spirit trigger racing the first
 
     expect(SlaViolation::where('assignment_id', $assignment->assignment_id)->count())->toBe(1)
         ->and($assignment->fresh()->individual_status)->toBe('approved');
@@ -63,7 +63,7 @@ test('a real approver missing their own SLA window is auto-approved immediately'
     // before. The SLA violation itself is still logged either way.
     $assignment = pendingAssignment();
 
-    app(SlaService::class)->escalate($assignment);
+    app(SlaService::class)->autoApproveMissedDeadline($assignment);
 
     $fresh = $assignment->fresh();
     expect($fresh->individual_status)->toBe('approved')
@@ -75,7 +75,7 @@ test('a real approver missing their own SLA window is auto-approved immediately'
             ->where('message_body', 'like', '%will still give it a final check%')->exists())->toBeTrue();
 });
 
-// A seat with no eligible approver no longer reaches escalate() at all —
+// A seat with no eligible approver no longer reaches autoApproveMissedDeadline() at all —
 // it auto-approves immediately at routing time instead (see
 // WorkflowService::assignStage()/autoApproveDeactivatedSeat(), which
 // call SlaService::autoApproveNoEligibleApprover() directly). Coverage

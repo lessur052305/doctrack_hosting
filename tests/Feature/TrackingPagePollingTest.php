@@ -31,7 +31,7 @@ it('broadcasts DocumentStatusChanged to the owning originator, every admin, AND 
     $channels = (new DocumentStatusChanged($document))->broadcastOn();
     $channelNames = array_map(fn ($c) => $c->name, $channels);
 
-    expect($channelNames)->toContain('private-originator.' . $originator->user_id)
+    expect($channelNames)->toContain('private-originator.'.$originator->user_id)
         ->toContain('private-admin-dashboard')
         ->toContain('private-approvers');
 });
@@ -48,12 +48,12 @@ it('broadcasts DocumentStatusChanged when a single assignment is decided, even i
     DocumentAssignment::create([
         'document_id' => $document->document_id, 'stage_id' => $stageTwo->stage_id, 'user_id' => $approver->user_id,
         'individual_status' => 'pending', 'sla_expires_at' => now()->addHour(), 'priority_rank' => 1,
-        'escalated_to_admin' => false, 'auto_approved' => false,
+        'auto_approved' => false,
     ]);
     $assignment = DocumentAssignment::create([
         'document_id' => $document->document_id, 'stage_id' => $stageOne->stage_id, 'user_id' => $approver->user_id,
         'individual_status' => 'pending', 'sla_expires_at' => now()->addHour(), 'priority_rank' => 1,
-        'escalated_to_admin' => false, 'auto_approved' => false,
+        'auto_approved' => false,
     ]);
 
     // Decide only ONE of the two stages — global_status should stay
@@ -77,7 +77,7 @@ it('does not broadcast when an unrelated assignment field changes', function () 
     $assignment = DocumentAssignment::create([
         'document_id' => $document->document_id, 'stage_id' => $stage->stage_id, 'user_id' => $approver->user_id,
         'individual_status' => 'pending', 'sla_expires_at' => now()->addHour(), 'priority_rank' => 1,
-        'escalated_to_admin' => false, 'auto_approved' => false,
+        'auto_approved' => false,
     ]);
 
     Event::fake([DocumentStatusChanged::class]); // clear the AssignmentRouted-triggered baseline
@@ -95,7 +95,7 @@ it('renders the tracking fragment reflecting an assignment decision', function (
     DocumentAssignment::create([
         'document_id' => $document->document_id, 'stage_id' => $stage->stage_id, 'user_id' => $approver->user_id,
         'individual_status' => 'approved', 'sla_expires_at' => now()->addHour(), 'priority_rank' => 1,
-        'escalated_to_admin' => false, 'auto_approved' => false, 'acted_at' => now(),
+        'auto_approved' => false, 'acted_at' => now(),
     ]);
 
     $response = $this->actingAs($originator)->get(route('originator.documents.trackingRefresh', $document));

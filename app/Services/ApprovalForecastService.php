@@ -6,7 +6,10 @@ use App\Models\DocumentAssignment;
 use App\Models\DocumentRepository;
 use App\Models\User;
 use App\Models\WorkflowStage;
+use App\Support\DecisionTiming;
+use Carbon\Carbon;
 use Carbon\CarbonInterval;
+use Illuminate\Support\Collection;
 
 /**
  * A statistical estimate for most of the pipeline, upgraded to a real
@@ -33,26 +36,27 @@ class ApprovalForecastService
     public function __construct(
         private BusinessHoursService $businessHours,
         private ApprovalTimeMlService $timeMl,
-    ) {
-    }
+        private WorkflowService $workflow,
+    ) {}
 
     /**
      * Null whenever there isn't enough signal to say anything useful: no
      * category yet, no historical decisions for that category, or the
      * document has nothing left to approve.
      *
-     * Every configured stage is routed simultaneously, not one after
-     * another (see WorkflowService::routeToWorkflow() — "a document can
-     * therefore have more than one stage pending at once"), and stages
-     * can be decided in any order (completeStage()'s "out-of-order
-     * resolution"). So the document isn't done until the SLOWEST of its
-     * currently-unresolved stages finishes — this estimates each one
-     * independently and takes the largest, rather than adding every
-     * stage's typical time together as if they took turns.
+     * Every review stage is routed simultaneously, not one after another
+     * (see WorkflowService::routeToWorkflow() — "a document can therefore
+     * have more than one stage pending at once"), and they can be decided
+     * in any order (completeStage()'s "out-of-order resolution"). So the
+     * review stages take as long as the SLOWEST of the unresolved ones —
+     * this estimates each independently and takes the largest, rather than
+     * adding every stage's typical time together as if they took turns.
+     * Final Approval is the exception: it opens only after every other
+     * stage is approved, so its own estimated time is ADDED after that.
      */
     public function estimateFor(DocumentRepository $document): ?CarbonInterval
     {
-        if (!$document->ml_category) {
+        if (! $document->ml_category) {
             return null;
         }
 
@@ -86,15 +90,34 @@ class ApprovalForecastService
             return null; // every stage already resolved
         }
 
-        $maxSeconds = null;
-        foreach ($unresolvedStages as $stage) {
-            $stageSeconds = $this->estimateStageSeconds($document, $stage);
-            if ($stageSeconds !== null && ($maxSeconds === null || $stageSeconds > $maxSeconds)) {
-                $maxSeconds = $stageSeconds;
+        // The review stages run in parallel, so they take as long as the
+        // slowest of them; Final Approval only opens once ALL of them are
+        // approved (WorkflowService::openFinalApprovalIfReady()), so its own
+        // time comes after that, not alongside it — which is also why its
+        // window can only be projected once the review time is known.
+        $slowestReviewSeconds = null;
+        $finalApprovalStages = $unresolvedStages->filter(fn (WorkflowStage $stage) => $stage->stage_name === 'Final Approval');
+        foreach ($unresolvedStages->reject(fn (WorkflowStage $stage) => $stage->stage_name === 'Final Approval') as $stage) {
+            $stageSeconds = $this->estimateStageSeconds($document, $stage, now());
+            if ($stageSeconds !== null) {
+                $slowestReviewSeconds = max($slowestReviewSeconds ?? 0, $stageSeconds);
             }
         }
 
-        return $maxSeconds !== null ? CarbonInterval::seconds((int) round($maxSeconds)) : null;
+        $finalApprovalSeconds = null;
+        $reviewsFinishAt = $this->businessHours->addBusinessMinutes(now(), (int) ceil(($slowestReviewSeconds ?? 0) / 60));
+        foreach ($finalApprovalStages as $stage) {
+            $stageSeconds = $this->estimateStageSeconds($document, $stage, $reviewsFinishAt);
+            if ($stageSeconds !== null) {
+                $finalApprovalSeconds = max($finalApprovalSeconds ?? 0, $stageSeconds);
+            }
+        }
+
+        if ($slowestReviewSeconds === null && $finalApprovalSeconds === null) {
+            return null;
+        }
+
+        return CarbonInterval::seconds((int) round(($slowestReviewSeconds ?? 0) + ($finalApprovalSeconds ?? 0)));
     }
 
     /**
@@ -104,7 +127,7 @@ class ApprovalForecastService
      * the whole-document estimate is the LARGEST of these calls, not
      * their sum.
      */
-    private function estimateStageSeconds(DocumentRepository $document, WorkflowStage $stage): ?float
+    private function estimateStageSeconds(DocumentRepository $document, WorkflowStage $stage, Carbon $startsAt): ?float
     {
         $eligibleApprovers = $this->eligibleApproversFor($document, $stage);
 
@@ -127,6 +150,7 @@ class ApprovalForecastService
         // collapse those duplicates down to one.
         $decisionsQuery = DocumentAssignment::query()
             ->join('document_repository', 'document_assignments.document_id', '=', 'document_repository.document_id')
+            ->join('workflow_stages', 'document_assignments.stage_id', '=', 'workflow_stages.stage_id')
             ->where('document_repository.ml_category', $document->ml_category)
             ->whereNotNull('document_assignments.acted_at')
             // An auto-approval measures how long the SLA deadline happened
@@ -148,7 +172,12 @@ class ApprovalForecastService
                 ->whereIn('users.department', $departments);
         }
 
-        $decisions = $decisionsQuery->get(['document_assignments.created_at', 'document_assignments.acted_at']);
+        $decisions = $decisionsQuery->get([
+            'document_assignments.assignment_id', 'document_assignments.document_id',
+            'document_assignments.created_at', 'document_assignments.acted_at',
+            'workflow_stages.stage_name',
+        ]);
+        $starts = DecisionTiming::startTimes($decisions);
 
         // Business-hours-aware, not a raw wall-clock diff — otherwise a
         // document that sat untouched over a weekend before a same-morning
@@ -157,8 +186,8 @@ class ApprovalForecastService
         // app (see BusinessHoursService).
         $elapsedSeconds = $decisions->map(
             fn ($row) => $this->businessHours->businessSecondsRemaining(
-                \Carbon\Carbon::parse($row->created_at),
-                \Carbon\Carbon::parse($row->acted_at)
+                $starts[$row->assignment_id],
+                Carbon::parse($row->acted_at)
             )
         );
 
@@ -179,8 +208,9 @@ class ApprovalForecastService
         // customRoutingDeadline(), just scoped to this one stage instead
         // of the whole document.
         $nonZeroCount = $elapsedSeconds->filter(fn ($s) => $s > 0)->count();
+        $slaSeconds = $this->stageSlaSeconds($document, $stage, $startsAt);
         if ($decisions->isEmpty() || $nonZeroCount < self::MIN_NON_ZERO_DECISIONS) {
-            return $this->stageSlaFallbackSeconds($document, $stage);
+            return $slaSeconds;
         }
 
         $avgSeconds = $elapsedSeconds->avg();
@@ -208,9 +238,15 @@ class ApprovalForecastService
         // decision only; the queue-depth padding still uses the plain
         // average as its unit either way — ML doesn't know about backlog,
         // there's nothing to double-count.
-        return $mlPrediction !== null
+        $estimate = $mlPrediction !== null
             ? $mlPrediction + $avgSeconds * $queueDepth
             : $avgSeconds * (1 + $queueDepth);
+
+        // Never later than the stage's own SLA window: when it runs out the
+        // system auto-approves, so a longer estimate (an average from slower
+        // documents that had longer windows, or the queue padding piling up)
+        // would promise a time that can never actually happen.
+        return $slaSeconds !== null ? min($estimate, $slaSeconds) : $estimate;
     }
 
     /**
@@ -225,7 +261,7 @@ class ApprovalForecastService
     private function customRoutingDeadline(DocumentRepository $document): ?CarbonInterval
     {
         $latestDeadline = $document->assignments()->where('individual_status', 'pending')->max('sla_expires_at');
-        if (!$latestDeadline) {
+        if (! $latestDeadline) {
             return null;
         }
 
@@ -237,42 +273,56 @@ class ApprovalForecastService
         // deadline by treating every hour as if it were a working hour,
         // and only ever looked right because of the blade's own separate
         // "never show later than the due date" clamp masking the overshoot.
-        $seconds = $this->businessHours->businessSecondsRemaining(now(), \Carbon\Carbon::parse($latestDeadline));
+        $seconds = $this->businessHours->businessSecondsRemaining(now(), Carbon::parse($latestDeadline));
 
         return CarbonInterval::seconds(max(0, $seconds));
     }
 
     /**
-     * A stage's fallback estimate when there's no historical decision
-     * data to average or feed the ML model with — the real SLA deadline
-     * for that stage's own pending seat(s), not the document's due_date
-     * (see estimateStageSeconds()'s call site for why). Null if this
-     * stage hasn't been routed yet (no pending seats -> no SLA window
-     * exists for it yet either).
+     * How long this stage's SLA window gives its approvers — the fallback
+     * estimate when there's no usable history, and the ceiling on every other
+     * estimate (see estimateStageSeconds()). Not the document's due_date: the
+     * system auto-approves when the SLA window runs out, so that is the real
+     * cutoff an approver is bound to.
+     *
+     * A stage that is open uses the real deadline on its pending seats,
+     * measured from now. A stage that hasn't opened yet (a Final Approval
+     * waiting on the reviews, or every stage of a document that hasn't been
+     * routed) has no seats to read a deadline from, so the window it WILL get
+     * is projected with WorkflowService's own rules, starting at $startsAt.
+     * Null only for a stage with nothing left to wait on.
      */
-    private function stageSlaFallbackSeconds(DocumentRepository $document, WorkflowStage $stage): ?float
+    private function stageSlaSeconds(DocumentRepository $document, WorkflowStage $stage, Carbon $startsAt): ?float
     {
         $latestDeadline = $document->assignments()
             ->where('stage_id', $stage->stage_id)
             ->where('individual_status', 'pending')
             ->max('sla_expires_at');
 
-        if (!$latestDeadline) {
-            return null;
+        // businessSecondsRemaining(), not a plain wall-clock diff — same
+        // reasoning as customRoutingDeadline() above.
+        if ($latestDeadline) {
+            return $this->businessHours->businessSecondsRemaining(now(), Carbon::parse($latestDeadline));
         }
 
-        // businessSecondsRemaining(), not a plain wall-clock diff — same
-        // reasoning as customRoutingDeadline() just above.
-        return $this->businessHours->businessSecondsRemaining(now(), \Carbon\Carbon::parse($latestDeadline));
+        if ($document->assignments->contains('stage_id', $stage->stage_id)) {
+            return null; // opened and already decided — nothing left to wait on
+        }
+
+        $expiry = $stage->stage_name === 'Final Approval'
+            ? $this->workflow->finalApprovalSlaExpiry($document, $startsAt)
+            : $this->workflow->reviewSlaExpiry($document, $startsAt);
+
+        return $this->businessHours->businessSecondsRemaining($startsAt, $expiry);
     }
 
     /**
      * Every stage that still has work left — every stage with a pending
-     * seat, or (if the document hasn't been routed yet at all) every
-     * configured stage, since they'll all be routed together the moment
-     * it is. Empty once every stage has been resolved.
+     * seat plus a Final Approval that hasn't opened yet, or (if the
+     * document hasn't been routed yet at all) every configured stage.
+     * Empty once every stage has been resolved.
      */
-    private function unresolvedStages(DocumentRepository $document, \Illuminate\Support\Collection $stages): \Illuminate\Support\Collection
+    private function unresolvedStages(DocumentRepository $document, Collection $stages): Collection
     {
         $pendingStageIds = $document->assignments
             ->where('individual_status', 'pending')
@@ -280,7 +330,14 @@ class ApprovalForecastService
             ->unique();
 
         if ($pendingStageIds->isNotEmpty()) {
-            return $stages->whereIn('stage_id', $pendingStageIds)->values();
+            // A Final Approval that hasn't opened yet has no seats to be
+            // "pending", but it's still ahead of the document.
+            $unopenedFinalIds = $stages
+                ->filter(fn (WorkflowStage $stage) => $stage->stage_name === 'Final Approval'
+                    && ! $document->assignments->contains('stage_id', $stage->stage_id))
+                ->pluck('stage_id');
+
+            return $stages->whereIn('stage_id', $pendingStageIds->merge($unopenedFinalIds))->values();
         }
 
         // Not yet routed (no assignments at all) -> the whole pipeline is
@@ -289,7 +346,7 @@ class ApprovalForecastService
     }
 
     /** Mirrors WorkflowService::eligibleApproversForStage()'s filters. */
-    private function eligibleApproversFor(DocumentRepository $document, WorkflowStage $stage): \Illuminate\Support\Collection
+    private function eligibleApproversFor(DocumentRepository $document, WorkflowStage $stage): Collection
     {
         return User::where('role', 'approver')
             ->where('is_active', true)
@@ -297,6 +354,7 @@ class ApprovalForecastService
             ->get()
             ->filter(function (User $approver) use ($stage) {
                 $assignedStageIds = $approver->workflowStages()->pluck('workflow_stages.stage_id');
+
                 return $assignedStageIds->isEmpty() || $assignedStageIds->contains($stage->stage_id);
             })
             ->values();

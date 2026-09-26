@@ -23,7 +23,7 @@ test('an unreviewed auto-approved document still displays as auto_approved', fun
     DocumentAssignment::create([
         'document_id' => $document->document_id, 'user_id' => null, 'stage_id' => $stage->stage_id,
         'due_date' => $document->due_date, 'priority_rank' => 2, 'individual_status' => 'auto_approved',
-        'sla_expires_at' => now()->subHour(), 'acted_at' => now(), 'auto_approved' => true, 'admin_reviewed_at' => null,
+        'sla_expires_at' => now()->subHour(), 'acted_at' => now(), 'auto_approved' => true, 'admin_reviewed_at' => null, 'review_due_at' => now()->addHours(6),
     ]);
 
     expect($document->display_status)->toBe('auto_approved');
@@ -65,7 +65,7 @@ test('a document auto-approved across two stages only displays as approved once 
     DocumentAssignment::create([
         'document_id' => $document->document_id, 'user_id' => null, 'stage_id' => $stageTwo->stage_id,
         'due_date' => $document->due_date, 'priority_rank' => 2, 'individual_status' => 'auto_approved',
-        'sla_expires_at' => now()->subHour(), 'acted_at' => now(), 'auto_approved' => true, 'admin_reviewed_at' => null,
+        'sla_expires_at' => now()->subHour(), 'acted_at' => now(), 'auto_approved' => true, 'admin_reviewed_at' => null, 'review_due_at' => now()->addHours(6),
     ]);
 
     expect($document->display_status)->toBe('auto_approved');

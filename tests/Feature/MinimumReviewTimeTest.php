@@ -18,8 +18,8 @@ function minReviewDoc(User $originator, array $overrides = []): DocumentReposito
 {
     return DocumentRepository::create(array_merge([
         'originator_id' => $originator->user_id,
-        'title' => 'min-review-test-' . uniqid() . '.txt',
-        'file_path' => 'documents/' . uniqid() . '.txt',
+        'title' => 'min-review-test-'.uniqid().'.txt',
+        'file_path' => 'documents/'.uniqid().'.txt',
         'mime_type' => 'text/plain',
         'due_date' => now()->addDay(),
         'global_status' => 'classified_validated',
@@ -140,26 +140,6 @@ it('skips (not blocks) under-reviewed assignments in a batch decision, deciding 
     $response->assertSessionHas('status', fn ($status) => str_contains($status, 'skipped') && str_contains($status, '10 seconds'));
     expect($assignmentA->fresh()->individual_status)->toBe('pending');
     expect($assignmentB->fresh()->individual_status)->toBe('pending');
-});
-
-it('blocks an admin from deciding an SLA Override seat with no review time', function () {
-    $admin = User::factory()->admin()->create();
-    $originator = User::factory()->originator()->create();
-    $approver = User::factory()->approver('Job Order')->create();
-    $stage = WorkflowStage::create(['document_category' => 'Job Order', 'stage_name' => 'Review', 'sequence_order' => 1]);
-    $document = minReviewDoc($originator);
-    $assignment = DocumentAssignment::create([
-        'document_id' => $document->document_id, 'user_id' => $approver->user_id,
-        'stage_id' => $stage->stage_id, 'due_date' => $document->due_date,
-        'priority_rank' => 2, 'individual_status' => 'pending', 'sla_expires_at' => now()->addHour(),
-    ]);
-
-    $response = $this->actingAs($admin)->post(route('admin.sla.override', $assignment), [
-        'decision' => 'approved',
-    ]);
-
-    $response->assertStatus(422);
-    expect($assignment->fresh()->individual_status)->toBe('pending');
 });
 
 it('renders the Approve/Reject buttons disabled with a countdown label when review time is insufficient', function () {

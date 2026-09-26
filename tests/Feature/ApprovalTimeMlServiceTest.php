@@ -5,7 +5,9 @@ use App\Models\DocumentRepository;
 use App\Models\MlTimeEstimateModel;
 use App\Models\User;
 use App\Models\WorkflowStage;
+use App\Services\ApprovalForecastService;
 use App\Services\ApprovalTimeMlService;
+use App\Services\WorkflowService;
 use Carbon\Carbon;
 
 /** Cycled across several real weekdays so the day-of-week feature actually varies — an all-identical column makes the regression's matrix singular. */
@@ -268,9 +270,9 @@ test('ApprovalForecastService uses the trained model for the immediate next stag
         'due_date' => now()->addDays(3),
         'global_status' => 'classified_validated',
     ]);
-    app(\App\Services\WorkflowService::class)->routeToWorkflow($document);
+    app(WorkflowService::class)->routeToWorkflow($document);
 
-    $estimate = app(\App\Services\ApprovalForecastService::class)->estimateFor($document->fresh());
+    $estimate = app(ApprovalForecastService::class)->estimateFor($document->fresh());
 
     expect($estimate)->not->toBeNull()
         ->and($estimate->totalSeconds)->toBeGreaterThan(0);
@@ -289,4 +291,85 @@ test('the ML Training page shows the Estimated Approval Time status with no trai
         ->assertSee('Estimated Approval Time')
         ->assertSee('Job Order')
         ->assertSee('1/'.ApprovalTimeMlService::MIN_TRAINING_SAMPLES);
+});
+
+test('cross-validation grades the same history identically every time, whatever the global random state', function () {
+    $service = app(ApprovalTimeMlService::class);
+    $crossValidatedMae = new ReflectionMethod($service, 'crossValidatedMae');
+
+    // Noisy on purpose — with clean data every fold layout scores the same, which
+    // would let an unpinned shuffle pass this test by accident.
+    $samples = [];
+    $targets = [];
+    foreach (range(0, 29) as $i) {
+        $samples[] = [1800 + ($i * 137) % 900, $i % 7];
+        $targets[] = 600 + (($i * 7919) % 1500);
+    }
+
+    mt_srand(1);
+    $first = $crossValidatedMae->invoke($service, $samples, $targets);
+    mt_srand(999);
+    $second = $crossValidatedMae->invoke($service, $samples, $targets);
+    mt_srand(31337);
+    $third = $crossValidatedMae->invoke($service, $samples, $targets);
+
+    expect($second)->toBe($first)->and($third)->toBe($first);
+});
+
+test('a Final Approval seat routed up front (old behavior) is timed from when the other stages finished, not from routing', function () {
+    $this->travelTo(Carbon::parse('2026-08-12 09:00:00')); // Wednesday, business hours
+    $originator = User::factory()->originator()->create();
+    $reviewer = User::factory()->approver('Job Order')->create(['department' => 'Engineering']);
+    $head = User::factory()->approver('Job Order')->create(['department' => 'Engineering', 'level' => 'head']);
+    $reviewStage = WorkflowStage::create(['document_category' => 'Job Order', 'stage_name' => 'Technical Review', 'sequence_order' => 1]);
+    $finalStage = WorkflowStage::create(['document_category' => 'Job Order', 'stage_name' => 'Final Approval', 'sequence_order' => 2]);
+    $document = DocumentRepository::create([
+        'originator_id' => $originator->user_id, 'title' => 'legacy.txt', 'file_path' => 'documents/legacy.txt',
+        'mime_type' => 'text/plain', 'ml_category' => 'Job Order', 'is_validated' => true,
+        'due_date' => now()->addDay(), 'global_status' => 'approved',
+    ]);
+
+    // Both seats created at 09:00 (all stages routed together); review decided 10:00, Final 12:00.
+    foreach ([[$reviewStage, $reviewer, '10:00:00'], [$finalStage, $head, '12:00:00']] as [$stage, $user, $actedAt]) {
+        (new DocumentAssignment)->forceFill([
+            'document_id' => $document->document_id, 'user_id' => $user->user_id, 'stage_id' => $stage->stage_id,
+            'due_date' => $document->due_date, 'priority_rank' => 2, 'individual_status' => 'approved', 'auto_approved' => false,
+            'sla_expires_at' => '2026-08-12 15:00:00', 'acted_at' => "2026-08-12 {$actedAt}",
+            'created_at' => '2026-08-12 09:00:00', 'updated_at' => '2026-08-12 09:00:00',
+        ])->save();
+    }
+
+    $rows = (new ReflectionMethod(app(ApprovalTimeMlService::class), 'rows'))->invoke(app(ApprovalTimeMlService::class));
+    $byUser = $rows->keyBy('user_id');
+
+    expect((int) $byUser[$reviewer->user_id]->elapsed_seconds)->toBe(3600)   // review: 09:00 -> 10:00
+        ->and((int) $byUser[$head->user_id]->elapsed_seconds)->toBe(7200);   // final: 10:00 -> 12:00, not 3 hours
+});
+
+test('a Final Approval decided before the other stages keeps its own start — there was no waiting', function () {
+    $this->travelTo(Carbon::parse('2026-08-12 09:00:00'));
+    $originator = User::factory()->originator()->create();
+    $reviewer = User::factory()->approver('Job Order')->create(['department' => 'Engineering']);
+    $head = User::factory()->approver('Job Order')->create(['department' => 'Engineering', 'level' => 'head']);
+    $reviewStage = WorkflowStage::create(['document_category' => 'Job Order', 'stage_name' => 'Technical Review', 'sequence_order' => 1]);
+    $finalStage = WorkflowStage::create(['document_category' => 'Job Order', 'stage_name' => 'Final Approval', 'sequence_order' => 2]);
+    $document = DocumentRepository::create([
+        'originator_id' => $originator->user_id, 'title' => 'parallel.txt', 'file_path' => 'documents/parallel.txt',
+        'mime_type' => 'text/plain', 'ml_category' => 'Job Order', 'is_validated' => true,
+        'due_date' => now()->addDay(), 'global_status' => 'approved',
+    ]);
+
+    // Old parallel routing: the Head decided at 10:00, BEFORE the review stage (12:00).
+    foreach ([[$reviewStage, $reviewer, '12:00:00'], [$finalStage, $head, '10:00:00']] as [$stage, $user, $actedAt]) {
+        (new DocumentAssignment)->forceFill([
+            'document_id' => $document->document_id, 'user_id' => $user->user_id, 'stage_id' => $stage->stage_id,
+            'due_date' => $document->due_date, 'priority_rank' => 2, 'individual_status' => 'approved', 'auto_approved' => false,
+            'sla_expires_at' => '2026-08-12 15:00:00', 'acted_at' => "2026-08-12 {$actedAt}",
+            'created_at' => '2026-08-12 09:00:00', 'updated_at' => '2026-08-12 09:00:00',
+        ])->save();
+    }
+
+    $rows = (new ReflectionMethod(app(ApprovalTimeMlService::class), 'rows'))->invoke(app(ApprovalTimeMlService::class));
+
+    expect((int) $rows->firstWhere('user_id', $head->user_id)->elapsed_seconds)->toBe(3600); // 09:00 -> 10:00
 });

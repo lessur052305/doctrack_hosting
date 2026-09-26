@@ -7,6 +7,7 @@ use App\Models\DocumentRepository;
 use App\Models\MlModelRepository;
 use App\Models\MlStagingSample;
 use Carbon\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Storage;
 use Phpml\Classification\SVC;
 use Phpml\FeatureExtraction\TfIdfTransformer;
@@ -45,10 +46,10 @@ class ClassificationService
 {
     /** Domain stopwords removed during preprocessing (tokenization + stop-word removal, per Scope 1.4). */
     private const STOPWORDS = [
-        'the','a','an','is','are','was','were','be','been','of','to','in','on','for',
-        'and','or','with','this','that','as','by','at','from','it','its','has','have',
-        'had','will','shall','not','no','if','then','so','such','which','who','whom',
-        'these','those','into','than','also','per','each','any','all','may','can',
+        'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'of', 'to', 'in', 'on', 'for',
+        'and', 'or', 'with', 'this', 'that', 'as', 'by', 'at', 'from', 'it', 'its', 'has', 'have',
+        'had', 'will', 'shall', 'not', 'no', 'if', 'then', 'so', 'such', 'which', 'who', 'whom',
+        'these', 'those', 'into', 'than', 'also', 'per', 'each', 'any', 'all', 'may', 'can',
     ];
 
     /**
@@ -62,8 +63,9 @@ class ClassificationService
         $text = preg_replace('/[^a-z\s]/', ' ', $text);
         $tokens = preg_split('/\s+/', trim($text)) ?: [];
         $tokens = array_filter($tokens, function ($t) {
-            return strlen($t) > 2 && !in_array($t, self::STOPWORDS, true);
+            return strlen($t) > 2 && ! in_array($t, self::STOPWORDS, true);
         });
+
         return implode(' ', $tokens);
     }
 
@@ -101,8 +103,8 @@ class ClassificationService
      * Train (or retrain) the SVM classifier from labeled sample documents.
      *
      * @param  array<string, array<int, string>>  $samplesByCategory
-     *         e.g. ['Job Order' => [text1, ...], 'Purchase Requisition' => [...], ...]
-     *         Per Scope (1.4), admins upload 5–10 samples per category.
+     *                                                                e.g. ['Job Order' => [text1, ...], 'Purchase Requisition' => [...], ...]
+     *                                                                Per Scope (1.4), admins upload 5–10 samples per category.
      */
     public function train(array $samplesByCategory): MlModelRepository
     {
@@ -123,11 +125,11 @@ class ClassificationService
         // 2. TF-IDF feature extraction.
         //    fit() learns the vocabulary / IDF weights; transform() rewrites
         //    the array in place into numeric feature vectors.
-        $vectorizer = new TokenCountVectorizer(new WhitespaceTokenizer());
+        $vectorizer = new TokenCountVectorizer(new WhitespaceTokenizer);
         $vectorizer->fit($samples);
         $vectorizer->transform($samples); // -> term-count vectors
 
-        $tfIdf = new TfIdfTransformer();
+        $tfIdf = new TfIdfTransformer;
         $tfIdf->fit($samples);
         $tfIdf->transform($samples);      // -> TF-IDF vectors
 
@@ -164,7 +166,7 @@ class ClassificationService
         // WorkflowService::ingest()'s matching fix for uploaded documents),
         // and clean up the temp copy. classify() below reverses this.
         $tempModelPath = tempnam(sys_get_temp_dir(), 'svm_train_');
-        (new ModelManager())->saveToFile($svm, $tempModelPath);
+        (new ModelManager)->saveToFile($svm, $tempModelPath);
         Storage::put($diskModelPath, file_get_contents($tempModelPath));
         @unlink($tempModelPath);
 
@@ -185,7 +187,7 @@ class ClassificationService
 
         $model = MlModelRepository::create([
             'model_name' => 'Support Vector Machine (SVM) + TF-IDF',
-            'version' => 'v' . now()->format('Ymd.His'),
+            'version' => 'v'.now()->format('Ymd.His'),
             'accuracy_score' => $cv['accuracy'],
             'cv_folds' => $cv['folds'],
             // Disk-relative path (config('filesystems.default')), not an
@@ -210,7 +212,7 @@ class ClassificationService
      * uses, so "X of Y needed" here is never out of sync with what will
      * really trigger a retrain.
      *
-     * @return array{total_eligible: int, batch_size: int, by_category: \Illuminate\Support\Collection<string,int>, queue: \Illuminate\Support\Collection<int,DocumentRepository>, due_by_age_at: ?Carbon}
+     * @return array{total_eligible: int, batch_size: int, by_category: Collection<string,int>, queue: Collection<int,DocumentRepository>, due_by_age_at: ?Carbon}
      */
     public function trainingQueueStatus(): array
     {
@@ -283,12 +285,12 @@ class ClassificationService
      * for a later run instead of being skipped forever.
      *
      * @return array{kept: bool, documentsUsed: int, previousAccuracy: float, newAccuracy: float, version: string}|null
-     *     null when nothing was due to run at all.
+     *                                                                                                                  null when nothing was due to run at all.
      */
     public function autoTrainIfDue(): ?array
     {
         $activeModel = MlModelRepository::active();
-        if (!$activeModel) {
+        if (! $activeModel) {
             return null;
         }
 
@@ -341,7 +343,7 @@ class ClassificationService
             ->lt(now()->subHours(config('ml.auto_train_max_age_hours', 24)));
         $dueByBatch = $totalEligible >= config('ml.auto_train_batch_size', 5);
 
-        if (!$dueByBatch && !$dueByAge) {
+        if (! $dueByBatch && ! $dueByAge) {
             return null;
         }
 
@@ -371,7 +373,7 @@ class ClassificationService
         // that. Only a drop bigger than the tolerance rolls back.
         $tolerance = config('ml.auto_train_rollback_tolerance', 5);
         $kept = $newModel->accuracy_score >= ($previousAccuracy - $tolerance);
-        if (!$kept) {
+        if (! $kept) {
             // Raw query updates, not $model->save() — train() itself just
             // changed is_active on these exact rows via its own raw query
             // ("5. Register the new version"), which the in-memory
@@ -453,13 +455,13 @@ class ClassificationService
     {
         $model = MlModelRepository::active();
 
-        if (!$model || !$model->model_file_path || !Storage::exists($model->model_file_path)) {
+        if (! $model || ! $model->model_file_path || ! Storage::exists($model->model_file_path)) {
             return ['category' => 'Other', 'confidence' => 0.0, 'margin' => 0.0, 'model_id' => null];
         }
 
         $stamp = preg_replace('/\D/', '', basename($model->model_file_path));
         $sidecarPath = "ml_models/pipeline_{$stamp}.bin";
-        if (!Storage::exists($sidecarPath)) {
+        if (! Storage::exists($sidecarPath)) {
             return ['category' => 'Other', 'confidence' => 0.0, 'margin' => 0.0, 'model_id' => $model->model_id];
         }
 
@@ -478,7 +480,7 @@ class ClassificationService
         file_put_contents($tempModelPath, Storage::get($model->model_file_path));
         try {
             /** @var SVC $svm */
-            $svm = (new ModelManager())->restoreFromFile($tempModelPath);
+            $svm = (new ModelManager)->restoreFromFile($tempModelPath);
         } finally {
             @unlink($tempModelPath);
         }
@@ -565,13 +567,23 @@ class ClassificationService
     /**
      * @return array{accuracy: float, folds: int}
      */
-    private function estimateAccuracyViaCrossValidation(array $samplesByCategory): array
+    /**
+     * Split samples into k stratified folds (each fold gets a roughly equal
+     * share of every category). With $seed left null, the shuffle is
+     * unpinned — fine for estimateAccuracyViaCrossValidation(), whose result
+     * is only ever compared against a moving previous-accuracy baseline, not
+     * quoted directly. evaluateClassifier() passes a fixed seed instead,
+     * since its numbers are meant to be reported as-is (e.g. in the
+     * capstone's evaluation table) and must not change between runs.
+     *
+     * @param  array<string, array<int, string>>  $samplesByCategory
+     * @return array{0: array<int, array<int, string>>, 1: array<int, array<int, string>>} [$foldSamples, $foldLabels]
+     */
+    private function buildStratifiedFolds(array $samplesByCategory, int $folds, ?int $seed = null): array
     {
-        $smallestCategory = min(array_map('count', $samplesByCategory));
-        // 5 folds when there's enough data for it; never more folds than
-        // the smallest category has samples, and never fewer than 2 (a
-        // single fold can't hold anything out).
-        $folds = max(2, min(5, $smallestCategory));
+        if ($seed !== null) {
+            mt_srand($seed);
+        }
 
         $foldSamples = array_fill(0, $folds, []);
         $foldLabels = array_fill(0, $folds, []);
@@ -585,6 +597,23 @@ class ClassificationService
                 $foldLabels[$f][] = $category;
             }
         }
+
+        if ($seed !== null) {
+            mt_srand(); // reseed from system entropy so nothing else in this request is affected
+        }
+
+        return [$foldSamples, $foldLabels];
+    }
+
+    private function estimateAccuracyViaCrossValidation(array $samplesByCategory): array
+    {
+        $smallestCategory = min(array_map('count', $samplesByCategory));
+        // 5 folds when there's enough data for it; never more folds than
+        // the smallest category has samples, and never fewer than 2 (a
+        // single fold can't hold anything out).
+        $folds = max(2, min(5, $smallestCategory));
+
+        [$foldSamples, $foldLabels] = $this->buildStratifiedFolds($samplesByCategory, $folds);
 
         $totalCorrect = 0;
         $totalScored = 0;
@@ -607,12 +636,12 @@ class ClassificationService
                 continue; // degenerate fold (can happen at the small end) — skip rather than crash
             }
 
-            $vectorizer = new TokenCountVectorizer(new WhitespaceTokenizer());
+            $vectorizer = new TokenCountVectorizer(new WhitespaceTokenizer);
             $vectorizer->fit($trainSamples);
             $vectorizer->transform($trainSamples);
             $vectorizer->transform($testSamples); // same fitted vocabulary, never refit on test data
 
-            $tfIdf = new TfIdfTransformer();
+            $tfIdf = new TfIdfTransformer;
             $tfIdf->fit($trainSamples);
             $tfIdf->transform($trainSamples);
             $tfIdf->transform($testSamples); // same fitted IDF weights
@@ -632,6 +661,126 @@ class ClassificationService
         return [
             'accuracy' => $totalScored > 0 ? round(($totalCorrect / $totalScored) * 100, 2) : 0.0,
             'folds' => $folds,
+        ];
+    }
+
+    /**
+     * Full classifier evaluation for reporting (the capstone's "Machine
+     * Learning Model Evaluation" table): Accuracy, Precision/Recall/F1 per
+     * category and macro-averaged, plus the confusion matrix — computed via
+     * the same stratified k-fold cross-validation estimateAccuracyViaCrossValidation()
+     * uses internally, but with a FIXED seed (default 42), so re-running
+     * this for the paper reproduces the exact same numbers every time.
+     * Reporting-only: does not train or activate a model.
+     *
+     * @param  array<string, array<int, string>>  $samplesByCategory
+     * @return array{
+     *   folds: int, total: int, accuracy: float,
+     *   perCategory: array<string, array{precision: float, recall: float, f1: float, support: int}>,
+     *   macro: array{precision: float, recall: float, f1: float},
+     *   confusionMatrix: array<string, array<string, int>>,
+     * }
+     */
+    public function evaluateClassifier(array $samplesByCategory, int $seed = 42): array
+    {
+        $categories = array_keys($samplesByCategory);
+        $smallestCategory = min(array_map('count', $samplesByCategory));
+        $folds = max(2, min(5, $smallestCategory));
+
+        [$foldSamples, $foldLabels] = $this->buildStratifiedFolds($samplesByCategory, $folds, $seed);
+
+        // confusion[actual][predicted] = count
+        $confusion = [];
+        foreach ($categories as $actual) {
+            foreach ($categories as $predicted) {
+                $confusion[$actual][$predicted] = 0;
+            }
+        }
+
+        $totalCorrect = 0;
+        $totalScored = 0;
+
+        for ($testFold = 0; $testFold < $folds; $testFold++) {
+            $trainSamples = [];
+            $trainLabels = [];
+            foreach ($foldSamples as $f => $docs) {
+                if ($f === $testFold) {
+                    continue;
+                }
+                $trainSamples = array_merge($trainSamples, array_map([$this, 'preprocess'], $docs));
+                $trainLabels = array_merge($trainLabels, $foldLabels[$f]);
+            }
+
+            $testSamples = array_map([$this, 'preprocess'], $foldSamples[$testFold]);
+            $testLabels = $foldLabels[$testFold];
+
+            if (empty($testSamples) || count(array_unique($trainLabels)) < 2) {
+                continue;
+            }
+
+            $vectorizer = new TokenCountVectorizer(new WhitespaceTokenizer);
+            $vectorizer->fit($trainSamples);
+            $vectorizer->transform($trainSamples);
+            $vectorizer->transform($testSamples);
+
+            $tfIdf = new TfIdfTransformer;
+            $tfIdf->fit($trainSamples);
+            $tfIdf->transform($trainSamples);
+            $tfIdf->transform($testSamples);
+
+            $foldSvm = new SVC(Kernel::LINEAR, 1.0, 3, null, 0.0, 0.001, 100, true, false);
+            $foldSvm->train($trainSamples, $trainLabels);
+
+            $predictions = $foldSvm->predict($testSamples);
+            foreach ($predictions as $i => $p) {
+                $actual = $testLabels[$i];
+                $confusion[$actual][$p]++;
+                $totalScored++;
+                if ($p === $actual) {
+                    $totalCorrect++;
+                }
+            }
+        }
+
+        $perCategory = [];
+        foreach ($categories as $category) {
+            $tp = $confusion[$category][$category];
+            $fp = 0;
+            $fn = 0;
+            foreach ($categories as $other) {
+                if ($other === $category) {
+                    continue;
+                }
+                $fp += $confusion[$other][$category]; // predicted this category, actually another
+                $fn += $confusion[$category][$other]; // actually this category, predicted another
+            }
+            $support = array_sum($confusion[$category]);
+            $precision = ($tp + $fp) > 0 ? $tp / ($tp + $fp) : 0.0;
+            $recall = ($tp + $fn) > 0 ? $tp / ($tp + $fn) : 0.0;
+            $f1 = ($precision + $recall) > 0 ? 2 * $precision * $recall / ($precision + $recall) : 0.0;
+
+            $perCategory[$category] = [
+                'precision' => round($precision * 100, 2),
+                'recall' => round($recall * 100, 2),
+                'f1' => round($f1 * 100, 2),
+                'support' => $support,
+            ];
+        }
+
+        $n = count($categories);
+        $macro = [
+            'precision' => $n > 0 ? round(array_sum(array_column($perCategory, 'precision')) / $n, 2) : 0.0,
+            'recall' => $n > 0 ? round(array_sum(array_column($perCategory, 'recall')) / $n, 2) : 0.0,
+            'f1' => $n > 0 ? round(array_sum(array_column($perCategory, 'f1')) / $n, 2) : 0.0,
+        ];
+
+        return [
+            'folds' => $folds,
+            'total' => $totalScored,
+            'accuracy' => $totalScored > 0 ? round(($totalCorrect / $totalScored) * 100, 2) : 0.0,
+            'perCategory' => $perCategory,
+            'macro' => $macro,
+            'confusionMatrix' => $confusion,
         ];
     }
 }

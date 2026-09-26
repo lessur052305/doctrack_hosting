@@ -33,7 +33,6 @@ function pendingAssignmentFor(User $approver, WorkflowStage $stage): DocumentAss
         'individual_status' => 'pending',
         'sla_expires_at' => now()->addHour(),
         'priority_rank' => 1,
-        'escalated_to_admin' => false,
         'auto_approved' => false,
     ]);
 }

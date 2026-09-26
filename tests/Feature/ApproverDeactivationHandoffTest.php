@@ -18,8 +18,8 @@ function pendingHandoffAssignmentFor(User $approver, string $category, string $s
     );
     $document = DocumentRepository::create([
         'originator_id' => $originator->user_id,
-        'title' => 'handoff-test-' . uniqid() . '.txt',
-        'file_path' => 'documents/' . uniqid() . '.txt',
+        'title' => 'handoff-test-'.uniqid().'.txt',
+        'file_path' => 'documents/'.uniqid().'.txt',
         'mime_type' => 'text/plain',
         'due_date' => now()->addDay(),
         'global_status' => 'classified_validated',
@@ -105,7 +105,7 @@ test('when no eligible approver exists, the assignment is auto-approved immediat
     $fresh = $assignment->fresh();
     expect($fresh->individual_status)->toBe('approved')
         ->and($fresh->auto_approved)->toBeTrue()
-        ->and($fresh->escalated_to_admin)->toBeFalse() // must never look like an SLA escalation
+        ->and(SlaViolation::where('assignment_id', $fresh->assignment_id)->exists())->toBeFalse() // must never look like an SLA miss
         ->and($fresh->reassigned_from)->toBe($onlyApprover->user_id) // recorded for the "Admin note" display
         ->and($fresh->user_id)->toBe($onlyApprover->user_id); // stays with them, just flagged
 

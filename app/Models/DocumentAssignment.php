@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Events\AssignmentRouted;
 use App\Events\DocumentStatusChanged;
+use App\Services\BusinessHoursService;
 use Illuminate\Database\Eloquent\Model;
 
 /**
@@ -18,6 +19,7 @@ use Illuminate\Database\Eloquent\Model;
 class DocumentAssignment extends Model
 {
     protected $table = 'document_assignments';
+
     protected $primaryKey = 'assignment_id';
 
     protected static function booted(): void
@@ -36,7 +38,7 @@ class DocumentAssignment extends Model
         });
 
         static::updated(function (self $assignment) {
-            if (!$assignment->wasChanged('individual_status')) {
+            if (! $assignment->wasChanged('individual_status')) {
                 return;
             }
 
@@ -80,7 +82,7 @@ class DocumentAssignment extends Model
     protected $fillable = [
         'document_id', 'user_id', 'stage_id', 'due_date', 'priority_rank',
         'individual_status', 'comments', 'sla_expires_at', 'admin_override_at',
-        'admin_override_by', 'escalated_to_admin', 'escalated_at', 'escalation_reason', 'auto_approved', 'acted_at',
+        'admin_override_by', 'auto_approved', 'acted_at',
         'admin_reviewed_at', 'admin_reviewed_by', 'admin_review_note', 'admin_review_outcome',
         'review_reminder_sent_at', 'urgent_reminder_sent_at', 'grace_reminder_sent_at',
         'reassigned_at', 'reassigned_from', 'reassignment_reason',
@@ -92,8 +94,6 @@ class DocumentAssignment extends Model
         'sla_expires_at' => 'datetime',
         'admin_override_at' => 'datetime',
         'acted_at' => 'datetime',
-        'escalated_to_admin' => 'boolean',
-        'escalated_at' => 'datetime',
         'auto_approved' => 'boolean',
         'admin_reviewed_at' => 'datetime',
         'review_reminder_sent_at' => 'datetime',
@@ -183,9 +183,10 @@ class DocumentAssignment extends Model
     /** Seconds remaining before SLA violation — used for the countdown UI. */
     public function getSecondsRemainingAttribute(): ?int
     {
-        if (!$this->sla_expires_at) {
+        if (! $this->sla_expires_at) {
             return null;
         }
+
         // Carbon 3's diffInSeconds() returns a float even with the signed
         // ($absolute=false) form; round explicitly rather than let PHP's
         // implicit float->int narrowing throw a deprecation warning.
@@ -204,11 +205,11 @@ class DocumentAssignment extends Model
      */
     public function realSecondsRemaining(): int
     {
-        if (!$this->sla_expires_at) {
+        if (! $this->sla_expires_at) {
             return 0;
         }
 
-        return app(\App\Services\BusinessHoursService::class)
+        return app(BusinessHoursService::class)
             ->businessSecondsRemaining(now(), $this->sla_expires_at);
     }
 
@@ -217,6 +218,21 @@ class DocumentAssignment extends Model
 
     /** Below this many real seconds left (and above the Urgent threshold), the badge reads "Normal". */
     private const NORMAL_THRESHOLD_SECONDS = 7200; // 2 hours
+
+    /**
+     * Auto-approved stages the Admin still owes a review on. A stage the
+     * system auto-approved BEFORE a Head Approver's Final Approval is
+     * deliberately left out (review_due_at stays null) — the Head's sign-off
+     * covers it — see WorkflowService::awaitingHeadSignOff() /
+     * settleDeferredAutoApprovalReviews(). Every other auto-approval gets its
+     * review_due_at at the moment it happens.
+     */
+    public function scopeAwaitingAdminReview($query)
+    {
+        return $query->where('auto_approved', true)
+            ->whereNull('admin_reviewed_at')
+            ->whereNotNull('review_due_at');
+    }
 
     /**
      * Urgent=1, Normal=2, Low=3, Expired=4 — absolute thresholds against
@@ -231,7 +247,7 @@ class DocumentAssignment extends Model
     {
         $remaining = $this->realSecondsRemaining();
 
-        return match(true) {
+        return match (true) {
             $remaining <= 0 => 4,
             $remaining <= self::URGENT_THRESHOLD_SECONDS => 1,
             $remaining <= self::NORMAL_THRESHOLD_SECONDS => 2,
@@ -244,14 +260,9 @@ class DocumentAssignment extends Model
         return [1 => 'Urgent', 2 => 'Normal', 3 => 'Low', 4 => 'Expired'][$this->urgencyRank()];
     }
 
-    /**
-     * Section 3: once escalated, the assignment leaves the approver's own
-     * queue — it's now the Admin's to resolve via the SLA override queue.
-     */
     public function scopePendingFor($query, $userId)
     {
         return $query->where('user_id', $userId)
-            ->where('individual_status', 'pending')
-            ->where('escalated_to_admin', false);
+            ->where('individual_status', 'pending');
     }
 }

@@ -3,11 +3,13 @@
 namespace App\Models;
 
 use App\Events\DocumentStatusChanged;
+use App\Services\BusinessHoursService;
 use Illuminate\Database\Eloquent\Model;
 
 class DocumentRepository extends Model
 {
     protected $table = 'document_repository';
+
     protected $primaryKey = 'document_id';
 
     /**
@@ -113,7 +115,7 @@ class DocumentRepository extends Model
             return 'awaiting_approver_selection';
         }
         if ($this->global_status === 'auto_approved'
-            && !$this->assignments->contains(fn ($a) => $a->auto_approved && !$a->admin_reviewed_at)) {
+            && ! $this->assignments->contains(fn ($a) => $a->auto_approved && ! $a->admin_reviewed_at && $a->review_due_at)) {
             return 'approved';
         }
 
@@ -150,13 +152,13 @@ class DocumentRepository extends Model
      */
     public function dueDateUrgencyRank(): ?int
     {
-        if (!$this->due_date) {
+        if (! $this->due_date) {
             return null;
         }
 
-        $remaining = app(\App\Services\BusinessHoursService::class)->businessSecondsRemaining(now(), $this->due_date);
+        $remaining = app(BusinessHoursService::class)->businessSecondsRemaining(now(), $this->due_date);
 
-        return match(true) {
+        return match (true) {
             $remaining <= 0 => 4,
             $remaining <= 1800 => 1,
             $remaining <= 7200 => 2,

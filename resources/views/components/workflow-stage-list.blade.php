@@ -241,7 +241,9 @@
                 </p>
 
                 @if($state === 'upcoming')
-                    <p class="text-sm text-surface-400">Not yet reached</p>
+                    <p class="text-sm text-surface-400">
+                        {{ $stage->stage_name === 'Final Approval' ? 'Opens after every other stage is approved' : 'Not yet reached' }}
+                    </p>
                 @elseif($totalSeats <= 1)
                     {{-- Single-seat stage: identical wording to before the
                          multi-approver redesign. --}}

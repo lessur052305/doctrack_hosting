@@ -31,6 +31,7 @@ function bucketingDoc(User $originator, bool $autoApproved, bool $reviewed = fal
         'individual_status' => $autoApproved ? 'auto_approved' : 'approved',
         'sla_expires_at' => now()->subHour(), 'acted_at' => now(),
         'auto_approved' => $autoApproved,
+        'review_due_at' => $autoApproved ? now()->addHours(6) : null,
         'admin_reviewed_at' => $reviewed ? now() : null,
     ]);
 

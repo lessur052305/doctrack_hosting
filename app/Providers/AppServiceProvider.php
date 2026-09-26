@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Broadcasting\FailureTolerantBroadcaster;
 use App\Models\DocumentAnnotation;
 use App\Models\DocumentAssignment;
 use App\Models\DocumentRepository;
@@ -10,9 +11,11 @@ use App\Policies\DocumentAnnotationPolicy;
 use App\Policies\DocumentAssignmentPolicy;
 use App\Policies\DocumentRepositoryPolicy;
 use App\Policies\NotificationRecordPolicy;
+use Illuminate\Broadcasting\BroadcastManager;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\Paginator;
+use Illuminate\Support\Facades\Broadcast;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\RateLimiter;
@@ -64,8 +67,16 @@ class AppServiceProvider extends ServiceProvider
         // (a one-click email confirmation), not owning/verifying a DNS
         // domain — this app sends from real personal Gmail addresses with
         // no domain of its own.
-        Mail::extend('brevo', fn (array $config) => (new BrevoTransportFactory())
+        Mail::extend('brevo', fn (array $config) => (new BrevoTransportFactory)
             ->create(new Dsn('brevo+api', 'default', $config['key'] ?? null)));
+
+        // Same Reverb connection as before, but a broadcast failure is
+        // reported instead of thrown — see FailureTolerantBroadcaster.
+        // A custom creator takes precedence over the framework's built-in
+        // 'reverb' driver, so config/broadcasting.php needs no change.
+        Broadcast::extend('reverb', fn ($app, array $config) => new FailureTolerantBroadcaster(
+            $app->make(BroadcastManager::class)->pusher($config)
+        ));
 
         $this->registerRateLimiters();
 

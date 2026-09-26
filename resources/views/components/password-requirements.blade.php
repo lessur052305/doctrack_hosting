@@ -10,15 +10,19 @@
 
     Four of the five rules (length/uppercase/lowercase/number) are pure
     pattern checks and update on every keystroke. The 5th — "not a known
-    leaked password" — can't be judged locally; it needs the same free,
-    keyless Pwned Passwords API the server-side uncompromised() rule
-    already calls, so it updates a moment after typing pauses instead of
-    live, and only ever sends a partial hash prefix, never the password
-    itself (see the k-anonymity comment in app.js).
+    leaked password" — can't be judged locally; it asks the server
+    (PasswordBreachController), which queries the same free, keyless Pwned
+    Passwords API the uncompromised() rule calls at submit, so it updates a
+    moment after typing pauses instead of live. It has four honest states:
+    checking, clean, leaked, and "couldn't check right now" — the last is
+    NOT a failure of the password (the submit-time check still runs).
 --}}
 @props(['for'])
 
-<ul data-password-requirements-for="{{ $for }}" class="mt-2 space-y-1 text-xs">
+<ul data-password-requirements-for="{{ $for }}"
+    data-breach-check-url="{{ route('password.breach-check') }}"
+    data-csrf="{{ csrf_token() }}"
+    class="mt-2 space-y-1 text-xs">
     @foreach([
         'length' => 'At least 8 characters',
         'uppercase' => 'One uppercase letter',

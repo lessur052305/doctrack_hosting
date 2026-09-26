@@ -1,10 +1,10 @@
 <?php
 
 use App\Models\AdminViolation;
+use App\Models\AuditLog;
 use App\Models\DocumentAssignment;
 use App\Models\DocumentRepository;
 use App\Models\NotificationRecord;
-use App\Models\SlaViolation;
 use App\Models\User;
 use App\Models\WorkflowStage;
 
@@ -17,8 +17,8 @@ function paginationDoc(User $originator, array $overrides = []): DocumentReposit
 {
     return DocumentRepository::create(array_merge([
         'originator_id' => $originator->user_id,
-        'title' => 'pg-test-' . uniqid() . '.txt',
-        'file_path' => 'documents/' . uniqid() . '.txt',
+        'title' => 'pg-test-'.uniqid().'.txt',
+        'file_path' => 'documents/'.uniqid().'.txt',
         'mime_type' => 'text/plain',
         'due_date' => now()->addDay(),
         'upload_date' => now(),
@@ -83,6 +83,7 @@ it('paginates the Auto-Approval Review queue at 2 per page', function () {
             'stage_id' => WorkflowStage::first()->stage_id, 'due_date' => $autoDoc->due_date,
             'priority_rank' => 2, 'individual_status' => 'approved', 'acted_at' => now(),
             'auto_approved' => true,
+            'review_due_at' => now()->addHours(6),
         ]);
     }
 
@@ -107,6 +108,7 @@ it('deep-links from Admin Violations straight to the page containing that docume
             'stage_id' => WorkflowStage::first()->stage_id, 'due_date' => $autoDoc->due_date,
             'priority_rank' => 2, 'individual_status' => 'approved', 'acted_at' => now()->addSeconds($i),
             'auto_approved' => true,
+            'review_due_at' => now()->addHours(6),
         ]);
         if ($i === 2) {
             $targetDoc = $autoDoc; // 3rd of 3, sorted oldest-first by acted_at, so it lands on page 2 of a 2-per-page list
@@ -132,6 +134,7 @@ it('honors the pagination param on the SLA Queue refresh fragment (Feature: AJAX
             'stage_id' => WorkflowStage::first()->stage_id, 'due_date' => $autoDoc->due_date,
             'priority_rank' => 2, 'individual_status' => 'approved', 'acted_at' => now(),
             'auto_approved' => true,
+            'review_due_at' => now()->addHours(6),
         ]);
     }
 
@@ -152,7 +155,7 @@ it('sends every entry in one response for the Admin Audit Trail (Feature: client
     // see resources/js/app.js's initFittedPagination().
     $admin = User::factory()->admin()->create();
     for ($i = 0; $i < 11; $i++) {
-        \App\Models\AuditLog::record($admin->user_id, null, 'user_toggle', "PAGINATION TEST audit row {$i}");
+        AuditLog::record($admin->user_id, null, 'user_toggle', "PAGINATION TEST audit row {$i}");
     }
 
     $response = $this->actingAs($admin)->get(route('admin.audit.logs'));

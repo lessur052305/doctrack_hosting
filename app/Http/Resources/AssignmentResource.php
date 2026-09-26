@@ -17,7 +17,6 @@ class AssignmentResource extends JsonResource
             'status' => $this->individual_status,
             'priority_rank' => $this->priority_rank,
             'sla_expires_at' => $this->sla_expires_at?->toIso8601String(),
-            'escalated_to_admin' => $this->escalated_to_admin,
             'comments' => $this->comments,
             'acted_at' => $this->acted_at?->toIso8601String(),
         ];

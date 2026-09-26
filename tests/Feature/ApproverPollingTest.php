@@ -22,7 +22,7 @@ function assignmentFor(User $approver): DocumentAssignment
     return DocumentAssignment::create([
         'document_id' => $document->document_id, 'stage_id' => $stage->stage_id, 'user_id' => $approver->user_id,
         'individual_status' => 'pending', 'sla_expires_at' => now()->addHour(), 'priority_rank' => 1,
-        'escalated_to_admin' => false, 'auto_approved' => false,
+        'auto_approved' => false,
     ]);
 }
 

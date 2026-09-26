@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\AuditLog;
 use App\Models\DocumentAssignment;
 use App\Models\DocumentRepository;
 use App\Models\User;
@@ -14,8 +15,8 @@ function historyTestAssignment(User $approver, string $category, string $status,
     );
     $document = DocumentRepository::create([
         'originator_id' => $originator->user_id,
-        'title' => 'history-test-' . uniqid() . '.txt',
-        'file_path' => 'documents/' . uniqid() . '.txt',
+        'title' => 'history-test-'.uniqid().'.txt',
+        'file_path' => 'documents/'.uniqid().'.txt',
         'mime_type' => 'text/plain',
         'due_date' => now()->addDay(),
         'global_status' => $status === 'rejected' ? 'rejected' : 'approved',
@@ -311,23 +312,23 @@ it('groups multiple decisions on the same document into one row', function () {
     $response->assertViewHas('decisions', fn ($p) => $p->total() === 1); // one document, not two rows
 });
 
-it('attributes an admin-overridden decision to the admin, not the approver it was assigned to', function () {
+it('attributes a past admin-overridden decision to the admin, not the approver it was assigned to', function () {
+    // The Admin override action no longer exists, but decisions it recorded before
+    // are still in the data and must keep displaying correctly in Decision History.
     $admin = User::factory()->admin()->create(['full_name' => 'Override Admin']);
     $approver = User::factory()->approver('Job Order')->create();
     $originator = User::factory()->originator()->create();
     $stage = WorkflowStage::create(['document_category' => 'Job Order', 'stage_name' => 'Review', 'sequence_order' => 1]);
     $document = DocumentRepository::create([
         'originator_id' => $originator->user_id, 'title' => 'admin-override-history.txt', 'file_path' => 'documents/admin-override.txt',
-        'mime_type' => 'text/plain', 'due_date' => now()->addDay(), 'global_status' => 'classified_validated', 'ml_category' => 'Job Order',
+        'mime_type' => 'text/plain', 'due_date' => now()->addDay(), 'global_status' => 'approved', 'ml_category' => 'Job Order',
     ]);
-    $assignment = DocumentAssignment::create([
+    DocumentAssignment::create([
         'document_id' => $document->document_id, 'user_id' => $approver->user_id, 'stage_id' => $stage->stage_id,
-        'due_date' => $document->due_date, 'priority_rank' => 2, 'individual_status' => 'pending',
-        'sla_expires_at' => now()->addHour(),
+        'due_date' => $document->due_date, 'priority_rank' => 2, 'individual_status' => 'approved',
+        'sla_expires_at' => now()->addHour(), 'acted_at' => now(),
+        'admin_override_by' => $admin->user_id, 'admin_override_at' => now(),
     ]);
-
-    seedReviewTime($admin, $document);
-    $this->actingAs($admin)->post(route('admin.sla.override', $assignment), ['decision' => 'approved']);
 
     // Still shows up in the ORIGINAL approver's own Decision History...
     $response = $this->actingAs($approver)->get(route('approver.history'));
@@ -343,12 +344,12 @@ it('attributes an admin-overridden decision to the admin, not the approver it wa
 it('expands a document row to show the full movement timeline', function () {
     $approver = User::factory()->approver('Job Order')->create();
     $assignment = historyTestAssignment($approver, 'Job Order', 'approved');
-    \App\Models\AuditLog::record($approver->user_id, $assignment->document_id, 'approve', 'Approved by approver.');
+    AuditLog::record($approver->user_id, $assignment->document_id, 'approve', 'Approved by approver.');
 
     $response = $this->actingAs($approver)->get(route('approver.history'));
 
     $response->assertOk();
-    $response->assertSee('history-movements-' . $assignment->document_id, false);
+    $response->assertSee('history-movements-'.$assignment->document_id, false);
     // The old "Full movement history" caption is gone — <x-document-tracker>
     // (see resources/views/components/document-tracker.blade.php) supplies
     // its own "Document Tracker" label now.

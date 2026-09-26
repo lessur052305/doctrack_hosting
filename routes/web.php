@@ -7,6 +7,7 @@ use App\Http\Controllers\AuthController;
 use App\Http\Controllers\ChatController;
 use App\Http\Controllers\DocumentController;
 use App\Http\Controllers\NotificationController;
+use App\Http\Controllers\PasswordBreachController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -28,7 +29,7 @@ use Illuminate\Support\Facades\Route;
 // user hitting /login would bounce: guest middleware -> '/' -> /login ->
 // guest middleware -> '/' -> ... forever (NS_ERROR_REDIRECT_LOOP).
 Route::get('/', function () {
-    if (!auth()->check()) {
+    if (! auth()->check()) {
         return redirect()->route('login');
     }
 
@@ -41,6 +42,11 @@ Route::get('/', function () {
         default => 'login',
     });
 });
+
+// Live hint for the password-requirements checklist — used both by an Admin
+// creating an account and by a guest resetting a password, so it sits outside
+// 'auth' and 'guest'. It only reports whether a password is in a known breach.
+Route::post('/password-breach-check', [PasswordBreachController::class, 'check'])->middleware('throttle:polling')->name('password.breach-check');
 
 Route::middleware('guest')->group(function () {
     Route::get('/login', [AuthController::class, 'showLogin'])->name('login');
@@ -200,21 +206,12 @@ Route::middleware('auth')->group(function () {
         // A seat with genuinely no eligible approver never reaches a
         // "pending, waiting" state at all anymore — it auto-approves
         // immediately at routing time (see WorkflowService::assignStage()).
-        Route::post('/sla-override/{assignment}', [AdminController::class, 'overrideAssignment'])->middleware('throttle:mutations')->name('sla.override');
 
         Route::post('/system-settings/business-hours-toggle', [AdminController::class, 'updateBusinessHoursEnforcement'])->name('systemSettings.businessHoursToggle');
 
-        Route::get('/workflow-config', [AdminController::class, 'workflowConfig'])->name('workflow.config');
-        Route::get('/workflow-config/refresh', [AdminController::class, 'workflowConfigRefresh'])->middleware('throttle:polling')->name('workflow.config.refresh');
-        Route::get('/workflow-config/poll', [AdminController::class, 'workflowConfigPoll'])->middleware('throttle:polling')->name('workflow.config.poll');
-        Route::post('/workflow-config', [AdminController::class, 'storeStage'])->name('workflow.store');
-        Route::put('/workflow-config/{stage}', [AdminController::class, 'updateStage'])->name('workflow.stages.update');
-        Route::post('/workflow-config/{stage}/move-up', [AdminController::class, 'moveStageUp'])->name('workflow.stages.moveUp');
-        Route::post('/workflow-config/{stage}/move-down', [AdminController::class, 'moveStageDown'])->name('workflow.stages.moveDown');
-        Route::post('/workflow-config/{stage}/notify-pending', [AdminController::class, 'notifyPendingApprovers'])->name('workflow.stages.notifyPending');
-        Route::post('/workflow-config/{stage}/archive', [AdminController::class, 'archiveStage'])->name('workflow.stages.archive');
-        Route::post('/workflow-config/{stage}/unarchive', [AdminController::class, 'unarchiveStage'])->name('workflow.stages.unarchive');
-        Route::delete('/workflow-config/{stage}', [AdminController::class, 'destroyStage'])->name('workflow.stages.destroy');
+        Route::get('/approval-workflow', [AdminController::class, 'workflowConfig'])->name('workflow.config');
+        Route::get('/approval-workflow/refresh', [AdminController::class, 'workflowConfigRefresh'])->middleware('throttle:polling')->name('workflow.config.refresh');
+        Route::get('/approval-workflow/poll', [AdminController::class, 'workflowConfigPoll'])->middleware('throttle:polling')->name('workflow.config.poll');
 
         Route::get('/calendar', [AdminController::class, 'calendar'])->name('calendar');
         Route::get('/calendar/refresh', [AdminController::class, 'calendarRefresh'])->middleware('throttle:polling')->name('calendar.refresh');

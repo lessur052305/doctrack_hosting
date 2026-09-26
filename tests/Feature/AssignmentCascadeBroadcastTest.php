@@ -41,12 +41,12 @@ it('notifies a sibling approver\'s own channel when their assignment is auto-clo
     $assignmentOne = DocumentAssignment::create([
         'document_id' => $document->document_id, 'stage_id' => $stageOne->stage_id, 'user_id' => $approverOne->user_id,
         'individual_status' => 'pending', 'sla_expires_at' => now()->addHour(), 'priority_rank' => 1,
-        'escalated_to_admin' => false, 'auto_approved' => false,
+        'auto_approved' => false,
     ]);
     $assignmentTwo = DocumentAssignment::create([
         'document_id' => $document->document_id, 'stage_id' => $stageTwo->stage_id, 'user_id' => $approverTwo->user_id,
         'individual_status' => 'pending', 'sla_expires_at' => now()->addHour(), 'priority_rank' => 1,
-        'escalated_to_admin' => false, 'auto_approved' => false,
+        'auto_approved' => false,
     ]);
 
     Event::fake([AssignmentRouted::class]); // clear the two "created" broadcasts above, isolate the decision itself
@@ -88,12 +88,12 @@ it('notifies a sibling approver holding a DIFFERENT, unaffected stage when this 
     $assignmentOne = DocumentAssignment::create([
         'document_id' => $document->document_id, 'stage_id' => $stageOne->stage_id, 'user_id' => $approverOne->user_id,
         'individual_status' => 'pending', 'sla_expires_at' => now()->addHour(), 'priority_rank' => 1,
-        'escalated_to_admin' => false, 'auto_approved' => false,
+        'auto_approved' => false,
     ]);
     $assignmentTwo = DocumentAssignment::create([
         'document_id' => $document->document_id, 'stage_id' => $stageTwo->stage_id, 'user_id' => $approverTwo->user_id,
         'individual_status' => 'pending', 'sla_expires_at' => now()->addHour(), 'priority_rank' => 1,
-        'escalated_to_admin' => false, 'auto_approved' => false,
+        'auto_approved' => false,
     ]);
 
     Event::fake([AssignmentRouted::class]); // clear the two "created" broadcasts above, isolate the decision itself
@@ -129,12 +129,12 @@ it('drops the auto-closed assignment out of the sibling approver\'s pending queu
     $assignmentOne = DocumentAssignment::create([
         'document_id' => $document->document_id, 'stage_id' => $stageOne->stage_id, 'user_id' => $approverOne->user_id,
         'individual_status' => 'pending', 'sla_expires_at' => now()->addHour(), 'priority_rank' => 1,
-        'escalated_to_admin' => false, 'auto_approved' => false,
+        'auto_approved' => false,
     ]);
     DocumentAssignment::create([
         'document_id' => $document->document_id, 'stage_id' => $stageTwo->stage_id, 'user_id' => $approverTwo->user_id,
         'individual_status' => 'pending', 'sla_expires_at' => now()->addHour(), 'priority_rank' => 1,
-        'escalated_to_admin' => false, 'auto_approved' => false,
+        'auto_approved' => false,
     ]);
 
     $this->actingAs($approverTwo)->getJson(route('approver.assignments.poll'))

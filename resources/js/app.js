@@ -54,60 +54,61 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         // The one rule that can't be judged locally — "has this exact
-        // password shown up in a known data breach." Calls the same
-        // free, keyless Pwned Passwords API Laravel's own
-        // uncompromised() rule already calls server-side at submit
-        // (see PasswordRule::uncompromised() in AdminController/
-        // AuthController), just from the browser too, so it can surface
-        // a moment after typing pauses instead of only after a failed
-        // submit. K-anonymity: only the first 5 characters of the
-        // password's SHA-1 hash are ever sent — never the password, and
-        // never even its full hash.
+        // password shown up in a known data breach." Asked of the server
+        // (PasswordBreachController), which queries the same free, keyless
+        // Pwned Passwords API Laravel's uncompromised() rule calls at
+        // submit. Done server-side rather than in the browser because
+        // crypto.subtle only exists on HTTPS/localhost — on a plain-HTTP
+        // LAN address the old in-browser check silently did nothing.
+        // Four honest states: checking, clean, leaked, and "couldn't
+        // check right now" — the last is not a failure of the password;
+        // the submit-time check still runs regardless.
         const breachLi = list.querySelector('[data-rule="uncompromised"]');
         const breachText = breachLi?.querySelector('[data-status-text]');
+        const breachUrl = list.dataset.breachCheckUrl;
         let breachTimer = null;
         let breachRequestId = 0;
 
+        function setBreachState(state, text) {
+            setState(breachLi, state);
+            if (breachText) breachText.textContent = text;
+        }
+
         async function checkBreach(value) {
-            if (!breachLi) return;
+            if (!breachLi || !breachUrl) return;
             const thisRequestId = ++breachRequestId;
 
             if (value.length < 8) {
-                setState(breachLi, 'idle');
-                if (breachText) breachText.textContent = 'Not a known leaked password';
+                setBreachState('idle', 'Not a known leaked password');
                 return;
             }
 
-            if (breachText) breachText.textContent = 'Checking against known breaches…';
-            setState(breachLi, 'idle');
+            setBreachState('idle', 'Checking against known breaches…');
 
             try {
-                const hashBuffer = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(value));
-                const hashHex = Array.from(new Uint8Array(hashBuffer))
-                    .map((b) => b.toString(16).padStart(2, '0'))
-                    .join('')
-                    .toUpperCase();
-                const prefix = hashHex.slice(0, 5);
-                const suffix = hashHex.slice(5);
-
-                const res = await fetch(`https://api.pwnedpasswords.com/range/${prefix}`);
-                const body = await res.text();
+                const res = await fetch(breachUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        Accept: 'application/json',
+                        'X-CSRF-TOKEN': list.dataset.csrf ?? '',
+                    },
+                    body: JSON.stringify({ password: value }),
+                });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const { status } = await res.json();
                 if (thisRequestId !== breachRequestId) return; // superseded by a later keystroke
 
-                const leaked = body.split('\n').some((line) => line.split(':')[0] === suffix);
-                setState(breachLi, leaked ? 'bad' : 'met');
-                if (breachText) {
-                    breachText.textContent = leaked
-                        ? 'This password has appeared in a data breach — choose another'
-                        : 'Not a known leaked password';
+                if (status === 'leaked') {
+                    setBreachState('bad', 'This password has appeared in a data breach — choose another');
+                } else if (status === 'clean') {
+                    setBreachState('met', 'Not a known leaked password');
+                } else {
+                    setBreachState('idle', "Couldn't check right now — it will be checked when you submit");
                 }
             } catch {
                 if (thisRequestId !== breachRequestId) return;
-                // Network hiccup client-side — say nothing alarming; the
-                // real gate is still the identical server-side check at
-                // submit time regardless of whether this one succeeded.
-                setState(breachLi, 'idle');
-                if (breachText) breachText.textContent = 'Not a known leaked password';
+                setBreachState('idle', "Couldn't check right now — it will be checked when you submit");
             }
         }
 

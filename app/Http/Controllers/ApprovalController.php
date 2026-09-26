@@ -8,9 +8,11 @@ use App\Models\DocumentReviewSession;
 use App\Models\SystemSetting;
 use App\Services\BusinessHoursService;
 use App\Services\SlaService;
+use App\Services\ValidationService;
 use App\Services\WorkflowService;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator;
+use Illuminate\Support\Collection;
 use Illuminate\Validation\Rule;
 
 class ApprovalController extends Controller
@@ -19,8 +21,7 @@ class ApprovalController extends Controller
         private WorkflowService $workflow,
         private SlaService $sla,
         private BusinessHoursService $businessHours,
-    ) {
-    }
+    ) {}
 
     /**
      * Feature: an approver can be blocked from deciding outside business
@@ -37,7 +38,7 @@ class ApprovalController extends Controller
     private function requireBusinessHoursIfEnforced(): void
     {
         if (SystemSetting::current()->enforce_business_hours_decisions
-            && !$this->businessHours->isWithinWorkingWindow(now())) {
+            && ! $this->businessHours->isWithinWorkingWindow(now())) {
             abort(403, 'Decisions can only be made during business hours (9 AM–5 PM, Mon–Sat).');
         }
     }
@@ -52,15 +53,14 @@ class ApprovalController extends Controller
      * moment the deadline passes, not on whatever the next tick happens
      * to be.
      */
-    private function escalateExpiredFor(int $userId): void
+    private function autoApproveExpiredFor(int $userId): void
     {
         DocumentAssignment::where('user_id', $userId)
             ->where('individual_status', 'pending')
-            ->where('escalated_to_admin', false)
             ->where('sla_expires_at', '<', now())
             ->with(['stage', 'document', 'approver'])
             ->get()
-            ->each(fn (DocumentAssignment $a) => $this->sla->escalate($a));
+            ->each(fn (DocumentAssignment $a) => $this->sla->autoApproveMissedDeadline($a));
     }
 
     /**
@@ -70,7 +70,7 @@ class ApprovalController extends Controller
      * resources/views/approver/dashboard.blade.php), so the priority
      * filter matches what's actually displayed.
      */
-    private function containerPriorityLabels($container): \Illuminate\Support\Collection
+    private function containerPriorityLabels($container): Collection
     {
         return $container->documents->map(function ($stageAssignments) {
             // Only a still-pending seat gets a label — a document that's
@@ -92,8 +92,9 @@ class ApprovalController extends Controller
      * documents, so the list position always agrees with the priority
      * badge shown per row instead of only being sorted by due_date. Lower
      * sorts first: Urgent=1, Normal=2, Low=3, Expired=4 — Expired sits
-     * last among "real" priorities since those seats are already
-     * escalated/read-only here, nothing left to act on. A container where
+     * last among "real" priorities since those seats are already past
+     * their deadline and about to be (or already being) auto-approved,
+     * nothing worth acting on. A container where
      * every document is already decided by this approver (just waiting on
      * co-approvers — see resolvedButInFlightQueryFor()) has no active seat
      * at all and sorts last of all (5), since there's nothing actionable
@@ -127,33 +128,19 @@ class ApprovalController extends Controller
      *     pending at once, and those still nest under that one document
      *     card rather than duplicating it.
      */
-    /** Section 4: a violated assignment stays visible (disabled) in the approver's own queue for this long, so they see their own SLA misses instead of it silently vanishing. */
-    private const VIOLATION_VISIBILITY_HOURS = 24;
-
     /**
-     * Genuinely actionable (still within SLA) OR recently violated — the
-     * latter stays visible read-only so the approver sees their own
-     * misses instead of the item just disappearing the instant it
-     * escalates. It drops off after VIOLATION_VISIBILITY_HOURS even if
-     * still unresolved by Admin, so this queue never accumulates old
-     * violations forever; once Admin actually resolves it, individual_status stops
-     * being 'pending' and it falls out of this query immediately
-     * regardless of the time window. Shared by dashboard() (full data)
+     * Every seat this approver still has to decide. A seat that misses its
+     * deadline is auto-approved by the system (individual_status stops being
+     * 'pending'), so it falls out of this query at that moment — the
+     * approver's own misses are visible in their Decision History instead.
+     * Shared by dashboard() (full data)
      * and poll() (just a count) so both always agree on what "pending"
      * means.
      */
     private function pendingQueryFor(int $userId)
     {
         return DocumentAssignment::where('user_id', $userId)
-            ->where('individual_status', 'pending')
-            ->where(function ($q) {
-                $q->where('escalated_to_admin', false)
-                    ->orWhere(function ($q2) {
-                        $q2->where('escalated_to_admin', true)
-                            ->whereNull('admin_override_at')
-                            ->where('sla_expires_at', '>=', now()->subHours(self::VIOLATION_VISIBILITY_HOURS));
-                    });
-            });
+            ->where('individual_status', 'pending');
     }
 
     /**
@@ -172,7 +159,7 @@ class ApprovalController extends Controller
      * any document already covered by $pending (still has an actionable
      * seat) to avoid a duplicate container for the same document.
      */
-    private function resolvedButInFlightQueryFor(int $userId, \Illuminate\Support\Collection $pendingDocumentIds)
+    private function resolvedButInFlightQueryFor(int $userId, Collection $pendingDocumentIds)
     {
         return DocumentAssignment::where('user_id', $userId)
             ->whereIn('individual_status', ['approved', 'rejected', 'auto_approved'])
@@ -190,7 +177,7 @@ class ApprovalController extends Controller
      * document's position using the exact same ordering the queue itself
      * renders with, rather than a second, potentially-drifting query.
      */
-    private function unfilteredContainers(int $userId): \Illuminate\Support\Collection
+    private function unfilteredContainers(int $userId): Collection
     {
         $pending = $this->pendingQueryFor($userId)
             ->with(['document.batch', 'document.originator', 'document.assignments.approver', 'stage'])
@@ -205,7 +192,7 @@ class ApprovalController extends Controller
         $relevant = $pending->concat($resolvedInFlight);
 
         return $relevant
-            ->groupBy(fn (DocumentAssignment $a) => $a->document->batch_id ? 'batch-' . $a->document->batch_id : 'doc-' . $a->document_id)
+            ->groupBy(fn (DocumentAssignment $a) => $a->document->batch_id ? 'batch-'.$a->document->batch_id : 'doc-'.$a->document_id)
             ->map(function ($groupAssignments) {
                 $first = $groupAssignments->first();
                 $batch = $first->document->batch;
@@ -273,6 +260,7 @@ class ApprovalController extends Controller
                         return true;
                     }
                 }
+
                 return false;
             })->values();
         }
@@ -313,7 +301,7 @@ class ApprovalController extends Controller
 
     public function dashboard(Request $request)
     {
-        $this->escalateExpiredFor($request->user()->user_id);
+        $this->autoApproveExpiredFor($request->user()->user_id);
 
         [$containers, $initialPendingCount] = $this->buildQueue($request, $request->user()->user_id);
 
@@ -333,7 +321,7 @@ class ApprovalController extends Controller
      */
     public function refresh(Request $request)
     {
-        $this->escalateExpiredFor($request->user()->user_id);
+        $this->autoApproveExpiredFor($request->user()->user_id);
 
         [$containers, $initialPendingCount] = $this->buildQueue($request, $request->user()->user_id);
 
@@ -377,10 +365,11 @@ class ApprovalController extends Controller
         // loaded, rather than trust that the periodic sweep already caught
         // it — closes the window where a stale cron interval would let a
         // late decision through.
-        if (!$assignment->escalated_to_admin && $assignment->sla_expires_at && now()->greaterThan($assignment->sla_expires_at)) {
-            $this->sla->escalate($assignment);
+        if ($assignment->sla_expires_at && now()->greaterThan($assignment->sla_expires_at)) {
+            $this->sla->autoApproveMissedDeadline($assignment);
+            $assignment->refresh(); // autoApproveMissedDeadline() worked on its own locked copy — re-read what it did
         }
-        abort_if($assignment->escalated_to_admin, 409, 'This assignment\'s SLA deadline has passed — it was just escalated to Admin and can no longer be decided here.');
+        abort_if($assignment->individual_status !== 'pending', 409, 'This assignment\'s SLA deadline has passed — the system auto-approved it, so it can no longer be decided here.');
 
         $this->requireBusinessHoursIfEnforced();
 
@@ -395,7 +384,7 @@ class ApprovalController extends Controller
         DocumentReviewSession::closeFor($assignment->document, $request->user());
         $this->workflow->decide($assignment, $request->user(), $validated['decision'], $validated['comments'] ?? null);
 
-        $status = 'Decision recorded: ' . ucfirst($validated['decision']) . '.';
+        $status = 'Decision recorded: '.ucfirst($validated['decision']).'.';
 
         // AJAX path (Feature: no full-page redirect on Approve/Reject) —
         // the queue JS swaps the fragment itself via applyLiveRefresh()
@@ -552,11 +541,13 @@ class ApprovalController extends Controller
 
             // Same on-demand escalation guard as decide() — don't let a
             // stale cron interval allow a late decision through.
-            if (!$assignment->escalated_to_admin && $assignment->sla_expires_at && now()->greaterThan($assignment->sla_expires_at)) {
-                $this->sla->escalate($assignment);
+            if ($assignment->sla_expires_at && now()->greaterThan($assignment->sla_expires_at)) {
+                $this->sla->autoApproveMissedDeadline($assignment);
+                $assignment->refresh(); // autoApproveMissedDeadline() worked on its own locked copy — re-read what it did
             }
-            if ($assignment->escalated_to_admin) {
+            if ($assignment->individual_status !== 'pending') {
                 $skippedExpired++;
+
                 continue;
             }
 
@@ -566,6 +557,7 @@ class ApprovalController extends Controller
             // comment for why this runs before closeFor().
             if (DocumentReviewSession::secondsSpentSoFar($assignment->document_id, $request->user()->user_id) < $minSeconds) {
                 $skippedUnreviewed++;
+
                 continue;
             }
 
@@ -573,9 +565,9 @@ class ApprovalController extends Controller
             $this->workflow->decide($assignment, $request->user(), $validated['decision'], $validated['comments'] ?? null);
         }
 
-        $status = 'Decision recorded: ' . ucfirst($validated['decision']) . '.';
+        $status = 'Decision recorded: '.ucfirst($validated['decision']).'.';
         if ($skippedExpired > 0) {
-            $status .= " {$skippedExpired} assignment(s) had already violated their SLA and were escalated to Admin instead.";
+            $status .= " {$skippedExpired} assignment(s) had already missed their SLA deadline and were auto-approved by the system instead.";
         }
         if ($skippedUnreviewed > 0) {
             $status .= " {$skippedUnreviewed} assignment(s) were skipped — you need to view the document for at least {$minSeconds} seconds before deciding.";
@@ -683,7 +675,7 @@ class ApprovalController extends Controller
     public function history(Request $request)
     {
         $decisions = $this->historyResults($request, $request->user()->user_id);
-        $categories = \App\Services\ValidationService::knownCategories();
+        $categories = ValidationService::knownCategories();
 
         return view('approver.history', compact('decisions', 'categories'));
     }

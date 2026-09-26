@@ -13,17 +13,19 @@ use Illuminate\Console\Command;
  *
  * The actual auto-approval decision (a real approver's own missed
  * deadline) is event-driven — see EscalateAssignmentJob and
- * SlaService::escalate(). A stage with no eligible approver at all
+ * SlaService::autoApproveMissedDeadline(); workflow:check-parallel-slas is
+ * its scheduled backstop. A stage with no eligible approver at all
  * auto-approves immediately at routing time instead (see
  * WorkflowService::assignStage()), so there's no deadline for it to
- * miss here either. This command is
- * the periodic backstop for the two things that genuinely need to run on
- * a schedule: outage detection/compensation, and following up on
- * auto-approvals that are sitting unreviewed (see trackLateReviews()).
+ * miss here either. This command handles the things that genuinely need
+ * to run on a schedule: outage detection/compensation, the Admin's
+ * late-review reminders (see trackLateReviews()), and the one-time
+ * "final call" reminder to an approver whose deadline is about to lapse.
  */
 class CheckSlaDeadlines extends Command
 {
     protected $signature = 'sla:check';
+
     protected $description = 'Detects/compensates for outages and follows up on auto-approvals sitting unreviewed past their window.';
 
     public function handle(SlaService $sla): int
@@ -34,7 +36,7 @@ class CheckSlaDeadlines extends Command
             ? " Outage detected — {$result['deadlines_compensated']} deadline(s) compensated."
             : '';
 
-        $this->info("SLA sweep complete: {$result['late_review_reminders_sent']} late-review reminder(s) sent, " .
+        $this->info("SLA sweep complete: {$result['late_review_reminders_sent']} late-review reminder(s) sent, ".
             "{$result['urgent_approver_reminders_sent']} approver final-call reminder(s) sent.{$outageNote}");
 
         return self::SUCCESS;

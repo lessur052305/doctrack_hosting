@@ -2,20 +2,22 @@
 
 use App\Models\DocumentAssignment;
 use App\Models\DocumentRepository;
+use App\Models\SlaViolation;
 use App\Models\User;
 use App\Models\WorkflowStage;
+use App\Services\WorkflowService;
 use Illuminate\Support\Facades\Queue;
 
 /**
  * Queue::fake() is required in every test here: the test env's `sync`
  * queue driver ignores dispatch(...)->delay() entirely and runs
  * EscalateAssignmentJob immediately in-process, and that job has no
- * time-based guard of its own (it only checks status/escalation flags —
+ * time-based guard of its own (it only checks the seat's status and deadline —
  * see its docblock, it trusts the queue's delay to not fire early). Real
  * dev/prod uses a `database` queue with an actual worker that honors
  * delays, so this never happens there — but without faking the queue here,
- * every routed assignment would already show escalated_to_admin = true
- * before deactivation ever runs, making these tests meaningless.
+ * every routed assignment would already have been auto-approved by the
+ * SLA safety net before deactivation ever runs, making these tests meaningless.
  */
 beforeEach(fn () => Queue::fake());
 
@@ -44,15 +46,15 @@ function deactivationWithdrawTestSetup(int $approverCount): array
     $approvers = User::factory()->approver('Job Order')->count($approverCount)->create();
     $document = DocumentRepository::create([
         'originator_id' => $originator->user_id,
-        'title' => 'deactivation-withdraw-' . uniqid() . '.txt',
-        'file_path' => 'documents/' . uniqid() . '.txt',
+        'title' => 'deactivation-withdraw-'.uniqid().'.txt',
+        'file_path' => 'documents/'.uniqid().'.txt',
         'mime_type' => 'text/plain',
         'due_date' => now()->addDay(),
         'global_status' => 'classified_validated',
         'ml_category' => 'Job Order',
     ]);
 
-    app(\App\Services\WorkflowService::class)->routeToWorkflow($document);
+    app(WorkflowService::class)->routeToWorkflow($document);
 
     return [$admin, $approvers, $document, $stage];
 }
@@ -67,9 +69,9 @@ it('withdraws a deactivated approver\'s seat with no Admin involvement when a si
     $seatB = DocumentAssignment::where('document_id', $document->document_id)->where('user_id', $approverB->user_id)->first();
 
     expect($seatA->individual_status)->toBe('withdrawn');
-    expect($seatA->escalated_to_admin)->toBeFalse();
+    expect(SlaViolation::where('assignment_id', $seatA->assignment_id)->exists())->toBeFalse(); // deactivation is never an SLA miss
     expect($seatB->individual_status)->toBe('pending');
-    expect($seatB->escalated_to_admin)->toBeFalse();
+    expect(SlaViolation::where('assignment_id', $seatB->assignment_id)->exists())->toBeFalse(); // deactivation is never an SLA miss
 });
 
 it('auto-approves immediately (not an SLA escalation) when the deactivated approver was the only one on the stage', function () {
@@ -82,7 +84,7 @@ it('auto-approves immediately (not an SLA escalation) when the deactivated appro
 
     expect($seatA->individual_status)->toBe('approved');
     expect($seatA->auto_approved)->toBeTrue();
-    expect($seatA->escalated_to_admin)->toBeFalse();
+    expect(SlaViolation::where('assignment_id', $seatA->assignment_id)->exists())->toBeFalse(); // deactivation is never an SLA miss
 });
 
 it('finalizes the document once the remaining approver decides after a withdrawal', function () {
@@ -115,7 +117,7 @@ it('auto-approves the last real approver instead of withdrawing, when a prior si
     expect($seatA->individual_status)->toBe('withdrawn');
     expect($seatB->individual_status)->toBe('approved');
     expect($seatB->auto_approved)->toBeTrue();
-    expect($seatB->escalated_to_admin)->toBeFalse();
+    expect(SlaViolation::where('assignment_id', $seatB->assignment_id)->exists())->toBeFalse(); // deactivation is never an SLA miss
 });
 
 it('excludes a withdrawn seat from the workflow-stage-list progress count', function () {

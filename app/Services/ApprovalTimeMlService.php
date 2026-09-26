@@ -5,7 +5,9 @@ namespace App\Services;
 use App\Events\MlModelTrained;
 use App\Models\DocumentAssignment;
 use App\Models\MlTimeEstimateModel;
+use App\Support\DecisionTiming;
 use App\Support\RidgeRegression;
+use Carbon\Carbon;
 use Illuminate\Support\Collection;
 
 /**
@@ -46,14 +48,14 @@ class ApprovalTimeMlService
      */
     public const MIN_TRAINING_SAMPLES = 10;
 
+    private const CROSS_VALIDATION_SEED = 42;
+
     /** How hard Ridge's penalty pushes coefficients toward a conservative baseline — see RidgeRegression's own docblock. */
     private const RIDGE_LAMBDA = 1.0;
 
     private ?Collection $rowsCache = null;
 
-    public function __construct(private BusinessHoursService $businessHours)
-    {
-    }
+    public function __construct(private BusinessHoursService $businessHours) {}
 
     /** Every (category, department) combo with enough real decision history to be worth training on right now. */
     public function trainableGroups(): Collection
@@ -140,7 +142,7 @@ class ApprovalTimeMlService
         $samples = [];
         $targets = [];
         foreach ($rows as $row) {
-            $samples[] = [$historicalSpeedFor($row), \Carbon\Carbon::parse($row->created_at)->dayOfWeek];
+            $samples[] = [$historicalSpeedFor($row), Carbon::parse($row->created_at)->dayOfWeek];
             $targets[] = (float) $row->elapsed_seconds;
         }
 
@@ -208,8 +210,17 @@ class ApprovalTimeMlService
         $count = count($samples);
         $folds = min(5, $count);
 
+        // Fixed seed, so grading the same history always produces the same MAE.
+        // The new-vs-active comparison in trainFor() ("is this model actually
+        // better?") and the stored mae_seconds both depend on this number;
+        // with an unpinned shuffle two runs over identical data could grade
+        // differently, and a model could win or lose that comparison purely
+        // by how the folds happened to fall. Reseeded from entropy afterward
+        // so nothing else in the same process is affected.
         $shuffled = range(0, $count - 1);
+        mt_srand(self::CROSS_VALIDATION_SEED);
         shuffle($shuffled);
+        mt_srand();
 
         $foldIndices = array_fill(0, $folds, []);
         foreach ($shuffled as $position => $sampleIndex) {
@@ -258,7 +269,7 @@ class ApprovalTimeMlService
     public function predictNextDecision(string $category, string $department, Collection $eligibleApprovers): ?int
     {
         $model = MlTimeEstimateModel::activeFor($category, $department);
-        if (!$model) {
+        if (! $model) {
             return null;
         }
 
@@ -304,9 +315,10 @@ class ApprovalTimeMlService
             return $this->rowsCache;
         }
 
-        return $this->rowsCache = DocumentAssignment::query()
+        $rows = DocumentAssignment::query()
             ->join('users', 'document_assignments.user_id', '=', 'users.user_id')
             ->join('document_repository', 'document_assignments.document_id', '=', 'document_repository.document_id')
+            ->join('workflow_stages', 'document_assignments.stage_id', '=', 'workflow_stages.stage_id')
             ->whereNotNull('document_assignments.acted_at')
             ->where('document_assignments.auto_approved', false)
             // Approvals only, not rejections — same reasoning as
@@ -317,19 +329,24 @@ class ApprovalTimeMlService
             ->whereNotNull('users.department')
             ->get([
                 'document_assignments.assignment_id',
+                'document_assignments.document_id',
                 'document_assignments.user_id',
                 'document_assignments.created_at',
                 'document_assignments.acted_at',
                 'users.department',
                 'document_repository.ml_category',
-            ])
-            ->map(function ($row) {
-                $row->elapsed_seconds = $this->businessHours->businessSecondsRemaining(
-                    \Carbon\Carbon::parse($row->created_at),
-                    \Carbon\Carbon::parse($row->acted_at)
-                );
+                'workflow_stages.stage_name',
+            ]);
 
-                return $row;
-            });
+        $starts = DecisionTiming::startTimes($rows);
+
+        return $this->rowsCache = $rows->map(function ($row) use ($starts) {
+            $row->elapsed_seconds = $this->businessHours->businessSecondsRemaining(
+                $starts[$row->assignment_id],
+                Carbon::parse($row->acted_at)
+            );
+
+            return $row;
+        });
     }
 }

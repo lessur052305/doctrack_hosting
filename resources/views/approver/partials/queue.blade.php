@@ -188,7 +188,7 @@
                             </p>
                         </div>
                     @else
-                    <div class="flex flex-col sm:flex-row sm:items-center gap-4 rounded-xl border {{ $activeAssignment->escalated_to_admin ? 'border-rejected-200 bg-rejected-50/40' : 'border-primary-200 bg-primary-50/40' }} p-4 shadow-sm">
+                    <div class="flex flex-col sm:flex-row sm:items-center gap-4 rounded-xl border border-primary-200 bg-primary-50/40 p-4 shadow-sm">
                         <div class="flex-1 min-w-0">
                             {{-- Priority badge now lives up on the title row
                                  (aligned to the document name), not repeated
@@ -210,16 +210,11 @@
                                         ({{ $realRemainingLabel }})
                                     </span>
                                 @endif
-                                @if(!$activeAssignment->escalated_to_admin && !($isWithinBusinessHours ?? true))
+                                @if(!($isWithinBusinessHours ?? true))
                                     <span class="text-xs text-surface-400">⏸ Paused (outside business hours)</span>
                                 @endif
                             </p>
-                            @if($activeAssignment->escalated_to_admin)
-                                <p class="text-sm text-rejected-700 font-medium mt-1">
-                                    You missed this SLA — it's been escalated to Admin and can no longer be approved or rejected here.
-                                    This will drop off your queue {{ $activeAssignment->sla_expires_at->copy()->addHours(24)->diffForHumans() }}.
-                                </p>
-                            @elseif($outsideBusinessHoursBlocked)
+                            @if($outsideBusinessHoursBlocked)
                                 <p class="text-sm text-processing-700 font-medium mt-1">
                                     Decisions are currently restricted to business hours (9 AM–5 PM, Mon–Sat) — Approve/Reject will unlock when the next working window opens.
                                 </p>
@@ -230,22 +225,6 @@
                             @endif
                         </div>
 
-                        @if($activeAssignment->escalated_to_admin)
-                            <div class="flex flex-col sm:w-64 gap-2">
-                                <textarea rows="1" placeholder="Optional comments…" disabled
-                                    class="w-full rounded-lg border-surface-200 bg-surface-100 text-sm text-surface-400 px-3 py-2 cursor-not-allowed"></textarea>
-                                <div class="flex gap-2">
-                                    <button type="button" disabled title="Escalated to Admin — no longer actionable here"
-                                        class="flex-1 bg-surface-200 text-surface-400 text-sm font-semibold py-2 rounded-lg cursor-not-allowed">
-                                        Approve
-                                    </button>
-                                    <button type="button" disabled title="Escalated to Admin — no longer actionable here"
-                                        class="flex-1 bg-surface-200 text-surface-400 text-sm font-semibold py-2 rounded-lg cursor-not-allowed">
-                                        Reject
-                                    </button>
-                                </div>
-                            </div>
-                        @else
                             <form method="POST" action="{{ route('approver.assignments.decide', $activeAssignment) }}"
                                 class="review-decide-form flex flex-col sm:w-64 gap-2"
                                 data-document-id="{{ $doc->document_id }}"
@@ -284,7 +263,6 @@
                                     </button>
                                 </div>
                             </form>
-                        @endif
                     </div>
                     @endif
                 </div>
