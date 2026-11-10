@@ -1,8 +1,115 @@
 # DocTrack — Automated Document Classification & Tracking System
 
+**GitHub Repository:** https://github.com/cp1811283-creator/doctrack_hosting.git
+
 **Capstone implementation** of *"An Automated Document Classification and Tracking System Using Machine Learning"* (GRC, BSIT, March 2026) for UJF Corporation.
 
-Built with **Laravel 11 · Tailwind CSS · MySQL**, faithful to the Chapter 3 design: the 7-table ERD/Data Dictionary, DFD Processes 1.0–8.0, the Agile phase structure, and the ISO/IEC 25010 evaluation criteria.
+Built with **Laravel 11 · Tailwind CSS · MySQL**, faithful to the Chapter 3 design: the full ERD/Data Dictionary (Tables 9–29), DFD Processes 1.0–11.0, the Agile phase structure, and the ISO/IEC 25010 + ISO/IEC 25059 evaluation criteria.
+
+DocTrack automates document classification (SVM + TF-IDF), pre-approval validation, multi-stage approval routing with SLA-based auto-approval, real-time status tracking, and centralized archiving for a company's internal document workflow (Job Orders, Purchase Requisitions, Service Reports). It serves three roles — Originator, Approver, and a single Admin — each with real-time dashboards over Laravel Reverb.
+
+---
+
+## Group Members & Roles
+
+* **Russel Vinz Agana** – Project Manager / System Developer & Lead
+* **Christian M. Peralta** – Documentation Lead / Quality Test Manager / UI-UX Designer
+* **Gian Adrian Carl D. Funelas** – Database Administrator / Data Gathering & Research
+
+---
+
+## Tech Stack
+
+* **Frontend:** Blade templates + Tailwind CSS, bundled with Vite
+* **Backend:** Laravel 11 (PHP)
+* **Database:** MySQL 8.x
+* **Real-time:** Laravel Reverb (self-hosted WebSocket server)
+* **Machine Learning:** `php-ai/php-ml` — SVM (linear kernel) + TF-IDF for document classification; a separate Linear Regression model for approval-time estimation
+* **OCR / text extraction:** `smalot/pdfparser` (born-digital PDFs) + `thiagoalessio/tesseract_ocr` (scanned-image fallback, bundled binary included)
+* **Email:** Brevo HTTP API (falls back to a local log file in development — no account needed to demo)
+* **Tools & Version Control:** Git, GitHub, Composer, npm, VS Code
+
+---
+
+## System Requirements & Prerequisites
+
+Before you begin, ensure you have the following installed on your local machine:
+
+* **PHP 8.2+**, with the `fileinfo` and `zip` extensions (bundled by default with XAMPP/Laragon and standard Linux PHP packages)
+* **`ext-pcntl`** — required by the Reverb WebSocket server; ships by default on Linux/macOS, but **does not exist on native Windows PHP**. Windows users: either run everything inside **WSL2**, or install with `composer install --ignore-platform-req=ext-pcntl` (safe on Windows — you just lose graceful Ctrl+C shutdown on Reverb)
+* **MySQL 8.x** (or MariaDB) — not bundled with this repo; XAMPP/Laragon include one
+* **Node.js 18+** and npm
+* **Composer 2.x**
+
+---
+
+## Installation & Setup Instructions
+
+```bash
+# 1. Clone the repository
+git clone <this-repo-url> doctrack
+cd doctrack
+
+# 2. Install backend dependencies
+composer install
+
+# 3. Install frontend dependencies and build assets
+npm install
+npm run build          # or: npm run dev   (hot reload while developing)
+```
+
+---
+
+## Database Setup & Configuration
+
+```bash
+# 4. Copy the environment file and generate an app key
+cp .env.example .env
+php artisan key:generate
+
+# 5. Generate real Reverb WebSocket credentials (the .env.example ones are blank placeholders)
+php artisan reverb:install
+```
+
+Open `.env` and set `DB_DATABASE` / `DB_USERNAME` / `DB_PASSWORD` to match a MySQL instance you actually have (phpMyAdmin/XAMPP/Laragon, or plain `mysql`) — the default `DB_DATABASE` is `docuwise`. Create that database first (e.g. in phpMyAdmin), then:
+
+```bash
+# 6. Migrate the schema and seed demo data (accounts + workflow stages)
+php artisan migrate:fresh --seed
+
+# 7. Link storage so uploaded documents are servable
+php artisan storage:link
+```
+
+---
+
+## Running the Application
+
+```bash
+php artisan serve
+```
+
+Open your browser at **http://localhost:8000**. This alone is enough to log in and click through the full demo. For genuinely production-like behavior (instant SLA escalation instead of a 5-minute fallback, instant live dashboard updates instead of a slow poll, nightly backups, a trained classifier), see **Section 2, "Continuous operation,"** below — those are four extra background processes, not required just to see the app run.
+
+---
+
+## Default Login Credentials
+
+Seeded accounts use real team names/emails rather than generic placeholders (see `database/seeders/DatabaseSeeder.php`) — the admin and two example accounts below are enough to demo all three roles:
+
+| Role       | Username          | Password      |
+|------------|-------------------|---------------|
+| Admin      | `jhoncarl.jamon`  | `jjamon123`   |
+| Originator | `christina.villa` | `cvilla123`   |
+| Approver   | `judyann.bron`    | `jbron123`    |
+
+**Important — these accounts start unverified.** The seeder sends every account a real email-verification link, and login is blocked until it's clicked (same rule as an account an Admin creates by hand). With the default dev mail setting (`MAIL_MAILER=log`), that email is never actually sent — it's written to `storage/logs/laravel.log` instead. For a quick evaluation run, skip hunting through the log and just mark every seeded account verified in one shot:
+
+```bash
+php artisan tinker --execute='\App\Models\User::query()->update(["email_verified_at" => now()]);'
+```
+
+See the full account table (all 10 seeded users, including every approver and their department/level) in **Section 1 → "Accounts (created by the seeder)"** below.
 
 ---
 
@@ -158,19 +265,27 @@ backups, and document classification/routing all work unattended from here on.
 real team accounts (real names/Gmail addresses), matching how it's actually been used
 throughout development. Idempotent via `updateOrCreate()`/`firstOrCreate()` throughout,
 so `php artisan db:seed` is safe to re-run at any time without duplicate-key errors.
+Each approver's password is generated as `strtolower(first-initial + last-name) . '123'`
+— see `DatabaseSeeder::run()` if you add more accounts and need to derive the pattern.
 
-| Role       | Username         | Password       | Category / Department          |
-|------------|------------------|----------------|----------------------------------|
-| Admin      | `rvinz`          | `rvinz123`     | —                                |
-| Originator | `lvinz`          | `lvinz123`     | —                                |
-| Approver   | `gfunelas`       | `gfunelas123`  | Job Order — Engineering, staff   |
-| Approver   | `vlessur`        | `vlessur123`   | Job Order — Finance, staff       |
-| Approver   | `cperalta`       | `cperalta123`  | Job Order — Engineering, head    |
-| Approver   | `cperalta091022` | `cperalta123`  | Job Order — Finance, head        |
+| Role       | Username            | Password         | Category / Department                  |
+|------------|---------------------|------------------|------------------------------------------|
+| Admin      | `jhoncarl.jamon`    | `jjamon123`      | —                                        |
+| Originator | `christina.villa`   | `cvilla123`      | — (any category)                         |
+| Originator | `louis.suan`        | `lsuan123`       | — (any category)                         |
+| Approver   | `judyann.bron`      | `jbron123`       | Job Order — Engineering, staff           |
+| Approver   | `melissa.jamon`     | `mjamon123`      | Job Order — Finance, staff               |
+| Approver   | `elmor.castello`    | `ecastello123`   | (all categories) — Engineering, **head** |
+| Approver   | `dianara.jamon`     | `djamon123`      | (all categories) — Finance, **head**     |
+| Approver   | `jeferson.ulnagan`  | `julnagan123`    | Purchase Requisition — Finance, staff    |
+| Approver   | `aljun.belarmino`   | `abelarmino123`  | Purchase Requisition — Finance, staff    |
+| Approver   | `caleb.jamon`       | `cjamon123`      | Service Report — Engineering, staff      |
 
 Job Order's Final Approval stage requires **both** department heads to agree (unanimous,
-same as every other multi-seat stage) — that's why there are two separate `cperalta*`
-accounts above, not one.
+same as every other multi-seat stage) — that's why both `elmor.castello` (Engineering head)
+and `dianara.jamon` (Finance head) are seeded, not just one. A head has no single assigned
+category: they cover Final Approval for every category their department is involved in
+(see the `$stageDepartments` map in `DatabaseSeeder::run()`).
 
 **On a genuinely fresh device/deployment**, either edit `DatabaseSeeder.php` to use your
 own placeholder accounts first, or be aware that seeding as-is creates accounts under
@@ -505,7 +620,7 @@ exactly like dragging it into the website — never wrapped in JSON.
 ```bash
 # 1. Log in — JSON in, JSON back (a token)
 curl -X POST http://localhost:8000/api/v1/login -H "Content-Type: application/json" \
-  -d '{"username":"jsantos","password":"jsantos123","device_name":"my-phone"}'
+  -d '{"username":"christina.villa","password":"cvilla123","device_name":"my-phone"}'
 #   -> {"token": "...", "user": {...}}
 
 # 2. Everything after this uses that token in the Authorization header
@@ -526,9 +641,9 @@ Insomnia works well for a demo. Send `POST /api/v1/login` with a raw-JSON body, 
 every request after that. For the upload request specifically, set the body type to
 **form-data** (not JSON) and attach a real file to the `files[]` field.
 
-Note that `jsantos` (originator) can upload/list documents but gets `403` trying to
-decide an assignment — use `mreyes` (approver) for the `/assignments` endpoints instead;
-the API enforces the same role boundaries as the website.
+Note that `christina.villa` (originator) can upload/list documents but gets `403` trying
+to decide an assignment — use `judyann.bron` (approver) for the `/assignments` endpoints
+instead; the API enforces the same role boundaries as the website.
 
 **RBAC** is enforced the same way as the web app — per-request ownership/role checks
 inside each controller, not just route gating: originators only see/submit their own
